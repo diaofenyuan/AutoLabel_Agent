@@ -13,8 +13,13 @@
 .timeline-track-picker { padding: 20px 0; }
 .track-create-form { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; gap: 12px; padding: 16px; margin-bottom: 16px; background: var(--surface-soft, #f7f7f8); border-radius: 8px; }
 .timeline-frame-strip { display: flex; gap: 7px; overflow-x: auto; padding: 8px 0 12px; }
-.timeline-frame-strip > button { display: flex; flex-direction: column; gap: 6px; min-width: 142px; padding: 11px 13px; text-align: left; border: 1px solid var(--border, #e4e4e7); border-radius: 7px; background: var(--surface, #fff); transition: background .12s, border-color .12s; }
+.timeline-frame-strip > button { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 142px; padding: 11px 13px; text-align: left; border: 1px solid var(--border, #e4e4e7); border-radius: 9px; background: var(--surface, #fff); transition: background .16s ease, border-color .16s ease, box-shadow .16s ease, transform .16s ease; animation: frame-card-in .2s ease-out both; }
+.timeline-frame-strip > button:nth-child(2) { animation-delay: 35ms; }
+.timeline-frame-strip > button:nth-child(3) { animation-delay: 70ms; }
+.timeline-frame-strip > button:nth-child(4) { animation-delay: 105ms; }
+.timeline-frame-strip > button:hover:not(:disabled) { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 7px 18px color-mix(in srgb, var(--text) 7%, transparent); }
 .timeline-frame-strip > button.selected { background: var(--surface-soft); border-color: var(--soft); }
+.timeline-frame-strip > button.selected::after { content: ""; position: absolute; inset: auto 12px 0; height: 2px; border-radius: 999px 999px 0 0; background: var(--accent); animation: tab-underline-in .18s ease-out; }
 .timeline-frame-strip > button.range-start { margin-left: 18px; border-left: 2px dashed #8f949a; }
 .timeline-frame-strip strong { font-size: 13px; font-weight: 500; }
 .timeline-frame-strip span, .timeline-frame-strip small { font-size: 11px; color: var(--muted, #75777c); }
@@ -62,7 +67,8 @@
 .track-keyframe-editor .modal-actions { position: sticky; bottom: -20px; padding: 14px 0; background: var(--surface, #fff); z-index: 2; }
 @media (max-width: 760px) { .timeline-track-picker { flex-wrap: wrap; } .timeline-track-picker > .pagination { margin-left: 0; flex-wrap: wrap; } }
 @media (max-width: 1100px) { .timeline-editor-columns { grid-template-columns: 1fr; } .timeline-editor-columns > aside { border-top: 1px solid var(--border, #e4e4e7); padding-top: 16px; } .track-create-form { grid-template-columns: 1fr; } }
-@media (prefers-reduced-motion: reduce) { .timeline-frame-strip > button { transition: none; } }
+@keyframes frame-card-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .timeline-frame-strip > button { transition: none; animation: none; } .timeline-frame-strip > button:hover:not(:disabled) { transform: none; } }
 .track-empty-state { display: grid; grid-template-columns: 76px minmax(0, 1fr) minmax(270px, .9fr); align-items: center; gap: 24px; margin-top: 18px; padding: 30px 34px; border: 1px solid var(--border, #e4e4e7); border-radius: 16px; background: radial-gradient(circle at 7% 0%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 38%), linear-gradient(135deg, color-mix(in srgb, var(--surface) 82%, var(--bg)), var(--bg)); box-shadow: 0 14px 36px color-mix(in srgb, var(--text) 5%, transparent); animation: page-in .22s ease-out both; }
 .track-empty-orbit { position: relative; display: grid; place-items: center; width: 64px; height: 64px; border-radius: 21px; background: var(--bg); color: var(--accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent), 0 8px 22px color-mix(in srgb, var(--text) 8%, transparent); animation: empty-float 3.8s ease-in-out infinite; }
 .track-empty-orbit span { position: absolute; inset: -7px; border: 1px dashed color-mix(in srgb, var(--accent) 32%, transparent); border-radius: 25px; animation: empty-spin 12s linear infinite; }
