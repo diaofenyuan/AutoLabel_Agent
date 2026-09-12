@@ -24,7 +24,7 @@ const output = path.join(root, 'build', label + '.json');
 await mkdir(path.dirname(output), { recursive: true });
 const testUserData = process.env.AUTOLABEL_TEST_USER_DATA
   ? path.resolve(root, process.env.AUTOLABEL_TEST_USER_DATA)
-  : path.join(root, 'build', label + (updateUiOnly ? `-user-data-${Date.now()}` : '-user-data'));
+  : path.join(root, 'build', label + ((updateUiOnly || runControlOnly) ? `-user-data-${Date.now()}` : '-user-data'));
 const env = { ...process.env, AUTOLABEL_TEST_USER_DATA: testUserData, AUTOLABEL_SMOKE_OUTPUT: output };
 delete env.ELECTRON_RUN_AS_NODE;
 if (packaged) { env.JAVA_HOME = 'C:\\nonexistent'; env.AUTOLABEL_JAVA_HOME = 'C:\\nonexistent'; }
