@@ -21,6 +21,7 @@
     "check:window": "node scripts/desktop-smoke.mjs --packaged --window",
     "check:ui": "node scripts/desktop-smoke.mjs --packaged --ui",
     "check:update-ui": "node scripts/desktop-smoke.mjs --update-ui",
+    "check:run-controls": "node scripts/desktop-smoke.mjs --run-controls",
     "check:connection-ui": "node scripts/desktop-smoke.mjs --connection-ui",
     "check:installer-contract": "node scripts/installer-contract-check.mjs",
     "check:agent": "tsc -p agent/tsconfig.json",

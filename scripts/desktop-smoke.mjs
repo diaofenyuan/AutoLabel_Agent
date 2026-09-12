@@ -17,8 +17,9 @@ const release6bOnly = process.argv.includes('--release6b');
 const release7aOnly = process.argv.includes('--release7a');
 const release7bOnly = process.argv.includes('--release7b');
 const updateUiOnly = process.argv.includes('--update-ui');
+const runControlOnly = process.argv.includes('--run-controls');
 if (manualOnly && packaged) throw new Error('手工开发验收不能在稳定安装包中运行');
-const label = updateUiOnly ? 'update-ui-check' : connectionOnly ? 'connection-ui-check' : release7bOnly ? 'release7b-check' : release7aOnly ? 'release7a-check' : release6bOnly ? 'release6b-check' : release6aOnly ? 'release6a-check' : release5Only ? 'release5-check' : releaseOnly ? 'release-check' : manualOnly ? 'manual-check' : uiOnly ? 'ui-check' : windowOnly ? 'window-check' : packaged ? 'packaged-smoke' : 'desktop-smoke';
+const label = runControlOnly ? 'run-control-check' : updateUiOnly ? 'update-ui-check' : connectionOnly ? 'connection-ui-check' : release7bOnly ? 'release7b-check' : release7aOnly ? 'release7a-check' : release6bOnly ? 'release6b-check' : release6aOnly ? 'release6a-check' : release5Only ? 'release5-check' : releaseOnly ? 'release-check' : manualOnly ? 'manual-check' : uiOnly ? 'ui-check' : windowOnly ? 'window-check' : packaged ? 'packaged-smoke' : 'desktop-smoke';
 const output = path.join(root, 'build', label + '.json');
 await mkdir(path.dirname(output), { recursive: true });
 const testUserData = process.env.AUTOLABEL_TEST_USER_DATA
@@ -28,6 +29,7 @@ const env = { ...process.env, AUTOLABEL_TEST_USER_DATA: testUserData, AUTOLABEL_
 delete env.ELECTRON_RUN_AS_NODE;
 if (packaged) { env.JAVA_HOME = 'C:\\nonexistent'; env.AUTOLABEL_JAVA_HOME = 'C:\\nonexistent'; }
 if (updateUiOnly) { env.AUTOLABEL_UPDATE_TEST = '1'; env.AUTOLABEL_UPDATE_UI_CHECK = '1'; }
+if (runControlOnly) env.AUTOLABEL_RUN_CONTROL_UI_CHECK = '1';
 const releaseDirectory = path.resolve(root, process.env.AUTOLABEL_RELEASE_DIR || 'build/release');
 const executable = packaged ? path.join(releaseDirectory, 'win-unpacked/自动标注小助手.exe') : createRequire(import.meta.url)('electron');
 const args = packaged ? ['--desktop-smoke'] : [root, '--desktop-smoke'];
@@ -39,9 +41,9 @@ if (release6aOnly) args.push('--desktop-release6a-check');
 if (release6bOnly) args.push('--desktop-release6b-check');
 if (release7aOnly) args.push('--desktop-release7a-check');
 if (release7bOnly) args.push('--desktop-release7b-check');
-if (updateUiOnly) args.push('--desktop-manual-check');
+if (updateUiOnly || runControlOnly) args.push('--desktop-manual-check');
 if (connectionOnly) args.push('--desktop-connection-check');
-if (manualOnly || updateUiOnly) {
+if (manualOnly || updateUiOnly || runControlOnly) {
   const { build } = await import('esbuild');
   await build({ entryPoints: [path.join(root, 'renderer/tests/desktop-manual-check.ts')], bundle: true, platform: 'node', format: 'cjs',
     external: ['electron'], outfile: path.join(root, 'desktop/dist/manual.test.cjs'), logLevel: 'warning' });
@@ -99,6 +101,7 @@ if (releaseOnly) {
 }
 if (manualOnly) { assert.equal(result.passed, true); console.log(`新源码手工链路检查通过：${output}`); process.exit(0); }
 if (updateUiOnly) { assert.equal(result.passed, true); assert.deepEqual(result.states, ['available','ready','install-gate','cancelled','checksum-error']); console.log(`更新界面本地回环检查通过：${output}`); process.exit(0); }
+if (runControlOnly) { assert.equal(result.passed, true); assert.equal(result.paused.cancelled, true); assert.equal(result.failedRetry.retryDispatched, true); assert.ok(result.failedRetry.callsAfter > result.failedRetry.callsBefore); console.log(`任务中心暂停/恢复/取消/失败重试界面检查通过：${output}`); process.exit(0); }
 if (connectionOnly) { assert.equal(result.before.ready, true); assert.equal(result.before.banner, false); assert.equal(result.disconnected.visible, true); assert.equal(result.disconnected.buttonEnabled, true); assert.equal(result.restored.ready, true); assert.equal(result.restored.banner, false); console.log(`断线重连桌面界面检查通过：${output}`); process.exit(0); }
 if (uiOnly) {
   const pages = result.pages.filter(page => page.page);

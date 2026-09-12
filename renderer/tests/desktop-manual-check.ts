@@ -15,6 +15,7 @@ import { checkDesktopMedia } from './desktop-media-check';
 import { checkDesktopEditing } from './desktop-editing-check';
 import { checkDesktopProviderDelete } from './desktop-provider-delete-check';
 import { checkDesktopUpdateUi } from './desktop-update-ui-check';
+import { checkDesktopRunControls } from './desktop-run-control-check';
 
 // 只在桌面显式验收入口运行；所有文件夹、对话框选择及破坏性夹具均限制在独立测试目录。
 export async function checkDesktopManual(window:BrowserWindow, output:string):Promise<void> {
@@ -31,6 +32,7 @@ export async function checkDesktopManual(window:BrowserWindow, output:string):Pr
   if(process.env.AUTOLABEL_RERUN_UI_CHECK==='1')return checkDesktopRerun(window,output);
   if(process.env.AUTOLABEL_QUALITY_UI_CHECK==='1')return checkDesktopQuality(window,output);
   if(process.env.AUTOLABEL_UPDATE_UI_CHECK==='1')return checkDesktopUpdateUi(window,output);
+  if(process.env.AUTOLABEL_RUN_CONTROL_UI_CHECK==='1')return checkDesktopRunControls(window,output);
   const userData=path.join(path.dirname(output),'manual-check-user-data');
   const fixtures=path.join(userData,'fixtures');await mkdir(fixtures,{recursive:true});
   const checks:Record<string,unknown>[]=[];
