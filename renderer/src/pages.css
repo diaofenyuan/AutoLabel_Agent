@@ -101,3 +101,11 @@
 .resource-editor>.field,.resource-editor>.field-grid{transition:transform .16s ease}
 .resource-editor>.field:focus-within,.resource-editor>.field-grid:focus-within{transform:translateX(2px)}
 .resource-editor>.field:focus-within>span,.resource-editor>.field-grid:focus-within>.field>span{color:var(--accent)}
+/* 流程节点把选中关系传递到画布与参数侧栏，避免切换步骤时失去上下文。 */
+.flow-input-panel{transition:border-color .18s ease,box-shadow .18s ease}
+.flow-input-panel:focus-within{border-color:color-mix(in srgb,var(--accent) 38%,var(--border));box-shadow:0 7px 24px color-mix(in srgb,var(--accent) 6%,transparent)}
+.flow-node{position:relative;transform:translateZ(0);transition:background .18s ease,border-color .18s ease,box-shadow .18s ease,transform .18s ease}
+.flow-node:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 20px color-mix(in srgb,var(--text) 8%,transparent)}
+.flow-node.selected{background:color-mix(in srgb,var(--accent-bg) 38%,var(--bg));animation:flow-node-focus .24s ease-out}
+.flow-node.selected::before{content:"";position:absolute;left:-1px;top:13px;bottom:13px;width:3px;border-radius:999px;background:var(--accent);animation:nav-mark-in .2s ease-out}
+@keyframes flow-node-focus{from{opacity:.72;transform:translateY(3px) scale(.99);box-shadow:0 0 0 0 color-mix(in srgb,var(--accent-bg) 0%,transparent)}to{opacity:1;transform:translateY(0) scale(1);box-shadow:0 0 0 1px var(--accent-bg)}}
