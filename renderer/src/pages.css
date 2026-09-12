@@ -109,3 +109,8 @@
 .flow-node.selected{background:color-mix(in srgb,var(--accent-bg) 38%,var(--bg));animation:flow-node-focus .24s ease-out}
 .flow-node.selected::before{content:"";position:absolute;left:-1px;top:13px;bottom:13px;width:3px;border-radius:999px;background:var(--accent);animation:nav-mark-in .2s ease-out}
 @keyframes flow-node-focus{from{opacity:.72;transform:translateY(3px) scale(.99);box-shadow:0 0 0 0 color-mix(in srgb,var(--accent-bg) 0%,transparent)}to{opacity:1;transform:translateY(0) scale(1);box-shadow:0 0 0 1px var(--accent-bg)}}
+/* 任务进行中使用流光提示真实活动，排队和完成状态保持静态，避免伪造进度。 */
+.run-row[data-status=running] .progress>span,.run-row[data-status=sending] .progress>span,.run-row[data-status=waiting] .progress>span{background:linear-gradient(100deg,var(--good) 25%,color-mix(in srgb,var(--good) 48%,#fff) 50%,var(--good) 75%);background-size:220% 100%;animation:run-progress-shimmer 1.45s ease-in-out infinite}
+.run-detail[data-status=running] .run-status-chip{animation:run-status-pulse 1.9s ease-in-out infinite}
+@keyframes run-progress-shimmer{0%{background-position:120% 0}100%{background-position:-80% 0}}
+@keyframes run-status-pulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent-bg) 0%,transparent)}50%{box-shadow:0 0 0 4px color-mix(in srgb,var(--accent-bg) 55%,transparent)}}
