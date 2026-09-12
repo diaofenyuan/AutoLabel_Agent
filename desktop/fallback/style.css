@@ -1,0 +1,26 @@
+*{box-sizing:border-box}
+body{margin:0;background:#fff;color:#303236;font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif;font-size:13px}
+.titlebar{height:48px;display:flex;align-items:center;justify-content:space-between;padding-left:20px;border-bottom:1px solid #e9e9eb;background:#f9f9fa;-webkit-app-region:drag;user-select:none}
+.titlebar>span{font-size:13px;font-weight:550}
+.window-controls{display:flex;height:100%;-webkit-app-region:no-drag}
+.window-controls button{width:46px;border:0;border-radius:0;background:transparent;color:#686b72;font-size:16px;padding:0}
+.window-controls button:hover{background:#ececee}
+.window-controls button[data-window=close]:hover{background:#d92d3d;color:white}
+main{max-width:870px;margin:0 auto;padding:46px 42px}
+.page-heading{display:flex;justify-content:space-between;align-items:center}
+h1{font-size:23px;line-height:1.4;letter-spacing:-.5px;font-weight:600;margin:0}
+.description{color:#7a7d84;margin:9px 0 25px;line-height:1.7}
+button{border:1px solid #303236;border-radius:7px;background:#303236;color:#fff;padding:9px 14px;font:inherit;cursor:pointer;transition:background .15s}
+button:hover{background:#494c52}button:disabled{opacity:.55;cursor:wait}
+.secondary{background:white;color:#4b4e55;border-color:#dedfe2}.secondary:hover{background:#f4f4f5}
+#status{padding:13px 15px;background:#f6f6f7;border:1px solid #e6e6e8;border-radius:8px;line-height:1.8}
+.status-list{margin:22px 0 26px}
+.status-list>div{display:flex;justify-content:space-between;align-items:center;gap:30px;padding:18px 0;border-bottom:1px solid #ededee}
+dt{font-weight:500}dt small{display:block;color:#868990;font-size:12px;font-weight:400;margin-top:7px}dd{margin:0;color:#5b6068;font-size:12px}
+.actions{display:flex;align-items:center;gap:9px;margin-bottom:30px}
+a{color:#71757c;text-decoration:none;margin-left:9px}a:hover{color:#25272b}
+details{border-top:1px solid #e9e9eb;padding-top:17px}summary{color:#60646c;cursor:pointer}
+pre{max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#f7f7f8;padding:16px;border:1px solid #e9e9eb;border-radius:8px;font:12px/1.8 Consolas,"Microsoft YaHei",monospace}
+.footnote{color:#9699a0;font-size:11px;margin-top:24px}
+button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid #829bbd;outline-offset:3px}
+@media(prefers-reduced-motion:reduce){button{transition:none}}

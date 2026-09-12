@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>启动诊断 · 自动标注小助手</title><link rel="stylesheet" href="style.css"></head>
+<body>
+  <header class="titlebar"><span>◎ 自动标注小助手</span><div class="window-controls" aria-label="窗口控制"><button data-window="minimize" aria-label="最小化窗口" title="最小化">─</button><button data-window="maximize" aria-label="最大化或还原窗口" title="最大化或还原">□</button><button data-window="close" aria-label="关闭窗口" title="关闭">×</button></div></header>
+  <main>
+    <div class="page-heading"><h1>启动诊断</h1><button class="secondary" id="refresh">刷新</button></div>
+    <p class="description">查看桌面程序和本地引擎的实际状态。</p>
+    <div id="status" role="status">正在读取启动状态…</div>
+    <dl class="status-list">
+      <div><dt>引擎连接<small id="version">协议校验与启动握手</small></dt><dd id="engine">检查中</dd></div>
+      <div><dt>Java 运行时<small>随安装包提供 Java 21</small></dt><dd id="runtime">检查中</dd></div>
+      <div><dt>凭据保护<small>使用当前 Windows 账户加密保存</small></dt><dd id="vault">检查中</dd></div>
+    </dl>
+    <div class="actions"><button id="restart">重新启动引擎</button><button class="secondary" id="save">保存诊断</button><a href="autolabel-app://app/index.html">返回工作台</a></div>
+    <details><summary>诊断详情</summary><pre id="details"></pre></details>
+    <p class="footnote">诊断不包含图片、完整提示词或密钥，不会自动上传。</p>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

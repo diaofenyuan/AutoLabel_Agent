@@ -1,0 +1,160 @@
+package cn.autolabel.engine;
+
+import com.google.gson.*;
+import java.nio.file.*;
+import java.util.*;
+
+final class Engine implements AutoCloseable {
+    final Store store;final Projects projects;final Exporter exporter;final Providers providers;final Runs runs;final Flows flows;final Maintenance maintenance;final LocalModels localModels;final LocalRuntime localRuntime;final LocalRuns localRuns;final RunResults runResults;final InputResultReuse inputReuse;final MediaJobs mediaJobs;final Tracks tracks;final TrackGenerations trackGenerations;
+    Engine(Path path)throws Exception{this(path,new JsonObject());}
+    Engine(Path path,JsonObject startup)throws Exception{store=new Store(path);projects=new Projects(store);exporter=new Exporter(store,projects);providers=new Providers(store);localModels=new LocalModels(store,projects);localRuntime=new LocalRuntime(localModels,startup);runs=new Runs(store,projects,providers);runResults=new RunResults(this);inputReuse=new InputResultReuse(this);runs.inputResults=runResults;runs.inputReuse=inputReuse;localRuns=new LocalRuns(this);flows=new Flows(this);mediaJobs=new MediaJobs(this,startup);exporter.mediaJobs=mediaJobs;tracks=new Tracks(this);trackGenerations=new TrackGenerations(this,tracks);tracks.generations=trackGenerations;runs.flowTick=()->{flows.tick();localRuns.tick();mediaJobs.tick();trackGenerations.tick();};maintenance=new Maintenance(this);}
+    Object command(String command,JsonObject p)throws Exception{
+        if(command.equals("system.canUpdate"))return maintenance.status();if(command.equals("system.prepareUpdate"))return maintenance.prepare();if(command.equals("system.cancelUpdate"))return maintenance.cancel();
+        if(command.equals("system.prepareDataMaintenance"))return maintenance.prepareData(p);if(command.equals("system.cancelDataMaintenance"))return maintenance.cancelData(p);
+        if(command.equals("backup.create")||command.equals("restore.prepare")){maintenance.enterOwned(command,p);try{return execute(command,p);}finally{maintenance.leaveOwned();}}
+        boolean tracked=maintenance.enter(command);try{return execute(command,p);}finally{if(tracked)maintenance.leave();}
+    }
+    private Object execute(String command,JsonObject p)throws Exception{return switch(command){
+        case "project.list"->projects.list();case "project.create"->projects.create(p);case "project.update"->projects.update(p);case "project.open"->projects.get(Json.required(p,"projectId"));case "project.example"->projects.example();
+        case "asset.list"->projects.listAssets(p);case "asset.get"->projects.asset(Json.required(p,"assetId"));case "asset.import"->projects.importAssets(p);
+        case "track.timeline.create"->tracks.timelines.create(p);case "track.timeline.list"->tracks.timelines.list(p);case "track.timeline.get"->tracks.timelines.get(p);case "track.timeline.frames"->tracks.timelines.page(p);case "track.timeline.update"->tracks.timelines.update(p);
+        case "track.create"->tracks.create(p);case "track.list"->tracks.list(p);case "track.get"->tracks.get(p);case "track.update"->tracks.update(p);case "track.delete"->tracks.delete(p);
+        case "track.keyframe.list"->tracks.keys(p);case "track.keyframe.save"->tracks.saveKey(p);case "track.keyframe.delete"->tracks.deleteKey(p);case "track.split"->tracks.split(p);case "track.merge"->tracks.merge(p);
+        case "track.generate.preview"->trackGenerations.preview(p);case "track.generate"->trackGenerations.generate(p);case "track.generation.get"->trackGenerations.get(p);case "track.generation.list"->trackGenerations.list(p);case "track.generation.results"->trackGenerations.results(p);case "track.generation.cancel"->trackGenerations.cancel(p);case "track.generation.retry"->trackGenerations.retry(p);
+        case "track.local.sequence"->trackLocalSequence(p);
+        case "track.local.sequence.get"->localTrackingCandidateGet(p);
+        case "track.local.sequence.list"->localTrackingCandidateList(p);
+        case "track.local.sequence.confirm"->confirmLocalTrackingCandidate(p);
+        case "media.runtime.get"->{FlowPlans.keys(p);yield mediaJobs.runtime();}case "media.runtime.configure"->mediaJobs.configure(p);
+        case "media.video.inspect"->mediaJobs.inspect(p);case "media.video.create"->mediaJobs.createVideo(p);case "media.video.import"->mediaJobs.importVideo(p);case "media.video.frames"->mediaJobs.frames(p);
+        case "media.job.get"->{FlowPlans.keys(p,"jobId");yield mediaJobs.get(Json.required(p,"jobId"));}case "media.job.list"->mediaJobs.list(p);case "media.job.cancel"->mediaJobs.cancel(p);case "media.job.retry"->mediaJobs.retry(p);
+        case "media.job.resolve"->{FlowPlans.keys(p,"jobId");yield store.read(c->{JsonObject job=Store.document(c,"media_jobs",Json.required(p,"jobId"));JsonObject value=Json.obj("jobId",job.get("id"),"kind",job.get("kind"));if(job.has("sourcePath"))value.add("sourcePath",job.get("sourcePath"));return value;});}
+        case "media.screening.create"->mediaJobs.createScreening(p);case "media.screening.result"->mediaJobs.screeningResult(p);
+        case "asset.checkLocations"->new AssetFiles(store,projects).check(p);case "asset.relocate"->new AssetFiles(store,projects).relocate(p);
+        case "backup.preflight"->new DataBackups(store).preflight(p);case "backup.create"->new DataBackups(store).create(p);case "backup.inspect"->new DataBackups(store).inspect(p);case "restore.prepare"->new DataBackups(store).prepareRestore(p);
+        case "flow.capabilities"->FlowPlans.capabilities();case "flow.preflight"->flows.plans.preflight(p);case "flow.create"->flows.create(p);case "flow.get"->flows.get(Json.required(p,"flowRunId"));case "flow.list"->flows.list(p);case "flow.artifact"->new FlowArtifacts(store).get(p);case "flow.rerun"->flows.rerun(p);
+        case "flow.pause","flow.resume","flow.cancel","flow.retry"->{JsonObject value=flows.control(command.substring(5),p);if(command.equals("flow.cancel"))localRuns.cancelFlow(Json.required(p,"flowRunId"));yield value;}
+        case "local.runtime.get"->{FlowPlans.keys(p);yield localRuntime.state();}case "local.model.get"->localModels.get(p);
+        case "local.runtime.configure"->localRuntime.configure(p);case "local.runtime.probe"->localRuntime.probe(p);
+        case "local.model.register"->localModels.register(p);case "local.model.list"->localModels.list(p);case "local.model.resolve"->localModels.resolve(p);case "local.model.authorize"->localRuntime.authorize(p);case "local.model.load"->localRuntime.load(p);
+        case "local.run.create"->localRuns.create(p);case "run.result.get"->runResults.get(p);case "flow.input.image"->RunInputs.image(store,projects,p);
+        case "evaluationSet.create"->new EvaluationSets(store,projects).create(p);case "evaluationSet.list"->new EvaluationSets(store,projects).list(Json.required(p,"projectId"));case "evaluationSet.get"->new EvaluationSets(store,projects).get(p);
+        case "evaluationSet.saveTruth"->new EvaluationSets(store,projects).saveTruth(p);case "evaluationSet.getTruth"->new EvaluationSets(store,projects).truth(p);case "evaluationSet.publish"->new EvaluationSets(store,projects).publish(p);
+        case "evaluation.preflight"->new Evaluations(store,projects).preflight(p);case "evaluation.create"->new Evaluations(store,projects).create(p);case "evaluation.get"->new Evaluations(store,projects).get(Json.required(p,"evaluationId"));case "evaluation.list"->new Evaluations(store,projects).list(Json.required(p,"projectId"));case "evaluation.results"->new Evaluations(store,projects).results(p);
+        case "evaluation.rerun.preflight"->new EvaluationReruns(this).preflight(p);case "evaluation.rerun.create"->new EvaluationReruns(this).create(p);case "evaluation.rerun.get"->new EvaluationReruns(this).get(Json.required(p,"comparisonId"));case "evaluation.rerun.finish"->new EvaluationReruns(this).finish(Json.required(p,"comparisonId"));
+        case "review.build"->new Reviews(store,projects).build(p);case "review.list"->new Reviews(store,projects).list(p);case "review.resolve"->new Reviews(store,projects).resolve(p);case "review.sample"->new Reviews(store,projects).sample(p);
+        case "annotation.save"->projects.save(p);case "annotation.draft"->projects.draft(p);case "annotation.history"->projects.history(Json.required(p,"assetId"));
+        case "annotation.importYolo"->new YoloImporter(store,projects).importLabels(p);case "annotation.render"->new OverlayRenderer(store,projects).render(p);
+        case "annotation.draft.discard"->store.tx(c->{String id=Json.required(p,"assetId");Store.update(c,"DELETE FROM drafts WHERE asset_id=?",id);Store.event(c,"annotation.draft_discarded",null,id,null,new JsonObject());return Json.obj("discarded",true);});
+        case "export.preflight"->exporter.preflight(p);case "export.create"->exporter.create(p);case "export.list"->exporter.list(Json.required(p,"projectId"));
+        case "export.reproduce"->new ExportHistory(store).reproduce(p);case "export.compare"->new ExportHistory(store).compare(p);
+        case "provider.list"->providers.list();case "provider.save"->providers.save(p);case "provider.delete"->providers.delete(p);case "provider.models"->providers.models(Json.required(p,"providerId"));case "provider.test"->providers.test(p);case "provider.capabilities"->providers.capabilities(p);case "credential.set"->providers.credential(p);
+        case "chat.send"->providers.chat(p);
+        case "chat.cancel"->providers.cancel(Json.required(p,"sessionId"));
+        case "run.create"->runs.create(p);case "run.list"->runs.list(Json.str(p,"projectId",null));case "run.get"->runs.get(Json.required(p,"runId"));case "run.attempts"->runs.attempts(p);
+        case "budget.get"->store.read(c->Budgets.view(c,Json.required(p,"budgetScopeId")));
+        case "budget.update"->store.tx(c->{String id=Json.required(p,"budgetScopeId");Budgets.ensure(c,id,p.has("maxRequests")?Costs.integer(p,"maxRequests",1,9_007_199_254_740_991L):Long.MAX_VALUE,true);if(p.has("costLimit"))Costs.update(c,id,p.get("costLimit"));return Budgets.view(c,id);});
+        case "budget.estimate"->Costs.estimate(providers.get(Json.required(p,"providerId")),p);
+        case "run.pause","run.resume","run.cancel","run.retry"->{JsonObject value=runs.control(command.substring(4),p);if(command.equals("run.cancel"))localRuns.cancel(Json.required(p,"runId"));yield value;}
+        case "system.suspend"->runs.suspend(true);case "system.resume"->runs.suspend(false);
+        case "event.list"->store.read(c->Store.events(c,Json.number(p,"after",0),Json.str(p,"runId",null),Json.str(p,"assetId",null),Json.str(p,"flowRunId",null),Json.bounded(p,"limit",500,1,2000)));
+        case "event.snapshot"->store.read(c->{JsonObject result=Json.obj("sequence",Store.cursor(c),"timestamp",Json.now());
+            if(p.has("runId"))result.add("run",runs.view(c,Json.required(p,"runId"),true));else{JsonArray all=new JsonArray();for(JsonObject row:Store.rows(c,"SELECT id FROM runs ORDER BY rowid DESC LIMIT 100"))all.add(runs.view(c,Json.required(row,"id"),false));result.add("runs",all);}return result;});
+        case "resource.list"->new ResourceLibrary(store,projects).list(p);case "resource.save"->new ResourceLibrary(store,projects).save(p);
+        case "resource.get"->new ResourceLibrary(store,projects).get(p);case "resource.apply"->new ResourceLibrary(store,projects).apply(p);case "resource.reference"->new ResourceLibrary(store,projects).addReference(p);case "resource.image"->resourceImage(p);
+        case "settings.get"->settings();
+        case "settings.save"->{JsonObject settings=Json.object(p,"settings");Providers.rejectSecrets(settings);Json.bounded(settings,"globalConcurrency",8,1,32);yield store.tx(c->{JsonObject r=Store.one(c,"SELECT data FROM settings WHERE id='global'");JsonObject current=r==null?new JsonObject():Json.parse(r.get("data").getAsString());for(var e:settings.entrySet())current.add(e.getKey(),e.getValue());Store.update(c,"INSERT INTO settings(id,data) VALUES('global',?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",current);Store.event(c,"settings.saved",null,null,null,Json.obj("globalConcurrencyRequiresRestart",settings.has("globalConcurrency")));return current;});}
+        case "diagnostics.get"->Json.obj("engineVersion","0.1.0","protocolVersion",1,"javaVersion",System.getProperty("java.version"),"os",System.getProperty("os.name"),"architecture",System.getProperty("os.arch"),"databaseMode","WAL","databaseVersion",Store.SCHEMA_VERSION,"writeFailed",store.writeFailed,"queue",runs.diagnostics(),"timestamp",Json.now());
+        default->throw new ApiError(501,"command_not_implemented","此功能尚未实现："+command);
+    };}
+    private JsonObject trackLocalSequence(JsonObject p)throws Exception{
+        FlowPlans.keys(p,"timelineId","timelineVersion","modelId","modelVersion","device","classMap","timeoutMs","scope","detector");
+        if(!"detect".equals(Json.str(p,"detector","")))throw new ApiError(422,"tracking_task_unsupported","自动跟踪首版仅支持 Detect 时间轴。");
+        String timelineId=Json.required(p,"timelineId");
+        JsonObject request=store.read(c->{
+            JsonObject timeline=Store.document(c,"track_timelines",timelineId),job=Store.document(c,"media_jobs",Json.required(timeline,"mediaJobId"));
+            if(Json.number(timeline,"version",0)!=Json.number(p,"timelineVersion",-1))throw new ApiError(409,"track_version_conflict","时间轴已变化，请重新载入后再运行自动跟踪。");
+            if(!"detect".equals(Json.str(timeline,"taskType","")))throw new ApiError(422,"tracking_task_unsupported","自动跟踪首版仅支持 Detect 时间轴。");
+            String sourceHash=Json.str(job,"sourceHash","");if(!sourceHash.matches("[a-f0-9]{64}"))throw new ApiError(409,"tracking_source_unverified","抽帧任务缺少固定来源视频指纹，不能运行自动跟踪。");
+            JsonObject model=localModels.snapshot(Json.required(p,"modelId"),p.has("modelVersion")?(int)Costs.integer(p,"modelVersion",1,Integer.MAX_VALUE):null);
+            List<JsonObject> source=TrackTimelines.frames(c,timelineId);if(source.size()<2||source.size()>120)throw new ApiError(422,"tracking_limit_exceeded","一次自动跟踪需要 2 至 120 张连续固定帧。");
+            JsonObject first=source.get(0),second=source.get(1),tb=Json.object(first,"timeBase");
+            if(!tb.equals(Json.object(second,"timeBase")))throw new ApiError(422,"tracking_cadence_unsupported","时间轴时间基不一致，不能进行自动跟踪。");
+            java.math.BigInteger delta=new java.math.BigInteger(Json.required(second,"sourcePts")).subtract(new java.math.BigInteger(Json.required(first,"sourcePts")));java.math.BigInteger numerator=delta.multiply(new java.math.BigInteger(Json.required(tb,"numerator"))),denominator=new java.math.BigInteger(Json.required(tb,"denominator"));if(numerator.signum()<=0)throw new ApiError(422,"tracking_cadence_unsupported","固定帧时间必须严格递增。");java.math.BigInteger gcd=numerator.gcd(denominator);numerator=numerator.divide(gcd);denominator=denominator.divide(gcd);
+            JsonObject r=Json.obj("device",p.get("device"),"timeoutMs",p.get("timeoutMs"),"sequenceId",Json.id(),"sourceVideoId",timeline.get("sourceVideoId"),"sourceVideoHash",sourceHash,"expectedModelHash",model.get("modelHash"),"templateHash",timeline.get("templateHash"),"classMap",p.get("classMap"),"cadence",Json.obj("numerator",numerator.toString(),"denominator",denominator.toString()));
+            JsonArray frames=new JsonArray();for(JsonObject frame:source){tracks.timelines.verifyFile(frame);frames.add(Json.obj("inputId",frame.get("frameId"),"assetId",frame.get("assetId"),"sourceVideoId",frame.get("sourceVideoId"),"imagePath",tracks.timelines.path(frame).toString(),"expectedInputHash",frame.get("contentHash"),"width",frame.get("width"),"height",frame.get("height"),"pts",frame.get("sourcePts"),"timeBase",frame.get("timeBase"),"sceneId",frame.get("sceneId")));}r.add("frames",frames);return r;
+        });
+        JsonObject raw=localRuntime.trackSequence(request),statistics=Json.object(raw,"statistics");
+        JsonObject candidate=persistLocalTrackingCandidate(timelineId,request,raw);
+        return Json.obj("status","completed","candidateId",candidate.get("candidateId"),"candidateSetId",raw.get("candidateSetId"),"candidateCount",Json.integer(statistics,"tracks",0),"frameCount",Json.integer(statistics,"frames",0),"associatedCount",Json.integer(statistics,"associatedDetections",0),"reviewRequired",trackingReviewRequired(raw),"trackingPerformed",true,"candidateOnly",true,"provenance",raw.get("provenance"),"statistics",statistics,"frames",raw.get("frames"),"tracks",raw.get("tracks"),"trackingIssues",raw.get("trackingIssues"),"createdAt",candidate.get("createdAt"),"updatedAt",candidate.get("updatedAt"));
+    }
+    /** 保存一次已完成的 worker 结果，结果永远保持候选态，不能被查询接口隐式应用。 */
+    JsonObject persistLocalTrackingCandidate(String timelineId,JsonObject request,JsonObject raw)throws Exception{
+        String candidateId=Json.id(),now=Json.now();
+        JsonObject candidate=Json.obj("candidateId",candidateId,"timelineId",timelineId,"status","completed","createdAt",now,"updatedAt",now,
+            "candidateOnly",true,"humanConfirmed",false,"trackingPerformed",true,"reviewRequired",trackingReviewRequired(raw),
+            "request",request.deepCopy(),"result",raw.deepCopy());
+        for(String field:List.of("candidateSetId","provenance","statistics","frames","tracks","trackingIssues"))if(raw.has(field))candidate.add(field,raw.get(field).deepCopy());
+        JsonObject statistics=Json.object(raw,"statistics");
+        candidate.addProperty("candidateCount",Json.integer(statistics,"tracks",0));
+        candidate.addProperty("frameCount",Json.integer(statistics,"frames",0));
+        candidate.addProperty("associatedCount",Json.integer(statistics,"associatedDetections",0));
+        copyField(candidate,"sourceVideoHash",raw,request,"sourceVideoHash");
+        copyField(candidate,"templateHash",raw,request,"templateHash");
+        copyField(candidate,"modelHash",raw,request,"expectedModelHash");
+        if(raw.has("provenance")){
+            JsonObject provenance=Json.object(raw,"provenance");
+            if(provenance.has("workerHash"))candidate.add("workerHash",provenance.get("workerHash"));
+        }
+        store.tx(c->{
+            if(Store.one(c,"SELECT id FROM track_timelines WHERE id=?",timelineId)==null)throw new ApiError(404,"not_found","时间轴不存在。");
+            Store.update(c,"INSERT INTO local_tracking_candidates(id,timeline_id,status,created_at,updated_at,data) VALUES(?,?,?,?,?,?)",candidateId,timelineId,"completed",now,now,candidate);
+            Store.event(c,"track.local.candidate_saved",null,null,null,Json.obj("candidateId",candidateId,"timelineId",timelineId,"reviewRequired",trackingReviewRequired(raw)));
+            return null;
+        });
+        return candidate;
+    }
+    private static void copyField(JsonObject target,String field,JsonObject primary,JsonObject fallback,String fallbackField){
+        if(primary.has(field)&&!primary.get(field).isJsonNull())target.add(field,primary.get(field));
+        else if(fallback.has(fallbackField)&&!fallback.get(fallbackField).isJsonNull())target.add(field,fallback.get(fallbackField));
+    }
+    private JsonObject localTrackingCandidateGet(JsonObject p){
+        FlowPlans.keys(p,"candidateId");String id=Json.required(p,"candidateId");
+        return store.read(c->{JsonObject row=Store.one(c,"SELECT data FROM local_tracking_candidates WHERE id=?",id);if(row==null)throw new ApiError(404,"not_found","自动跟踪候选不存在。");return Json.parse(row.get("data").getAsString()).getAsJsonObject();});
+    }
+    private JsonObject localTrackingCandidateList(JsonObject p){
+        FlowPlans.keys(p,"timelineId","offset","limit");String timelineId=Json.required(p,"timelineId");
+        int offset=Json.bounded(p,"offset",0,0,Integer.MAX_VALUE),limit=Json.bounded(p,"limit",100,1,100);
+        return store.read(c->{if(Store.one(c,"SELECT id FROM track_timelines WHERE id=?",timelineId)==null)throw new ApiError(404,"not_found","时间轴不存在。");
+            JsonArray items=Store.docs(c,"SELECT data FROM local_tracking_candidates WHERE timeline_id=? ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",timelineId,limit,offset);
+            JsonObject count=Store.one(c,"SELECT COUNT(*) AS n FROM local_tracking_candidates WHERE timeline_id=?",timelineId);
+            return Json.obj("items",items,"total",count.get("n"),"offset",offset,"limit",limit);});
+    }
+    /** 只记录用户明确确认后的人工复核提交，不把 worker 候选伪装成正式贡献。 */
+    private JsonObject confirmLocalTrackingCandidate(JsonObject p){
+        FlowPlans.keys(p,"candidateId","timelineId","timelineVersion","confirm");
+        if(!Json.bool(p,"confirm",false))throw new ApiError(400,"tracking_confirmation_required","必须明确确认后才能提交人工复核。");
+        String candidateId=Json.required(p,"candidateId"),timelineId=Json.required(p,"timelineId");
+        int timelineVersion=(int)Costs.integer(p,"timelineVersion",1,Integer.MAX_VALUE);
+        return store.tx(c->{
+            JsonObject row=Store.one(c,"SELECT data FROM local_tracking_candidates WHERE id=?",candidateId);if(row==null)throw new ApiError(404,"not_found","自动跟踪候选不存在。");
+            JsonObject candidate=Json.parse(row.get("data").getAsString());
+            if(!timelineId.equals(Json.str(candidate,"timelineId","")))throw new ApiError(409,"tracking_candidate_scope_conflict","候选不属于当前时间轴。");
+            JsonObject timeline=Store.document(c,"track_timelines",timelineId);if(Json.number(timeline,"version",0)!=timelineVersion)throw new ApiError(409,"track_version_conflict","时间轴已变化，请刷新后重新核对候选。");
+            if(!Json.bool(candidate,"candidateOnly",false)||Json.bool(candidate,"humanConfirmed",true))throw new ApiError(409,"tracking_candidate_invalid","该记录不是可确认的本地候选。");
+            JsonObject old=Json.object(candidate,"confirmation");if(old.has("status"))return confirmationResult(candidate,old);
+            String now=Json.now();JsonObject confirmation=Json.obj("status","manual_review_required","confirmedAt",now,"timelineVersion",timelineVersion,"formalContributionCreated",false,"nextAction","请在时间轴逐帧核对，并通过关键帧编辑与正式候选生成流程提交；本次确认不会自动写入正式轨迹。");
+            candidate.add("confirmation",confirmation);candidate.addProperty("updatedAt",now);
+            Store.update(c,"UPDATE local_tracking_candidates SET updated_at=?,data=? WHERE id=?",now,candidate,candidateId);
+            Store.event(c,"track.local.candidate_confirmed",null,null,null,Json.obj("candidateId",candidateId,"timelineId",timelineId,"formalContributionCreated",false));
+            return confirmationResult(candidate,confirmation);
+        });
+    }
+    private static JsonObject confirmationResult(JsonObject candidate,JsonObject confirmation){
+        return Json.obj("candidateId",candidate.get("candidateId"),"timelineId",candidate.get("timelineId"),"status",Json.required(confirmation,"status"),"candidateOnly",true,"humanConfirmed",false,"requiresManualReview",true,"formalContributionCreated",false,"confirmedAt",confirmation.get("confirmedAt"),"timelineVersion",confirmation.get("timelineVersion"),"confirmation",confirmation.deepCopy(),"nextAction",Json.required(confirmation,"nextAction"));
+    }
+    static boolean trackingReviewRequired(JsonObject raw){return Json.bool(raw,"requiresTrackingReview",false);}
+    JsonObject settings(){return store.read(c->{JsonObject r=Store.one(c,"SELECT data FROM settings WHERE id='global'");return r==null?Json.obj("theme","light","globalConcurrency",8,"closeBehavior","ask"):Json.parse(r.get("data").getAsString());});}
+    JsonObject resourceImage(JsonObject p){ResourceLibrary library=new ResourceLibrary(store,projects);JsonObject resource=library.get(p);if(!Json.required(resource,"kind").equals("reference"))throw new ApiError(422,"reference_invalid","只有人工参考资源包含固定图片。");JsonObject content=Json.object(resource,"content");return Json.obj("resourceId",resource.get("id"),"resourceVersion",resource.get("version"),"path",library.referencePath(content).toString(),"contentHash",content.get("contentHash"),"width",content.get("width"),"height",content.get("height"));}
+    @Override public void close(){trackGenerations.close();mediaJobs.close();localRuns.close();flows.close();runs.close();providers.close();store.close();}
+}

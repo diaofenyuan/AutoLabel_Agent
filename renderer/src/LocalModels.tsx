@@ -1,0 +1,37 @@
+import { useEffect, useState } from 'react';
+import { FolderOpen, Plus, RefreshCw } from 'lucide-react';
+import type { LoadedLocalModel, LocalModel, LocalRuntimeState } from '../../shared/inference';
+import { getBridge, request, errorMessage, isDemo } from './bridge';
+import { Button, Field, Modal, Notice } from './ui';
+import { taskNames, type TaskType } from './types';
+import { LocalError } from './LocalRuntimeSettings';
+
+export function LocalBackend({ loaded }: { loaded: LoadedLocalModel }) {
+  const backend = loaded.observedBackend;
+  return <div className="local-load-result"><strong>已加载 {loaded.model.name} · 版本 {loaded.model.version}</strong><p>请求设备：{loaded.requestedDevice}</p><p>实际后端：{!backend ? '引擎未报告' : backend.kind === 'pytorch' ? `PyTorch · ${backend.device}` : `ONNX Runtime · ${backend.providers.join('、') || '执行提供者未报告'}`}</p></div>;
+}
+
+export default function LocalModels() {
+  const [models, setModels] = useState<LocalModel[]>([]), [total, setTotal] = useState(0), [offset, setOffset] = useState(0);
+  const [runtime, setRuntime] = useState<LocalRuntimeState | null>(null), [selected, setSelected] = useState<LocalModel | null>(null), [loaded, setLoaded] = useState<LoadedLocalModel | null>(null);
+  const [editing, setEditing] = useState<LocalModel | 'new' | null>(null), [device, setDevice] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  async function refresh() {
+    if (isDemo) return;
+    setBusy(true); setError('');
+    const values = await Promise.allSettled([request<{ items: LocalModel[]; total: number }>('local.model.list', { offset, limit: 50 }), request<LocalRuntimeState>('local.runtime.get')]);
+    if (values[0].status === 'fulfilled') { setModels(values[0].value.items); setTotal(values[0].value.total); } else setError(errorMessage(values[0].reason));
+    if (values[1].status === 'fulfilled') setRuntime(values[1].value); else { setRuntime(null); setError(errorMessage(values[1].reason)); }
+    setBusy(false);
+  }
+  useEffect(() => { void refresh(); }, [offset]);
+  async function load() { if (!selected || !runtime?.available) return; setBusy(true); setError(''); setLoaded(null); try { setLoaded(await request<LoadedLocalModel>('local.model.load', { modelId: selected.id, modelVersion: selected.version, ...(device ? { device } : {}) })); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); } }
+  return <div className="local-models"><div className="section-toolbar"><h2>本地模型</h2><div className="actions"><Button disabled={isDemo} busy={busy} onClick={() => void refresh()}><RefreshCw size={14}/>刷新本地模型</Button><Button disabled={isDemo || busy} className="primary" onClick={() => setEditing('new')}><Plus size={14}/>登记本地模型</Button></div></div>{!runtime?.available && <Notice>{isDemo ? '请在桌面应用中配置和使用本地模型。' : '本地环境尚未确认可用。请在“设置 → 本地推理”选择 Python 并完成检测；模型文件可以先登记。'}</Notice>}
+    <div className="local-model-layout"><aside className="local-model-list">{models.map(model => <button key={model.id} disabled={busy} className={selected?.id === model.id ? 'selected' : ''} onClick={() => { setSelected(model); setLoaded(null); setError(''); }}><strong>{model.name}</strong><small>{taskNames[model.taskType]} · {model.format.toUpperCase()} · 版本 {model.version}</small></button>)}{!models.length && <div className="empty-state local-model-empty"><div className="empty-orbit"><span className="empty-icon"><FolderOpen size={22}/></span><span className="empty-orbit-ring"/></div><strong>尚无本地模型</strong><p>登记 .pt 或 .onnx 文件后，可在流程中加载并读取类别。</p><Button disabled={isDemo || busy} onClick={() => setEditing('new')}><Plus size={14}/>登记本地模型</Button></div>}<div className="pagination"><Button disabled={busy || offset === 0} onClick={() => setOffset(n => Math.max(0, n - 50))}>上一页模型</Button><span>{offset / 50 + 1}</span><Button disabled={busy || offset + models.length >= total} onClick={() => setOffset(n => n + 50)}>下一页模型</Button></div></aside><section className="local-model-detail">{selected ? <><h3>{selected.name}</h3><p>{taskNames[selected.taskType]} · 版本 {selected.version} · {(selected.sizeBytes / 1024 / 1024).toFixed(1)} MB</p><p className="muted">{selected.fileName}</p><div className="actions"><Button disabled={busy} onClick={() => setEditing(selected)}>登记此模型的新版本</Button></div><Field label="加载设备"><select aria-label="本地模型加载设备" disabled={busy || !runtime?.available} value={device} onChange={e => { setDevice(e.target.value); setLoaded(null); }}><option value="">由引擎选择</option>{runtime?.devices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></Field><Button disabled={!runtime?.available} busy={busy} onClick={() => void load()}>加载模型并读取类别</Button>{loaded && <><LocalBackend loaded={loaded}/><h3>模型原始类别</h3><p className="muted tiny">执行前需在流程节点中将全部原始类别映射到项目类别，或明确选择忽略。</p><div className="local-class-list">{loaded.classes.map(c => <div key={c.id}><span>{c.id}</span><strong>{c.name}</strong></div>)}</div></>}<details className="local-model-diagnostics"><summary>模型诊断信息</summary><p>模型 ID：{selected.id}</p><p>文件标识：{selected.modelHash}</p><p>登记时间：{new Date(selected.createdAt).toLocaleString('zh-CN')}</p></details></> : <div className="empty-state local-model-detail-empty"><div className="empty-orbit"><span className="empty-icon"><FolderOpen size={22}/></span><span className="empty-orbit-ring"/></div><strong>选择一个本地模型</strong><p>读取版本、加载设备与实际类别后，再将其用于流程节点。</p></div>}</section></div><LocalError error={error}/>{editing && <RegisterLocalModel model={editing === 'new' ? undefined : editing} onClose={() => setEditing(null)} onSaved={model => { setSelected(model); setLoaded(null); setEditing(null); void refresh(); }}/>}</div>;
+}
+
+function RegisterLocalModel({ model, onClose, onSaved }: { model?: LocalModel; onClose: () => void; onSaved: (model: LocalModel) => void }) {
+  const [name, setName] = useState(model?.name ?? ''), [taskType, setTaskType] = useState<TaskType>(model?.taskType ?? 'detect'), [modelPath, setModelPath] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  async function choose() { try { const files = await (await getBridge()).chooseFiles({ kind: 'model' }); if (files[0]) setModelPath(files[0]); } catch (e) { setError(errorMessage(e)); } }
+  async function save() { if (!name.trim() || !modelPath) return; setBusy(true); setError(''); try { onSaved(await request<LocalModel>('local.model.register', { ...(model ? { id: model.id, baseVersion: model.version } : {}), name: name.trim(), taskType, modelPath })); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); } }
+  return <Modal title={model ? '登记模型新版本' : '登记本地模型'} onClose={() => { if (!busy) onClose(); }}><div className="form-stack"><Field label="模型名称"><input aria-label="本地模型名称" disabled={busy} value={name} onChange={e => setName(e.target.value)}/></Field><Field label="任务类型"><select aria-label="本地模型任务类型" disabled={busy} value={taskType} onChange={e => setTaskType(e.target.value as TaskType)}>{Object.entries(taskNames).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field><Button disabled={busy} onClick={() => void choose()}><FolderOpen size={14}/>选择模型文件</Button><p className="muted tiny break-word">{modelPath || '请选择本机的 .pt 或 .onnx 文件。'}</p><LocalError error={error}/><div className="modal-actions"><Button disabled={busy} onClick={onClose}>取消</Button><Button className="primary" disabled={!name.trim() || !modelPath} busy={busy} onClick={() => void save()}>保存本地模型</Button></div></div></Modal>;
+}

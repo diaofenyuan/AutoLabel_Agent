@@ -1,0 +1,54 @@
+package cn.autolabel.engine;
+
+import com.google.gson.*;
+import java.nio.file.*;
+import java.sql.Connection;
+import java.util.*;
+
+final class FlowArtifacts {
+    final Store store;
+    FlowArtifacts(Store store){this.store=store;}
+    static JsonObject statistics(){return Json.obj("total",0,"processed",0,"succeeded",0,"failed",0,"unknown",0,"excluded",0,"queued",0,"inFlight",0,"reused",0);}
+    static JsonObject statistics(List<JsonObject> items){JsonObject stats=statistics();stats.addProperty("total",items.size());for(JsonObject item:items){String state=Json.str(item,"workStatus","done");String field=state.equals("queued")?"queued":state.equals("running")?"inFlight":switch(Json.str(item,"outcome","included")){case "failed"->"failed";case "unknown"->"unknown";case "excluded"->"excluded";default->"succeeded";};stats.addProperty(field,Json.integer(stats,field,0)+1);if(field.equals("succeeded")&&Json.bool(item,"reused",false))stats.addProperty("reused",Json.integer(stats,"reused",0)+1);}stats.addProperty("processed",items.size()-Json.integer(stats,"queued",0)-Json.integer(stats,"inFlight",0));return stats;}
+    static JsonObject assetItem(Connection c,JsonObject asset,String path)throws Exception{
+        String id=Json.required(asset,"id"),status=Json.str(asset,"status","unlabeled");boolean labeled=Set.of("candidate","modified","confirmed").contains(status)&&Json.integer(asset,"version",0)>0;
+        JsonObject item=Json.obj("id",Json.id(),"assetId",id,"name",Json.str(asset,"name",id),"contentHash",asset.get("contentHash"),"width",asset.get("width"),"height",asset.get("height"),"selectedVersion",labeled?asset.get("version"):null,"outcome","included","asset",asset.deepCopy(),"inputPath",path,"manualProtected",Set.of("modified","confirmed").contains(status)||Store.one(c,"SELECT asset_id FROM drafts WHERE asset_id=?",id)!=null);
+        if(labeled&&Json.str(asset,"source","").equals("api"))item.add("candidateVersion",asset.get("version"));return item;
+    }
+    static String create(Connection c,JsonObject flow,String step,String kind,List<JsonObject> source,boolean completed)throws Exception{
+        String id=Json.id();JsonObject header=Json.obj("id",id,"projectId",flow.get("projectId"),"flowRunId",flow.get("id"),"kind",kind,"createdAt",Json.now(),"status",completed?"completed":"building","total",source.size(),"statistics",statistics(source));if(step!=null)header.addProperty("stepId",step);
+        Store.update(c,"INSERT INTO flow_artifacts(id,flow_run_id,project_id,step_id,kind,data) VALUES(?,?,?,?,?,?)",id,Json.required(flow,"id"),Json.required(flow,"projectId"),step,kind,header);
+        int position=0;for(JsonObject original:source){JsonObject item=original.deepCopy();item.addProperty("id",Json.id());if(Json.bool(item,"freshInput",false)){item.remove("freshInput");item.add("inputId",item.get("id"));Json.object(item,"inputSnapshot").add("inputId",item.get("id"));}Store.update(c,"INSERT INTO flow_artifact_items(id,artifact_id,asset_id,position,outcome,data) VALUES(?,?,?,?,?,?)",Json.required(item,"id"),id,Json.str(item,"assetId",null),position++,Json.str(item,"outcome","included"),item);}return id;
+    }
+    static List<JsonObject> items(Connection c,String artifact)throws Exception{
+        List<JsonObject> items=new ArrayList<>();for(JsonObject row:Store.rows(c,"SELECT data FROM flow_artifact_items WHERE artifact_id=? ORDER BY position LIMIT 10001",artifact))items.add(Json.parse(row.get("data").getAsString()));if(items.size()>10000)throw new ApiError(413,"flow_input_limit","该流程产物超过 10000 项限制。");return items;
+    }
+    static void updateItem(Connection c,JsonObject item)throws Exception{
+        JsonObject header=Store.one(c,"SELECT json_extract(flow_artifacts.data,'$.status') AS status FROM flow_artifact_items JOIN flow_artifacts ON flow_artifacts.id=flow_artifact_items.artifact_id WHERE flow_artifact_items.id=?",Json.required(item,"id"));if(header==null)throw new ApiError(404,"flow_item_missing","流程产物分项不存在。");if(Json.str(header,"status","").equals("completed"))throw new ApiError(409,"flow_artifact_sealed","已封存的流程产物不可修改，请创建新的工作副本。");Store.update(c,"UPDATE flow_artifact_items SET asset_id=?,outcome=?,data=? WHERE id=?",Json.str(item,"assetId",null),Json.str(item,"outcome","included"),item,Json.required(item,"id"));
+    }
+    static JsonObject seal(Connection c,String id,JsonObject extra)throws Exception{
+        JsonObject header=Store.document(c,"flow_artifacts",id);if(Json.str(header,"status","").equals("completed"))return header;List<JsonObject> items=items(c,id);header.addProperty("status","completed");header.addProperty("total",items.size());header.add("statistics",statistics(items));for(var entry:extra.entrySet())header.add(entry.getKey(),entry.getValue());Store.update(c,"UPDATE flow_artifacts SET data=? WHERE id=?",header,id);return header;
+    }
+    static JsonObject requireComplete(Connection c,String id,String project)throws Exception{
+        JsonObject artifact=Store.document(c,"flow_artifacts",id);if(!Json.required(artifact,"projectId").equals(project))throw new ApiError(422,"flow_artifact_project_mismatch","流程产物不属于当前项目。");if(!Json.str(artifact,"status","").equals("completed"))throw new ApiError(409,"flow_artifact_unfinished","上游产物尚未完整保存。");return artifact;
+    }
+    static JsonObject publicItem(JsonObject item){JsonObject result=new JsonObject();for(String field:List.of("id","assetId","name","contentHash","width","height","selectedVersion","candidateVersion","outcome","reason","sourceRunId","sourceArtifactId","reused","reusedFrom","inputId","viewId","planHash","inputSnapshot","resultId","requiresGeometryReview","inputReusedFrom","screeningReasons","screeningRecommendation"))if(item.has(field))result.add(field,item.get(field));if(Json.object(Json.object(item,"asset"),"metadata").has("sourceVideoId"))result.add("metadata",MediaJobs.publicMetadata(Json.object(Json.object(item,"asset"),"metadata")));if(!result.has("selectedVersion"))result.add("selectedVersion",JsonNull.INSTANCE);return result;}
+    JsonObject get(JsonObject p){String id=Json.required(p,"artifactId");int limit=Json.bounded(p,"limit",100,1,500),offset=Json.bounded(p,"offset",0,0,Integer.MAX_VALUE);return store.read(c->{JsonObject header=Store.document(c,"flow_artifacts",id);requireComplete(c,id,Json.required(header,"projectId"));header.remove("status");JsonArray items=new JsonArray();for(JsonObject row:Store.rows(c,"SELECT data FROM flow_artifact_items WHERE artifact_id=? ORDER BY position LIMIT ? OFFSET ?",id,limit,offset))items.add(publicItem(Json.parse(row.get("data").getAsString())));header.add("items",items);return header;});}
+    static boolean included(JsonObject item){return Json.str(item,"outcome","").equals("included")&&item.has("assetId");}
+    static List<JsonObject> parents(Connection c,List<JsonObject> source)throws Exception{
+        LinkedHashMap<String,JsonObject> result=new LinkedHashMap<>();for(JsonObject item:source){if(!Json.str(Json.object(item,"inputSnapshot"),"kind","").equals("view")){result.put(Json.str(item,"assetId",Json.required(item,"id")),item.deepCopy());continue;}String id=Json.required(item,"assetId");JsonObject parent=result.get(id);if(parent==null){JsonObject baseline=RunInputs.baseline(c,item);parent=assetItem(c,Json.object(baseline,"asset"),Json.required(baseline,"inputPath"));parent.remove("candidateVersion");parent.addProperty("manualProtected",Json.bool(baseline,"manualProtected",false));parent.add("selectedVersion",baseline.get("selectedVersion"));parent.addProperty("outcome",Json.str(item,"outcome","failed"));for(String field:List.of("sourceRunId","sourceArtifactId","reason"))if(item.has(field))parent.add(field,item.get(field));result.put(id,parent);}if(item.has("candidateVersion")){if(parent.has("candidateVersion")&&!parent.get("candidateVersion").equals(item.get("candidateVersion")))throw new ApiError(409,"input_aggregate_mismatch","同一父图的视图指向了不同聚合版本。");parent.add("candidateVersion",item.get("candidateVersion"));parent.addProperty("outcome","included");parent.remove("reason");if(!Json.bool(parent,"manualProtected",false))parent.add("selectedVersion",item.get("candidateVersion"));}}
+        return new ArrayList<>(result.values());
+    }
+    static String resolvedReview(Connection c,JsonObject flow,JsonObject step)throws Exception{
+        String previous=Json.required(step,"outputArtifactId");List<JsonObject> items=items(c,previous);boolean changed=false;JsonObject project=Json.object(Json.object(step,"snapshot"),"project");
+        for(JsonObject item:items){if(!Json.str(item,"reason","").equals("geometry_review_required")||!item.has("candidateVersion"))continue;int blocked=Json.integer(item,"candidateVersion",-1);JsonObject current=Store.document(c,"assets",Json.required(item,"assetId")),metadata=Json.object(current,"metadata"),resolution=Json.object(metadata,"geometryReviewResolution");if(!Json.str(current,"source","").equals("manual")||!Set.of("modified","confirmed").contains(Json.str(current,"status",""))||Json.bool(metadata,"requiresGeometryReview",false)||Json.integer(resolution,"sourceVersion",-1)!=blocked||Json.integer(current,"version",0)<=blocked||!Json.required(current,"contentHash").equals(Json.required(item,"contentHash")))continue;Annotations.validate(Json.array(current,"annotations"),current,project);item.add("asset",current);item.add("selectedVersion",current.get("version"));item.remove("candidateVersion");item.addProperty("outcome","included");item.remove("reason");item.addProperty("requiresGeometryReview",false);item.addProperty("sourceArtifactId",previous);changed=true;}
+        return changed?create(c,flow,Json.required(step,"stepId"),"review",items,true):previous;
+    }
+    static JsonObject selected(Connection c,JsonObject item,boolean candidate)throws Exception{
+        JsonElement version=candidate&&item.has("candidateVersion")?item.get("candidateVersion"):item.get("selectedVersion");if(version==null||version.isJsonNull())throw new ApiError(422,"flow_annotation_missing","该素材没有明确选定的有效标注版本，不能当作无目标图片。");
+        String id=Json.required(item,"assetId");JsonObject row=Store.one(c,"SELECT data FROM versions WHERE asset_id=? AND version=?",id,version.getAsInt());if(row==null)throw new ApiError(409,"flow_annotation_version_missing","流程固定的标注版本已不可用。");JsonObject asset=Json.parse(row.get("data").getAsString());if(!Json.required(asset,"contentHash").equals(Json.required(item,"contentHash")))throw new ApiError(409,"flow_input_changed","固定标注版本对应的图片与流程输入不一致。");return asset;
+    }
+    static void checkFile(JsonObject item)throws Exception{
+        if(!included(item))return;Path path=Path.of(Json.required(item,"inputPath"));if(!Files.isRegularFile(path)||!Media.hash(path).equals(Json.required(item,"contentHash")))throw new ApiError(409,"flow_input_changed","流程固定图片已缺失或变化，请修复素材后创建新运行。");
+    }
+}

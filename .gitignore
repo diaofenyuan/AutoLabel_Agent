@@ -1,0 +1,23 @@
+# 依赖与构建输出
+node_modules/
+**/node_modules/
+renderer/dist/
+desktop/dist/
+engine/build/
+build/
+.qa/
+**/__pycache__/
+*.pyc
+*.tsbuildinfo
+
+# 本地环境与编辑器
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+.DS_Store
+
+# 用户明确不上传的需求/计划文件
+SPEC.md
+TASK_PLAN.md

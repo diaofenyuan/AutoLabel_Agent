@@ -1,0 +1,36 @@
+package cn.autolabel.engine;
+
+import com.google.gson.*;
+import java.nio.file.*;
+import java.util.*;
+
+final class FlowTransforms {
+    static final long MAX_RESIDENT=512L*1024*1024;
+    final Flows flows;final Store store;
+    FlowTransforms(Flows flows){this.flows=flows;store=flows.store;}
+    static void validate(JsonObject p){
+        FlowPlans.keys(p,"operations","background");if(!p.has("operations")||!p.get("operations").isJsonArray()||Json.array(p,"operations").isEmpty()||Json.array(p,"operations").size()>30)throw new ApiError(400,"transform_operations_invalid","请配置 1 至 30 个图像变换操作。");
+        if(p.has("background")&&!FlowPlans.string(p,"background",7).matches("#[0-9a-fA-F]{6}"))throw new ApiError(400,"transform_background_invalid","背景颜色须为六位十六进制颜色。");int tiles=0;
+        for(JsonElement element:Json.array(p,"operations")){if(!element.isJsonObject())throw new ApiError(400,"transform_operations_invalid","图像变换操作必须为对象。");JsonObject op=element.getAsJsonObject();String kind=FlowPlans.string(op,"kind",32);switch(kind){case "crop"->{FlowPlans.keys(op,"kind","x","y","width","height");Costs.integer(op,"x",0,20000);Costs.integer(op,"y",0,20000);}case "resize"->{FlowPlans.keys(op,"kind","width","height","fit");if(!Set.of("contain","stretch").contains(Json.str(op,"fit","contain")))throw new ApiError(400,"transform_fit_invalid","缩放方式须为 contain 或 stretch。");}case "tile"->{FlowPlans.keys(op,"kind","width","height","overlapX","overlapY");if(++tiles>1)throw new ApiError(400,"transform_tile_limit","一个处理计划最多包含一次切片。");for(String field:List.of("overlapX","overlapY"))if(op.has(field))Costs.integer(op,field,0,19999);}default->throw new ApiError(400,"transform_operation_invalid","未知图像变换操作。");}Costs.integer(op,"width",1,20000);Costs.integer(op,"height",1,20000);}
+    }
+    static TransformedImages.RenderOptions options(JsonObject p){return new TransformedImages.RenderOptions(Json.str(p,"background","#ffffff"),MAX_RESIDENT);}
+    static List<JsonObject> plan(List<JsonObject> source,JsonObject p,JsonObject plans,String stepRow)throws Exception{
+        List<JsonObject> result=new ArrayList<>();for(JsonObject item:source){if(!FlowArtifacts.included(item)){result.add(item.deepCopy());continue;}if(Json.str(Json.object(item,"inputSnapshot"),"kind","").equals("view"))throw new ApiError(422,"transform_baseline_required","请把连续裁剪、缩放和切片放在同一变换节点的操作列表中；该节点须从基准图开始。");JsonObject asset=Json.object(item,"asset"),plan=TransformGeometry.plan(RunInputs.identity(asset),Json.array(p,"operations"));TransformedImages.inspect(plan,options(p));plans.add(Json.required(item,"assetId"),plan);for(JsonElement element:Json.array(plan,"views")){JsonObject view=element.getAsJsonObject();JsonObject output=Json.obj("assetId",item.get("assetId"),"name",Json.str(item,"name","")+" · "+Json.required(view,"viewId"),"status",Json.str(asset,"status","unlabeled"),"viewId",view.get("viewId"),"width",view.get("width"),"height",view.get("height"),"baselineItemId",item.get("id"),"manualProtected",Json.bool(item,"manualProtected",false),"selectedVersion",item.get("selectedVersion"),"outcome","included","workStatus","queued","freshInput",true,"inputSnapshot",Json.obj("kind","view","assetId",item.get("assetId"),"viewId",view.get("viewId"),"width",view.get("width"),"height",view.get("height"),"normalizationVersion",Media.NORMALIZATION_VERSION,"inputTransform",view));if(stepRow!=null)output.addProperty("planStepId",stepRow);result.add(output);if(result.size()>10000)throw new ApiError(413,"flow_input_limit","所有父图展开后的模型输入合计最多 10000 项，未截断执行范围。");}}return result;
+    }
+    JsonObject execute(JsonObject flow,JsonObject step)throws Exception{
+        String fid=Json.required(flow,"id"),rowId=Json.required(step,"id");JsonObject parameters=Json.object(step,"parameters");String output=Json.str(step,"workingArtifactId",null);
+        if(output==null){List<JsonObject> source=store.read(c->FlowArtifacts.items(c,Json.required(step,"inputArtifactId")));JsonObject plans=new JsonObject();List<JsonObject> planned=plan(source,parameters,plans,rowId);check(fid);output=store.tx(c->{JsonObject current=Store.document(c,"flow_steps",rowId);if(current.has("workingArtifactId"))return Json.required(current,"workingArtifactId");Json.object(current,"snapshot").add("transformPlans",plans);String id=FlowArtifacts.create(c,flow,Json.required(step,"stepId"),"views",planned,false);current.addProperty("workingArtifactId",id);Flows.saveStep(c,current);return id;});}
+        String artifact=output;JsonObject current=store.read(c->Store.document(c,"flow_steps",rowId)),plans=Json.object(Json.object(current,"snapshot"),"transformPlans");List<JsonObject> entries=store.read(c->FlowArtifacts.items(c,artifact));Map<String,List<JsonObject>> groups=new LinkedHashMap<>();for(JsonObject item:entries)if(item.has("viewId"))groups.computeIfAbsent(Json.required(item,"assetId"),key->new ArrayList<>()).add(item);
+        for(var group:groups.entrySet()){if(group.getValue().stream().allMatch(item->Json.str(item,"workStatus","").equals("done")))continue;check(fid);String assetId=group.getKey();JsonObject first=group.getValue().getFirst(),baseline=store.read(c->RunInputs.baseline(c,first));Path parent=store.root.resolve("flow-inputs").resolve(fid).resolve(rowId);Files.createDirectories(parent);Path directory=parent.resolve(assetId);if(!directory.normalize().startsWith(store.root))throw new ApiError(409,"input_path_invalid","变换目录不在当前数据目录内。");
+            try(TransformedImages.Session session=TransformedImages.open(Path.of(Json.required(baseline,"inputPath")),Json.object(plans,assetId),directory,options(parameters),new TransformedImages.Control(){public boolean paused(){return !flows.canContinue(fid);}})){
+                for(JsonObject item:group.getValue()){if(Json.str(item,"workStatus","").equals("done"))continue;check(fid);item.addProperty("workStatus","running");store.tx(c->{FlowArtifacts.updateItem(c,item);return null;});
+                    try{TransformedImages.Generated generated=session.render(Json.required(item,"viewId"));JsonObject raw=generated.inputSnapshot(),input=Json.object(item,"inputSnapshot");for(String field:List.of("contentHash","planHash","pixelTransformVersion"))input.add(field,raw.get(field));item.add("inputSnapshot",input);item.addProperty("inputPath",generated.imagePath().toString());item.add("contentHash",raw.get("contentHash"));item.add("planHash",raw.get("planHash"));item.addProperty("workStatus","done");item.addProperty("outcome","included");item.remove("reason");}
+                    catch(Exception failure){if(!flows.canContinue(fid)){item.addProperty("workStatus","queued");store.tx(c->{FlowArtifacts.updateItem(c,item);return null;});throw failure;}item.addProperty("workStatus","done");item.addProperty("outcome","failed");item.addProperty("reason",failure instanceof ApiError error?error.code:"transform_image_failed");}
+                    store.tx(c->{FlowArtifacts.updateItem(c,item);flows.progress(c,rowId,FlowArtifacts.statistics(FlowArtifacts.items(c,artifact)));return null;});
+                }
+            }
+        }
+        check(fid);return store.tx(c->FlowArtifacts.seal(c,artifact,new JsonObject()));
+    }
+    void check(String id){if(!flows.canContinue(id))throw new ApiError(409,"flow_step_interrupted","图像变换已停止分派，完成的输入仍会保留。");}
+}

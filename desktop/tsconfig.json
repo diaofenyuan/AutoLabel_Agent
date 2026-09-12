@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "target": "ES2023", "module": "NodeNext", "moduleResolution": "NodeNext",
+    "lib": ["ES2023", "DOM"], "strict": true, "esModuleInterop": true,
+    "skipLibCheck": true, "types": ["node"], "noEmit": true
+  },
+  "include": ["*.ts", "../shared/protocol.ts"]
+}

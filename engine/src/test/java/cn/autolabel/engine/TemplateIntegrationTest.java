@@ -1,0 +1,34 @@
+package cn.autolabel.engine;
+
+import com.google.gson.*;
+import java.nio.file.*;
+import java.util.*;
+
+public final class TemplateIntegrationTest {
+    private static int checks;
+    private interface Action{void run()throws Exception;}
+    private static void check(boolean value,String message){checks++;if(!value)throw new AssertionError(message);}
+    private static JsonObject cmd(Engine e,String name,JsonObject p)throws Exception{return (JsonObject)e.command(name,p);}
+    private static void rejects(String code,Action action)throws Exception{try{action.run();throw new AssertionError("Expected "+code);}catch(ApiError e){check(e.code.equals(code),"Expected "+code+" got "+e.code);}}
+    private static JsonObject classes(){return Json.obj("id","target","name","目标","color","#224466");}
+    private static JsonObject definition(){return Json.obj("kind","attribute_definitions","version",1,"definitions",Json.arr(Json.obj("id","score","name","评分","type","number","required",true,"min",0,"max",10)));}
+    private static JsonObject box(){return Json.obj("id","object-1","classId","target","type","detect","bbox",Json.obj("x",20,"y",20,"width",40,"height",30));}
+    public static void main(String[] args)throws Exception{
+        Path root=Path.of("engine/build/verification/templates-"+System.currentTimeMillis()).toAbsolutePath();Files.createDirectories(root);
+        try(Engine e=new Engine(root.resolve("data"))){
+            JsonObject oldSettings=Json.obj("rules",Json.obj("description","按可见边界"),"occlusionRules",Json.arr("遮挡时保留可判断目标"),"blurRules","不可辨认时待复核","keypointNames",Json.arr("a","b"),"keypointConnections",Json.arr(Json.arr(0,1)));
+            JsonObject project=cmd(e,"project.create",Json.obj("name","模板边界","taskType","detect","classes",Json.arr(classes()),"settings",oldSettings));String pid=Json.required(project,"id");
+            JsonObject legacy=cmd(e,"project.create",Json.obj("name","旧说明兼容","taskType","detect","classes",Json.arr(classes()),"settings",Json.obj("attributes",Json.arr("任意旧说明",Json.obj("anything",true)))));check(Json.array(Json.object(legacy,"settings"),"attributes").size()==2,"unversioned legacy attributes retained");
+            JsonObject bad=definition();bad.addProperty("version",2);rejects("project_template_invalid",()->cmd(e,"project.create",Json.obj("name","无效模板","taskType","detect","classes",Json.arr(classes()),"settings",Json.obj("attributes",bad))));
+            rejects("project_template_invalid",()->cmd(e,"project.update",Json.obj("projectId",pid,"settings",Json.obj("keypointConnections",Json.arr(Json.arr(0,0.5))))));check(Json.array(Json.object(e.projects.get(pid),"settings"),"keypointConnections").equals(Json.arr(Json.arr(0,1))),"invalid connection update rolls back");
+            Path image=root.resolve("image.png");Media.sample(image,0);String aid=Json.array(cmd(e,"asset.import",Json.obj("projectId",pid,"paths",Json.arr(image.toString()))),"assetIds").get(0).getAsString();JsonObject original=box();JsonObject saved=cmd(e,"annotation.save",Json.obj("assetId",aid,"baseVersion",0,"confirm",true,"annotations",Json.arr(original)));JsonObject captured=Json.object(Json.object(saved,"metadata"),"annotationTemplate");check(Json.integer(captured,"snapshotVersion",0)==2,"manual annotation template snapshot version");for(String field:oldSettings.keySet())check(Json.object(captured,"settings").get(field).equals(oldSettings.get(field)),"full semantic field captured "+field);
+            cmd(e,"project.update",Json.obj("projectId",pid,"settings",Json.obj("attributes",definition(),"rules","后续新规则")));check(Json.integer(e.projects.asset(aid),"version",0)==1,"new definitions do not rewrite old annotation");check(Json.bool(Json.object(cmd(e,"export.preflight",Json.obj("projectId",pid)),"summary"),"canExport",false),"old version not retroactively invalidated by new required attribute");
+            JsonObject reference=cmd(e,"resource.reference",Json.obj("assetId",aid,"assetVersion",1,"name","旧版本固定参考"));JsonObject referenceSettings=Json.object(Json.object(Json.object(reference,"content"),"template"),"settings");check(!referenceSettings.has("attributes"),"missing old attributes never backfilled from live project");check(referenceSettings.get("rules").equals(oldSettings.get("rules")),"reference keeps old captured rules");
+            rejects("annotation_attributes_invalid",()->cmd(e,"annotation.save",Json.obj("assetId",aid,"baseVersion",1,"annotations",Json.arr(original))));check(Json.integer(e.projects.asset(aid),"version",0)==1,"required attribute failure commits no version");JsonObject outOfRange=box();outOfRange.add("attributes",Json.obj("score",11));rejects("annotation_attributes_invalid",()->cmd(e,"annotation.save",Json.obj("assetId",aid,"baseVersion",1,"annotations",Json.arr(outOfRange))));
+            JsonObject valid=box();valid.add("attributes",Json.obj("score",7,"legacy_note","保留未定义属性"));JsonObject updated=cmd(e,"annotation.save",Json.obj("assetId",aid,"baseVersion",1,"annotations",Json.arr(valid)));check(Json.object(Json.array(updated,"annotations").get(0).getAsJsonObject(),"attributes").has("legacy_note"),"unknown historical value keys are preserved");check(Json.object(Json.object(Json.object(updated,"metadata"),"annotationTemplate"),"settings").get("attributes").equals(definition()),"new manual version freezes explicit definitions");check(Json.array(e.projects.history(aid).get(1).getAsJsonObject(),"annotations").get(0).getAsJsonObject().equals(original),"old annotation history remains unchanged");
+            rejects("annotation_attributes_invalid",()->Annotations.validate(Json.arr(original),updated,e.projects.get(pid)));check(Annotations.validateGeometry(Json.arr(original),updated,e.projects.get(pid)).size()==1,"raw geometric contribution can retain missing-attribute work for review");
+            rejects("resource_template_invalid",()->cmd(e,"resource.save",Json.obj("kind","template","name","错误资源","content",Json.obj("taskType","detect","classes",Json.arr(classes()),"settings",Json.obj("attributes",bad)))));JsonObject resource=cmd(e,"resource.save",Json.obj("kind","template","name","新属性资源","content",Json.obj("taskType","detect","classes",Json.arr(classes()),"settings",Json.obj("attributes",definition()))));JsonObject applied=cmd(e,"resource.apply",Json.obj("projectId",Json.required(legacy,"id"),"resourceId",resource.get("id"),"version",1,"fields",Json.arr("attributes")));check(Json.object(Json.object(applied,"project"),"settings").get("attributes").equals(definition()),"resource apply uses unified project definition validation");check(TaskTemplates.VALIDATOR_VERSION.equals("annotations-v2"),"changed validation semantics invalidate previous validator cache");
+        }
+        System.out.println("PASS "+checks+" template integration checks; VERIFICATION_DIR="+root);
+    }
+}

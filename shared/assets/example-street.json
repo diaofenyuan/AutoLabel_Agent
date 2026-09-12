@@ -1,0 +1,17 @@
+{
+  "name": "城市场景 · 人工示例",
+  "description": "合成图片与预置的两个车辆示范框，用于体验编辑。不是完整真值集，也不代表 AI 标注结果。",
+  "taskType": "detect",
+  "file": "example-street.png",
+  "source": "本项目生成的合成图片；示范框为人工预置",
+  "width": 1586,
+  "height": 992,
+  "classes": [
+    { "id": "vehicle", "name": "车辆", "color": "#4a83ff" },
+    { "id": "person", "name": "行人", "color": "#ba6de2" }
+  ],
+  "annotations": [
+    { "id": "sample-car-1", "classId": "vehicle", "type": "detect", "bbox": { "x": 221, "y": 483, "width": 537, "height": 350 } },
+    { "id": "sample-car-2", "classId": "vehicle", "type": "detect", "bbox": { "x": 771, "y": 512, "width": 314, "height": 202 } }
+  ]
+}

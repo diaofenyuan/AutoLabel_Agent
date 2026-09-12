@@ -1,0 +1,27 @@
+.template-dialog { max-width: 760px; margin: 0 auto; }
+.template-dialog .class-editor { margin-bottom: 10px; }
+.template-section { padding: 17px 0; border-top: 1px solid var(--border, #e4e4e7); }
+.template-section > summary { cursor: pointer; font-weight: 500; }
+.template-section > summary > span { margin-left: 8px; font-size: 12px; color: var(--muted, #75777c); font-weight: 400; }
+.template-section-body { display: grid; gap: 16px; padding-top: 18px; }
+.attribute-definition { display: grid; gap: 8px; padding-bottom: 14px; border-bottom: 1px solid var(--border, #e4e4e7); }
+.attribute-definition-heading { display: grid; grid-template-columns: minmax(0, 1fr) 110px 64px 30px; gap: 12px; align-items: end; }
+.attribute-definition-heading .checkbox-row { min-height: 36px; margin: 0; padding: 0; white-space: nowrap; gap: 6px; }
+.attribute-definition-heading .icon-button { margin-bottom: 4px; }
+.attribute-constraints > summary, .template-rule-summary > summary, .fixed-attribute-values > summary { font-size: 12px; color: var(--muted, #75777c); cursor: pointer; }
+.attribute-constraints .field, .attribute-constraints .field-grid { margin-top: 12px; }
+.connection-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 30px; gap: 10px; align-items: center; }
+.template-settings-editor pre, .template-rule-summary pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto; font-size: 12px; }
+.template-rule-summary p { white-space: pre-wrap; font-size: 12px; }
+.template-rule-summary section { margin-top: 14px; }
+.template-rule-summary, .fixed-attribute-values { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border, #e4e4e7); }
+.attribute-values { display: grid; gap: 12px; margin: 14px 0; }
+.attribute-values [aria-invalid="true"] { border-color: var(--warning, #bd9458); }
+.segment-controls { margin: 16px 0; font-size: 12px; }
+.segment-controls .actions { flex-wrap: wrap; gap: 6px; }
+.segment-controls .button { font-size: 12px; padding: 6px 9px; }
+.segment-insert-edge { cursor: crosshair; pointer-events: stroke; }
+.point-fields > summary { margin: 14px 0 10px; font-size: 12px; cursor: pointer; }
+.point-row button[aria-pressed="true"], .truth-point button[aria-pressed="true"] { font-weight: 600; color: var(--text, #18181b); text-decoration: underline; }
+.fixed-attribute-values section { margin: 12px 0; }
+@media (max-width: 720px) { .attribute-definition-heading { grid-template-columns: minmax(0, 1fr) 100px; gap: 8px; } .attribute-definition-heading .icon-button { justify-self: end; } }

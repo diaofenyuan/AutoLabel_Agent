@@ -1,0 +1,4 @@
+{
+  "name": "autolabel-agent-core", "private": true, "type": "module",
+  "scripts": { "test": "node --test tests/*.test.ts", "check": "tsc -p tsconfig.json" }
+}

@@ -1,0 +1,13 @@
+import { useEffect, useState } from 'react';
+import type { MediaRuntimeState } from '../../shared/media';
+import { getBridge, request, errorMessage, isDemo } from './bridge';
+import { Button, Notice } from './ui';
+import { MediaError } from './mediaUi';
+
+export default function MediaRuntimeSettings({ onBusyChange, beforeConfigure }: { onBusyChange: (busy: boolean) => void; beforeConfigure: () => void }) {
+  const [state, setState] = useState<MediaRuntimeState | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [ffmpeg, setFfmpeg] = useState(''), [ffprobe, setFfprobe] = useState('');
+  async function execute(configure = false, clear = false) { setBusy(true); onBusyChange(true); setError(''); try { if (configure) beforeConfigure(); const value = await request<MediaRuntimeState>(configure ? 'media.runtime.configure' : 'media.runtime.get', configure ? { ffmpegPath: clear ? null : ffmpeg, ffprobePath: clear ? null : ffprobe } : {}); setState(value); if (configure) { setFfmpeg(''); setFfprobe(''); } } catch (e) { setState(null); setError(errorMessage(e)); } finally { setBusy(false); onBusyChange(false); } }
+  useEffect(() => { if (!isDemo) void execute(); }, []);
+  async function choose(kind: 'ffmpeg' | 'ffprobe') { setError(''); try { const paths = await (await getBridge()).chooseFiles({ kind }); if (paths[0]) (kind === 'ffmpeg' ? setFfmpeg : setFfprobe)(paths[0]); } catch (e) { setError(errorMessage(e)); } }
+  return <section className="settings-section media-runtime-settings"><div className="section-toolbar"><h2>视频工具</h2><Button disabled={isDemo} busy={busy} onClick={() => void execute()}>刷新工具状态</Button></div><Notice>使用本机 FFmpeg 与 FFprobe 进行视频检查、抽帧和导入。此处显示配置状态，实际视频能否处理以检查结果为准。</Notice><p>FFmpeg：{state ? state.ffmpegConfigured ? '已配置' : '未配置' : '未确认'} · FFprobe：{state ? state.ffprobeConfigured ? '已配置' : '未配置' : '未确认'}</p><p className="muted tiny">媒体处理：{state ? state.busy ? '正在执行' : '空闲' : '状态未知'}</p><details><summary>更换本机视频工具</summary><div className="actions"><Button disabled={busy || isDemo || state?.busy} onClick={() => void choose('ffmpeg')}>选择 FFmpeg</Button><Button disabled={busy || isDemo || state?.busy} onClick={() => void choose('ffprobe')}>选择 FFprobe</Button></div>{ffmpeg && <p className="muted tiny break-word">本次 FFmpeg：{ffmpeg}</p>}{ffprobe && <p className="muted tiny break-word">本次 FFprobe：{ffprobe}</p>}<div className="actions"><Button className="primary" busy={busy} disabled={isDemo || !ffmpeg || !ffprobe || state?.busy} onClick={() => void execute(true)}>保存本机视频工具</Button><Button disabled={busy || isDemo || state?.busy || !state?.configured} onClick={() => void execute(true, true)}>清除本机视频工具配置</Button></div></details><MediaError error={error}/></section>;
+}
