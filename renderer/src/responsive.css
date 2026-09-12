@@ -9,3 +9,4 @@
 .command-trigger span{display:inline}.command-trigger kbd{margin-left:12px}@media(max-width:760px){.command-trigger span{display:none}.command-trigger kbd{margin-left:0}}
 @media(max-width:540px){.task-kind-tabs{overflow-x:auto;scrollbar-width:none}.task-kind-tabs::-webkit-scrollbar{display:none}.task-kind-tabs button{flex:0 0 auto}}
 @media(max-width:540px){.topbar{padding:0 11px;gap:6px}.topbar-actions{gap:4px;min-width:0}.command-trigger{width:30px;padding:0;justify-content:center}.command-trigger span,.command-trigger kbd{display:none}.breadcrumb{gap:5px;min-width:0}.breadcrumb .truncate{max-width:100px}.window-actions{margin-right:-11px}.window-actions button{width:34px}}
+@media(max-width:760px){.engine-chip{width:27px;padding:0;justify-content:center}.engine-chip{font-size:0}.engine-chip .status-dot{margin:0}}
