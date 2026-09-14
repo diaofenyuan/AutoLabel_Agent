@@ -327,17 +327,43 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     async execute(args, env) { fields(args, []); return env.engine.request('export.preflight', exportSelection(env)); },
   },
   {
-    name: 'export_dataset', description: '把当前项目导出到用户通过桌面选择的目录。未选择目录时需用户补充；不能自行构造路径。',
-    parameters: schema({ onlyConfirmed: { type: 'boolean' }, trainRatio: { type: 'number', exclusiveMinimum: 0, exclusiveMaximum: 1 } }), mutation: true,
+    name: 'list_export_formats', description: '列出当前项目可用的导出格式：内置预设与用户保存的模板，含标签格式、目录与命名布局。模板由用户在导出面板维护，助手只读取。',
+    parameters: schema({}), mutation: false,
     async execute(args, env) {
-      fields(args, ['onlyConfirmed', 'trainRatio']);
+      fields(args, []);
+      const current = await project(env);
+      const formats = await env.engine.request<unknown[]>('export.format.list', { taskType: current.taskType });
+      return formats.map(raw => {
+        const item = object(raw, '导出格式');
+        return pick(item, ['id', 'name', 'category', 'note', 'version', 'builtin', 'taskType',
+          'labelFormat', 'precision', 'naming', 'layout', 'includeDataYaml']);
+      });
+    },
+  },
+  {
+    name: 'export_dataset', description: '把当前项目导出到用户通过桌面选择的目录；用 formatId 指定用户已确认的导出格式，未指定时使用内置 YOLO 默认布局。未选择目录时需用户补充；不能自行构造路径，也不能自定义目录模板。',
+    parameters: schema({ onlyConfirmed: { type: 'boolean' }, trainRatio: { type: 'number', exclusiveMinimum: 0, exclusiveMaximum: 1 },
+      formatId: nullableString, formatVersion: { type: ['integer', 'null'], minimum: 0 } }), mutation: true,
+    async execute(args, env) {
+      fields(args, ['onlyConfirmed', 'trainRatio', 'formatId', 'formatVersion']);
       if (!env.context.exportDir) throw new AgentError('EXPORT_DIRECTORY_REQUIRED', '请先通过导出面板选择保存目录');
       if (typeof args.onlyConfirmed !== 'boolean' || typeof args.trainRatio !== 'number' ||
         !Number.isFinite(args.trainRatio) || args.trainRatio <= 0 || args.trainRatio >= 1)
         throw new AgentError('INVALID_ARGUMENT', '导出筛选或训练集比例不正确');
       ensureActive(env);
+      let format: Record<string, unknown> = {};
+      if (args.formatId != null) {
+        // 只接受用户已保存或内置的格式标识；模型不能在工具参数里自造目录布局。
+        const requested = text(args.formatId, '导出格式标识', 128);
+        const current = await project(env);
+        const available = await env.engine.request<unknown[]>('export.format.list', { taskType: current.taskType });
+        const chosen = available.map(raw => object(raw, '导出格式')).find(item => item.id === requested);
+        if (!chosen) throw new AgentError('EXPORT_FORMAT_UNKNOWN', '导出格式不存在，请先用 list_export_formats 查看当前可用格式');
+        format = { formatId: requested,
+          formatVersion: args.formatVersion == null ? Number(chosen.version ?? 1) : integer(args.formatVersion, '格式版本', 0, 2147483647) };
+      }
       return env.engine.request('export.create', {
-        ...exportSelection(env), outputDir: env.context.exportDir,
+        ...exportSelection(env), ...format, outputDir: env.context.exportDir,
         onlyConfirmed: args.onlyConfirmed, trainRatio: args.trainRatio,
       });
     },

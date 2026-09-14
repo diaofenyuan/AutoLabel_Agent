@@ -41,9 +41,13 @@
 | asset.get | assetId | Asset |
 | annotation.save | assetId, annotations, baseVersion, confirm?: boolean | Asset |
 | annotation.draft | assetId, annotations, baseVersion | {savedAt} |
-| export.preflight | projectId, taskType?, assetIds? | {issues, summary} |
-| export.create | projectId, outputDir, taskType?, assetIds?, trainRatio?, onlyConfirmed? | {id, path, status, ...} |
+| export.preflight | projectId, taskType?, assetIds?, formatId?, formatVersion? | {issues, summary, format} |
+| export.create | projectId, outputDir, taskType?, assetIds?, trainRatio?, onlyConfirmed?, formatId?, formatVersion?, format? | {id, path, status, labelFormat, ...} |
 | export.list | projectId | array |
+| export.format.list | taskType? | 数组，内置预设 + 保存模板（扁平定义：元数据与格式字段同层） |
+| export.format.get | formatId, version? | 格式定义 |
+| export.format.save | id?, baseVersion?, taskType, name, category?, note?, labelFormat, precision?, naming?, layout, includeDataYaml?, cocoFileName?, csvBom?, csvColumns? | 版本化后的格式定义 |
+| export.format.delete | formatId, baseVersion? | {formatId, version, deleted} |
 | provider.list | 空 | array（不包含凭据） |
 | provider.save | id?, name, baseUrl, protocol, model?, ... | object（不包含凭据） |
 | provider.models | providerId | {models: string[]} |
@@ -102,7 +106,11 @@
 - annotation.importYolo 接 `{projectId,labelSpace:'source'|'baseline',classMap:{'0':'稳定类别ID'},labelsDir?,assetIds?,items?:[{assetId,labelPath,baseVersion?}],confirm?:false}`，返回 `{imported,errors:[{assetId,code,message}],items}`。当前 txt 入口覆盖 Detect/Pose/OBB/Segment；Classify 不使用此入口。空文件为显式无目标，缺失/歧义/非法文件不修改原标注。
 - asset.relocate 接 `{projectId,directory,assetIds?}`，返回 `{relocated,unchanged,issues:[{assetId,code,candidates?}],items}`，按所选目录内的源内容指纹与尺寸核对。asset.checkLocations({projectId,assetIds?}) 返回原文件及基准图状态，基准图尚在时仍可使用。
 - annotation.render 接 `{assetId,version?,outputPath,format?:'png'|'jpeg',showLabels?,showKeypoints?,showGeometry?}`，返回 `{path,assetId,version,width,height}`。只绘制已保存版本，不能覆盖素材或历史导出。
-- export.reproduce 接 `{exportId,outputDir}`，生成独立新副本；export.compare 接 `{exportId,otherExportId}`，返回 `{added,removed,changed,unchanged}`。均读取历史固定清单和副本。
+- export.reproduce 接 `{exportId,outputDir}`，生成独立新副本；export.compare 接 `{exportId,otherExportId}`，返回 `{added,removed,changed,unchanged,formatChanged}`。均读取历史固定清单和副本。
+- 自定义导出格式（本轮新增）：`export.format.save` 的定义为扁平结构，格式字段为 `{labelFormat:'yolo'|'coco'|'voc'|'csv', precision:1~8, naming:'assetId'|'original', layout:{image,classifyImage,label,index}, includeDataYaml, cocoFileName, csvBom, csvColumns}`。路径模板占位符限于 `{split}{name}{assetId}{index}`，分类任务额外允许 `{classId4}{className}`；图片路径必须以 `.png` 结尾（导出不转码），标签 `.txt`/`.xml`、索引 `.json`/`.csv` 由格式决定。导出图片目录、标签目录与索引文件全部由模板渲染，`{split}` 使索引按划分各生成一份。
+- 格式任务兼容：yolo 覆盖全部五种任务；csv 覆盖全部五种；coco 支持 detect/segment/pose；voc 仅支持 detect。不兼容组合在保存与导出时都以 `export_format_task_unsupported` 拒绝，不能生成看似有效却无法训练的数据集。
+- 导出清单升级为 schemaVersion 2：新增 `format`（本次生效的完整规范，含来源 id/version）与 `auxiliaryFiles:[{path,hash}]`，逐图条目按需记录 `label`/`labelHash`（COCO/CSV 无逐图标签）。复现按清单记录的实际路径逐项校验复制，旧清单缺少这些字段时回退 YOLO 约定，因此删除格式模板后历史副本仍可复现。
+- Agent 只能通过 `list_export_formats` 读取可用格式，并在 `export_dataset` 里引用已存在或内置的 `formatId`；模型不能自造目录模板或内联规范，`export.format.save/delete` 不在 Agent 命令白名单内。
 - 所有新增输入文件/目录及输出路径仍需由主进程按文件对话框授权校验，不能把模型输出当成路径权限。
 
 ## 开发任务

@@ -36,7 +36,9 @@ export interface FlowParameterMap {
     concurrency?: number; maxRetries?: number; maxRequests?: number;
   };
   review: { buildIssues?: boolean; randomSample?: { count: number; seed: string }; waitForHuman?: boolean };
-  export: { outputDir: string; trainRatio?: number; onlyConfirmed?: boolean; annotationSelection?: 'protected' | 'candidate' };
+  export: { outputDir: string; trainRatio?: number; onlyConfirmed?: boolean; annotationSelection?: 'protected' | 'candidate';
+    // 流程只引用已保存或内置的导出格式；流程快照不内嵌自定义目录模板，避免跨版本难以复核。
+    formatId?: string; formatVersion?: number };
 }
 export type FlowInput =
   | { source: 'project'; selection: 'all' | 'unlabeled'; assetIds?: never }

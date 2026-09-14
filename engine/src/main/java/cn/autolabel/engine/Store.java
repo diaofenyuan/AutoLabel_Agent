@@ -7,7 +7,7 @@ import java.util.*;
 import java.util.concurrent.*;
 
 final class Store implements AutoCloseable {
-    static final int SCHEMA_VERSION=7;
+    static final int SCHEMA_VERSION=8;
     interface Work<T> { T run(Connection c) throws Exception; }
     final Path root;
     private final String url;
@@ -35,6 +35,8 @@ final class Store implements AutoCloseable {
             s.execute("CREATE TABLE IF NOT EXISTS settings(id TEXT PRIMARY KEY,data TEXT NOT NULL)");
             s.execute("CREATE TABLE IF NOT EXISTS budgets(id TEXT PRIMARY KEY,max_requests INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0)");
             s.execute("CREATE TABLE IF NOT EXISTS exports(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,data TEXT NOT NULL)");
+            // 导出格式模板与不可变修订版本同表存放，头部用 kind 区分，沿用资源库的版本化约定。
+            s.execute("CREATE TABLE IF NOT EXISTS export_formats(id TEXT PRIMARY KEY,kind TEXT NOT NULL,data TEXT NOT NULL)");
             s.execute("CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL)");
             Set<String> sampleColumns=new HashSet<>();try(ResultSet columns=s.executeQuery("PRAGMA table_info(samples)")){while(columns.next())sampleColumns.add(columns.getString("name"));}
             String sampleDefinition="(id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(id),asset_id TEXT NOT NULL,input_id TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,active_attempt TEXT,data TEXT NOT NULL,UNIQUE(run_id,input_id))";
@@ -144,7 +146,7 @@ final class Store implements AutoCloseable {
     }
     static JsonObject one(Connection c,String sql,Object... args)throws SQLException{List<JsonObject> list=rows(c,sql,args);return list.isEmpty()?null:list.getFirst();}
     static JsonObject document(Connection c,String table,String id)throws SQLException{
-        if(!Set.of("projects","assets","providers","runs","resources","exports","evaluation_sets","evaluation_set_versions","evaluations","review_items","review_samples","flow_runs","flow_steps","flow_artifacts","flow_artifact_items","input_results","run_asset_results","media_jobs","video_sources","screening_features","track_timelines","timeline_frames","tracks","track_versions","track_generations","track_generation_frames","track_contributions","local_tracking_candidates").contains(table))throw new IllegalArgumentException();
+        if(!Set.of("projects","assets","providers","runs","resources","exports","evaluation_sets","evaluation_set_versions","evaluations","review_items","review_samples","flow_runs","flow_steps","flow_artifacts","flow_artifact_items","input_results","run_asset_results","media_jobs","video_sources","screening_features","track_timelines","timeline_frames","tracks","track_versions","track_generations","track_generation_frames","track_contributions","local_tracking_candidates","export_formats").contains(table))throw new IllegalArgumentException();
         JsonObject row=one(c,"SELECT data FROM "+table+" WHERE id=?",id);
         if(row==null)throw new ApiError(404,"not_found","记录不存在。");return Json.parse(row.get("data").getAsString());
     }

@@ -151,6 +151,10 @@ async function dispatch(command: string, p: Record<string, unknown>): Promise<un
     case 'settings.save': data.settings = { ...data.settings, ...(p.settings as Record<string, unknown>) }; result = data.settings; break;
     case 'diagnostics.get': return { mode: '浏览器演示', storage: '当前浏览器 IndexedDB', engine: '未连接', apiCalls: 0 };
     case 'export.preflight': return { issues: [], summary: { assets: data.assets.filter(item => item.projectId === p.projectId && (!Array.isArray(p.assetIds) || p.assetIds.includes(item.id))).length, note: '浏览器演示仅下载内部 JSON，YOLO 数据集由桌面引擎导出。' } };
+    case 'export.format.list': return demoExportFormats(String(p.taskType ?? 'detect'));
+    case 'export.format.get': return demoExportFormats(String(p.taskType ?? 'detect'))[0];
+    case 'export.format.save': case 'export.format.delete':
+      throw new Error('浏览器演示不保存导出格式模板，请在桌面版本中管理。');
     case 'export.create': {
       const selected = data.assets.filter(item => item.projectId === p.projectId && (!Array.isArray(p.assetIds) || p.assetIds.includes(item.id)) && (!p.onlyConfirmed || item.status === 'confirmed'));
       if (!selected.length) throw new Error('没有符合条件的素材。');
@@ -166,6 +170,20 @@ async function dispatch(command: string, p: Record<string, unknown>): Promise<un
   }
   await writeData(data);
   return result;
+}
+/** 演示模式只回放内置预设的可读摘要；真正的路径模板校验与落盘仍由桌面引擎完成。 */
+function demoExportFormats(taskType: string) {
+  const support: Record<string, string[]> = { yolo: ['detect', 'obb', 'segment', 'pose', 'classify'], coco: ['detect', 'segment', 'pose'], voc: ['detect'], csv: ['detect', 'obb', 'segment', 'pose', 'classify'] };
+  const names: Record<string, string> = { yolo: 'YOLO 文本标签', coco: 'COCO JSON', voc: 'Pascal VOC XML', csv: '平铺 CSV 索引' };
+  const classify = taskType === 'classify';
+  return Object.keys(support).filter(format => support[format].includes(taskType)).map(format => ({
+    id: `builtin:${format}`, version: 1, name: names[format], category: '内置预设', builtin: true, source: 'builtin', taskType,
+    note: '浏览器演示不执行导出，仅展示可选格式。',
+    labelFormat: format, precision: 8, naming: 'assetId', includeDataYaml: format === 'yolo' && !classify, cocoFileName: '{name}.png', csvBom: true, csvColumns: [],
+    layout: { image: 'images/{split}/{name}.png', classifyImage: '{split}/{classId4}/{name}.png',
+      label: classify ? '' : format === 'voc' ? 'annotations/{name}.xml' : format === 'yolo' ? 'labels/{split}/{name}.txt' : '',
+      index: format === 'coco' ? 'annotations/instances_{split}.json' : format === 'csv' ? 'annotations.csv' : format === 'voc' ? 'ImageSets/{split}.txt' : '' },
+  }));
 }
 export const demoBridge: DesktopBridge = {
   request<T>(command: string, payload: Record<string, unknown> = {}): Promise<T> {

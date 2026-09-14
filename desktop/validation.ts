@@ -167,7 +167,16 @@ const trackKeyframeSave = trackWrite.extend({ keyframeId: trackIdentifier.option
 const trackGenerationParameters = z.strictObject({ maxGapSeconds: finite.gt(0).max(1e12).optional(), maxCenterSpeedPixelsPerSecond: finite.gt(0).max(1e12).optional(),
   maxKeypointSpeedPixelsPerSecond: finite.gt(0).max(1e12).optional(), maxScaleFactor: finite.min(1).max(1e12).optional() });
 const trackGeneratePreview = trackWrite.extend({ parameters: trackGenerationParameters.optional(), scope: z.enum(['affected', 'all']).optional() });
-const exportFields = { projectId: id, taskType: taskType.optional(), assetIds };
+const exportFields = { projectId: id, taskType: taskType.optional(), assetIds,
+  formatId: id.optional(), formatVersion: resourceVersion.optional() };
+// 导出格式规范由引擎做语义校验（任务兼容、路径与扩展名），这里只限制结构与体积。
+const exportLayout = z.strictObject({ image: z.string().max(400).optional(), classifyImage: z.string().max(400).optional(),
+  label: z.string().max(400).optional(), index: z.string().max(400).optional() });
+const exportFormatFields = { labelFormat: z.enum(['yolo', 'coco', 'voc', 'csv']).optional(),
+  precision: z.number().int().min(1).max(8).optional(), naming: z.enum(['assetId', 'original']).optional(),
+  layout: exportLayout.optional(), includeDataYaml: z.boolean().optional(), cocoFileName: z.string().max(400).optional(),
+  csvBom: z.boolean().optional(), csvColumns: z.array(z.string().min(1).max(32)).max(32).optional() };
+const exportFormatSpec = z.strictObject(exportFormatFields);
 const message = z.strictObject({ role: z.enum(['system', 'user', 'assistant', 'tool']), content: text, tool_call_id: id.optional(),
   tool_calls: z.array(z.strictObject({ id, type: z.literal('function'), function: z.strictObject({ name, arguments: text }) })).max(64).optional() });
 const schemas: Record<string, z.ZodType> = {
@@ -239,8 +248,15 @@ const schemas: Record<string, z.ZodType> = {
   'annotation.render': z.strictObject({ assetId: id, version: count.optional(), outputPath: z.string().min(1).max(32767),
     format: z.enum(['png', 'jpeg']).optional(), showLabels: z.boolean().optional(), showKeypoints: z.boolean().optional(), showGeometry: z.boolean().optional() }),
   'export.preflight': z.strictObject(exportFields),
-  'export.create': z.strictObject({ ...exportFields, outputDir: z.string().min(1).max(32767), trainRatio: finite.gt(0).lt(1).optional(), onlyConfirmed: z.boolean().optional() }),
+  'export.create': z.strictObject({ ...exportFields, outputDir: z.string().min(1).max(32767), trainRatio: finite.gt(0).lt(1).optional(),
+    onlyConfirmed: z.boolean().optional(), format: exportFormatSpec.optional() }),
   'export.list': z.strictObject({ projectId: id }),
+  'export.format.list': z.strictObject({ taskType: taskType.optional() }),
+  'export.format.get': z.strictObject({ formatId: id, version: resourceVersion.optional() }),
+  // 定义与规范同为扁平结构：名称等元数据与格式字段在同一层，避免保存与读取出现两套形状。
+  'export.format.save': z.strictObject({ id: id.optional(), baseVersion: resourceVersion.optional(), taskType, name,
+    category: z.string().max(100).optional(), note: text.optional(), ...exportFormatFields }),
+  'export.format.delete': z.strictObject({ formatId: id, baseVersion: resourceVersion.optional() }),
   'export.reproduce': z.strictObject({ exportId: id, outputDir: z.string().min(1).max(32767) }),
   'export.compare': z.strictObject({ exportId: id, otherExportId: id }),
   'evaluationSet.create': z.strictObject({ projectId: id, name, assetIds: evaluationAssetIds }),
@@ -363,6 +379,7 @@ export class DesktopError extends Error {
 
 const agentCommands = new Set(['provider.list', 'provider.capabilities', 'chat.send', 'chat.cancel', 'project.open', 'asset.list', 'asset.get',
   'run.list', 'run.get', 'run.create', 'run.pause', 'run.resume', 'run.cancel', 'export.preflight', 'export.create',
+  'export.format.list', 'export.format.get',
   'evaluationSet.list', 'evaluationSet.get', 'evaluation.list', 'evaluation.get', 'evaluation.results',
   'evaluation.preflight', 'evaluation.create', 'review.list',
   'evaluation.rerun.preflight', 'evaluation.rerun.create', 'evaluation.rerun.get', 'evaluation.rerun.finish', 'budget.estimate', 'budget.get',

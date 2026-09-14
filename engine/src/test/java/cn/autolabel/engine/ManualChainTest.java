@@ -2,6 +2,7 @@ package cn.autolabel.engine;
 
 import com.google.gson.*;
 import javax.imageio.ImageIO;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 
@@ -11,7 +12,7 @@ final class ManualChainTest {
     static JsonObject cmd(Engine e,String command,JsonObject p)throws Exception{return (JsonObject)e.command(command,p);}
     interface Action{void run()throws Exception;}
     static void rejects(String code,Action action)throws Exception{try{action.run();throw new AssertionError("Expected "+code);}catch(ApiError e){check(e.code.equals(code),"Expected "+code+" got "+e.code);}}
-    static void run(Path target)throws Exception{root=target;maintenance();labels();relocationAndOverlay();System.out.println("Manual 4A additions verified at "+root);}
+    static void run(Path target)throws Exception{root=target;maintenance();labels();relocationAndOverlay();exportFormats();System.out.println("Manual 4A additions verified at "+root);}
     static void maintenance()throws Exception{
         try(Engine e=new Engine(root.resolve("maintenance"))){JsonObject p=EngineTest.project(e,"detect");String pid=Json.required(p,"id");
             e.store.tx(c->{for(int i=0;i<110;i++){String id="old-run-"+i,status=i==0?"paused":"completed";Store.update(c,"INSERT INTO runs(id,project_id,status,data) VALUES(?,?,?,?)",id,pid,status,Json.obj("id",id,"projectId",pid,"status",status,"total",0));}return null;});
@@ -62,6 +63,58 @@ final class ManualChainTest {
             rejects("export_target_protected",()->cmd(e,"export.reproduce",Json.obj("exportId",exported.get("id"),"outputDir",exportedDir.toString())));
             JsonObject first=Json.array(manifest,"assets").get(0).getAsJsonObject();Path label=exportedDir.resolve("labels/"+Json.required(first,"split")+"/"+aid+".txt");Files.writeString(label,"changed");rejects("export_dependency_changed",()->cmd(e,"export.reproduce",Json.obj("exportId",exported.get("id"),"outputDir",root.resolve("history").toString())));
             check(e.store.read(c->Store.one(c,"SELECT COUNT(*) AS n FROM exports WHERE json_extract(data,'$.status')='failed'").get("n").getAsInt())==1,"failed reproduce never marked complete");
+        }
+    }
+    /** 自定义导出格式：内置预设与保存模板共用同一读取路径，清单记录实际生效规范，复现与比对不依赖模板是否仍存在。 */
+    static void exportFormats()throws Exception{
+        try(Engine e=new Engine(root.resolve("format-data"))){
+            JsonObject project=EngineTest.project(e,"detect");String pid=Json.required(project,"id");List<String> assets=new ArrayList<>();
+            for(int i=0;i<2;i++){Path file=root.resolve("format-"+i+".png");Media.sample(file,i);String aid=oneAsset(e,pid,file,"copy");
+                e.projects.save(Json.obj("assetId",aid,"baseVersion",0,"annotations",Json.arr(EngineTest.label("detect")),"confirm",true));assets.add(aid);}
+            check(((JsonArray)e.command("export.format.list",Json.obj("taskType","detect"))).size()==4,"detect 任务列出四个内置预设");
+            JsonObject saved=cmd(e,"export.format.save",Json.obj("taskType","detect","name","COCO 单文件","note","自定义目录",
+                "labelFormat","coco","precision",3,"cocoFileName","{name}.png",
+                "layout",Json.obj("image","imgs/{split}/{name}.png","label","","index","ann/{split}.json")));
+            String formatId=Json.required(saved,"id");check(Json.integer(saved,"version",0)==1&&!Json.bool(saved,"builtin",true),"自定义导出格式保存为 1 版");
+            check(((JsonArray)e.command("export.format.list",Json.obj("taskType","detect"))).size()==5,"保存模板与内置预设一起列出");
+            JsonObject preflight=cmd(e,"export.preflight",Json.obj("projectId",pid,"formatId",formatId,"formatVersion",1));
+            check(Json.bool(Json.object(preflight,"summary"),"canExport",false)&&Json.required(Json.object(preflight,"format"),"labelFormat").equals("coco"),"预检返回实际生效的自定义格式："+preflight+" saved="+saved);
+            JsonObject broken=cmd(e,"export.preflight",Json.obj("projectId",pid,"format",Json.obj("labelFormat","coco","layout",Json.obj("image","a.jpg","index","a.json"))));
+            check(!Json.bool(Json.object(broken,"summary"),"canExport",true),"图片扩展名不符作为检查项阻断导出");
+            Path out=root.resolve("format-out");
+            JsonObject exported=cmd(e,"export.create",Json.obj("projectId",pid,"outputDir",out.toString(),"formatId",formatId,"formatVersion",1));
+            Path dir=Path.of(Json.required(exported,"path"));JsonObject manifest=Json.parse(Files.readString(dir.resolve("manifest.json")));
+            check(Json.required(Json.object(manifest,"format"),"labelFormat").equals("coco"),"清单记录本次生效的格式规范");
+            check(Json.array(manifest,"auxiliaryFiles").size()==2,"COCO 索引按划分各生成一份并记录摘要");
+            check(Files.isRegularFile(dir.resolve("ann/train.json"))&&Files.isRegularFile(dir.resolve("ann/val.json")),"索引文件落在自定义目录");
+            check(Json.array(manifest,"assets").asList().stream().noneMatch(item->item.getAsJsonObject().has("label")),"COCO 逐图清单不写标签路径");
+            JsonObject coco=Json.parse(Files.readString(dir.resolve("ann/train.json")));
+            check(Json.array(coco,"categories").size()==1&&Json.array(coco,"annotations").size()==1,"COCO 类别与目标数量");
+            check(!Files.exists(dir.resolve("labels"))&&Files.exists(dir.resolve("imgs")),"自定义图片目录生效且不生成标签目录");
+            check(Files.isRegularFile(dir.resolve("imgs/train/"+assets.get(0)+".png"))||Files.isRegularFile(dir.resolve("imgs/val/"+assets.get(0)+".png")),"自定义图片路径实际落地");
+            JsonObject reproduced=cmd(e,"export.reproduce",Json.obj("exportId",exported.get("id"),"outputDir",out.toString()));
+            JsonObject stable=cmd(e,"export.compare",Json.obj("exportId",exported.get("id"),"otherExportId",reproduced.get("id")));
+            check(Json.integer(stable,"unchanged",0)==Json.array(manifest,"assets").size()&&!Json.bool(stable,"formatChanged",true),"自定义格式副本可复现且格式一致："+stable);
+            JsonObject yolo=cmd(e,"export.create",Json.obj("projectId",pid,"outputDir",out.toString()));
+            check(Json.bool(cmd(e,"export.compare",Json.obj("exportId",exported.get("id"),"otherExportId",yolo.get("id"))),"formatChanged",false),"默认布局与自定义布局的差异被单独标记");
+            JsonObject csv=cmd(e,"export.create",Json.obj("projectId",pid,"outputDir",out.toString(),"formatId","builtin:csv"));
+            String rows=Files.readString(Path.of(Json.required(csv,"path")).resolve("annotations.csv"),StandardCharsets.UTF_8);
+            check(rows.startsWith("\ufeff")&&rows.contains("classId")&&rows.contains("xmin"),"CSV 索引含 BOM 与几何列");
+            JsonObject voc=cmd(e,"export.create",Json.obj("projectId",pid,"outputDir",out.toString(),"formatId","builtin:voc"));
+            Path vocDir=Path.of(Json.required(voc,"path"));JsonObject vocAsset=Json.array(Json.parse(Files.readString(vocDir.resolve("manifest.json"))),"assets").get(0).getAsJsonObject();
+            check(Files.readString(vocDir.resolve(Json.required(vocAsset,"label"))).contains("<bndbox>"),"VOC 逐图 XML 写出边界框");
+            rejects("export_format_path_invalid",()->cmd(e,"export.format.save",Json.obj("taskType","detect","name","越界","labelFormat","coco","layout",Json.obj("image","../escape.png","index","a.json"))));
+            try(Engine other=new Engine(root.resolve("format-obb"))){JsonObject obb=EngineTest.project(other,"obb");rejects("export_format_task_unsupported",()->other.command("export.format.save",Json.obj("taskType",Json.required(obb,"taskType"),"name","VOC 旋转框","labelFormat","voc","layout",Json.obj("image","images/{name}.png","label","a/{name}.xml"))));}
+            rejects("export_format_version_conflict",()->cmd(e,"export.format.save",Json.obj("id",formatId,"baseVersion",0,"taskType","detect","name","过期版本","labelFormat","coco","layout",Json.obj("image","imgs/{split}/{name}.png","index","ann/{split}.json"))));
+            JsonObject updated=cmd(e,"export.format.save",Json.obj("id",formatId,"baseVersion",1,"taskType","detect","name","COCO 单文件",
+                "labelFormat","coco","layout",Json.obj("image","imgs/{split}/{name}.png","label","","index","annotations/{split}.json")));
+            check(Json.integer(updated,"version",0)==2,"更新导出格式生成新版本");
+            check(Json.integer(cmd(e,"export.format.get",Json.obj("formatId",formatId,"version",1)),"version",0)==1,"历史格式版本仍可读取");
+            cmd(e,"export.format.delete",Json.obj("formatId",formatId,"baseVersion",2));
+            JsonObject gone=cmd(e,"export.preflight",Json.obj("projectId",pid,"formatId",formatId));
+            check(!Json.bool(Json.object(gone,"summary"),"canExport",true),"删除后的格式标识作为检查项阻断导出");
+            JsonObject reproducedAfterDelete=cmd(e,"export.reproduce",Json.obj("exportId",exported.get("id"),"outputDir",out.toString()));
+            check(Json.required(reproducedAfterDelete,"status").equals("completed"),"格式模板删除后历史副本仍可复现");
         }
     }
 }
