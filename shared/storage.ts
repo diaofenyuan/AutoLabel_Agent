@@ -76,3 +76,61 @@ export interface BackupProgress {
   copiedBytes: number;
   totalBytes: number;
 }
+
+// 三类业务数据的落点与数据库目录相互独立：默认跟随存储根，也可分别覆盖为外部绝对路径。
+export type StoragePathKind = 'datasets' | 'uploads' | 'chats';
+export type StoragePathSource = 'default' | 'custom' | 'fallback';
+
+export interface StoragePathEntry {
+  kind: StoragePathKind;
+  label: string;
+  path: string;
+  custom: boolean;
+  source: StoragePathSource;
+  /** 回退到其他位置的原因；仅 source 为 fallback 时存在。 */
+  reason?: string;
+  bytes: number;
+  files: number;
+}
+
+export interface StoragePathsState {
+  installDirectory: string;
+  defaultRoot: string;
+  fallbackRoot: string;
+  root: string;
+  rootSource: StoragePathSource;
+  rootReason?: string;
+  dataDirectory: string;
+  entries: StoragePathEntry[];
+  writable: boolean;
+}
+
+export interface StoragePathProbe {
+  path: string;
+  absolute: boolean;
+  exists: boolean;
+  created: boolean;
+  writable: boolean;
+  reason?: string;
+}
+
+export interface StoragePathCandidate {
+  kind: StoragePathKind;
+  label: string;
+  from: string;
+  to: string;
+  files: number;
+  bytes: number;
+}
+
+export interface StoragePathMigrationPlan {
+  candidates: StoragePathCandidate[];
+}
+
+export interface StoragePathMigrationResult {
+  copiedFiles: number;
+  copiedBytes: number;
+  skipped: number;
+  failures: Array<{ kind: StoragePathKind; path: string; message: string }>;
+  sourcesRetained: true;
+}
