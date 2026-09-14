@@ -14,7 +14,13 @@ final class Engine implements AutoCloseable {
         if(value.length()>32767)throw new ApiError(400,"materials_root_invalid","受管原图目录必须是绝对路径。");
         try{Path path=Path.of(value);if(!path.isAbsolute())throw new ApiError(400,"materials_root_invalid","受管原图目录必须是绝对路径。");return path;}catch(ApiError e){throw e;}catch(Exception e){throw new ApiError(400,"materials_root_invalid","受管原图目录必须是绝对路径。");}
     }
-    Engine(Path path,JsonObject startup)throws Exception{store=new Store(path,materialsRoot(startup));projects=new Projects(store);exporter=new Exporter(store,projects);exportFormats=new ExportFormats(store);providers=new Providers(store);localModels=new LocalModels(store,projects);localRuntime=new LocalRuntime(localModels,startup);runs=new Runs(store,projects,providers);runResults=new RunResults(this);inputReuse=new InputResultReuse(this);runs.inputResults=runResults;runs.inputReuse=inputReuse;localRuns=new LocalRuns(this);flows=new Flows(this);mediaJobs=new MediaJobs(this,startup);exporter.mediaJobs=mediaJobs;datasetVersions=new DatasetVersions(store,projects,exporter);tracks=new Tracks(this);trackGenerations=new TrackGenerations(this,tracks);tracks.generations=trackGenerations;trainingRuntime=new TrainingRuntime(localRuntime,startup);localRuntime.shareTrainingRuntime(trainingRuntime);trainingDatasets=new TrainingDatasets(store,projects);trainingJobs=new TrainingJobs(store,trainingDatasets,localModels,localRuntime,trainingRuntime);runs.flowTick=()->{flows.tick();localRuns.tick();mediaJobs.tick();trackGenerations.tick();trainingJobs.tick();};maintenance=new Maintenance(this);projectDeletion=new ProjectDeletion(this);}
+    /** 启动参数里的 trainingRoot 为设置页配置的训练产物目录；缺省保持 <数据目录>/training。合法性与可写性由 Store 校验，失效只回退并记录原因，不让引擎拒绝启动。 */
+    static Path trainingRoot(JsonObject startup){
+        String value=Json.str(startup,"trainingRoot","");
+        if(value.isBlank())return null;
+        try{return Path.of(value);}catch(Exception e){return Path.of(".");}
+    }
+    Engine(Path path,JsonObject startup)throws Exception{store=new Store(path,materialsRoot(startup),trainingRoot(startup));projects=new Projects(store);exporter=new Exporter(store,projects);exportFormats=new ExportFormats(store);providers=new Providers(store);localModels=new LocalModels(store,projects);localRuntime=new LocalRuntime(localModels,startup);runs=new Runs(store,projects,providers);runResults=new RunResults(this);inputReuse=new InputResultReuse(this);runs.inputResults=runResults;runs.inputReuse=inputReuse;localRuns=new LocalRuns(this);flows=new Flows(this);mediaJobs=new MediaJobs(this,startup);exporter.mediaJobs=mediaJobs;datasetVersions=new DatasetVersions(store,projects,exporter);tracks=new Tracks(this);trackGenerations=new TrackGenerations(this,tracks);tracks.generations=trackGenerations;trainingRuntime=new TrainingRuntime(localRuntime,startup);localRuntime.shareTrainingRuntime(trainingRuntime);trainingDatasets=new TrainingDatasets(store,projects);trainingJobs=new TrainingJobs(store,trainingDatasets,localModels,localRuntime,trainingRuntime);runs.flowTick=()->{flows.tick();localRuns.tick();mediaJobs.tick();trackGenerations.tick();trainingJobs.tick();};maintenance=new Maintenance(this);projectDeletion=new ProjectDeletion(this);}
     Object command(String command,JsonObject p)throws Exception{
         if(command.equals("system.canUpdate"))return maintenance.status();if(command.equals("system.prepareUpdate"))return maintenance.prepare();if(command.equals("system.cancelUpdate"))return maintenance.cancel();
         if(command.equals("system.prepareDataMaintenance"))return maintenance.prepareData(p);if(command.equals("system.cancelDataMaintenance"))return maintenance.cancelData(p);
@@ -60,6 +66,9 @@ final class Engine implements AutoCloseable {
         case "export.format.list"->exportFormats.list(p);case "export.format.get"->exportFormats.get(p);case "export.format.save"->exportFormats.save(p);case "export.format.delete"->exportFormats.delete(p);
         case "export.reproduce"->new ExportHistory(store).reproduce(p);case "export.compare"->new ExportHistory(store).compare(p);
         case "training.runtime.get"->{FlowPlans.keys(p);yield trainingRuntime.probe(p);}
+        case "training.root.status"->{FlowPlans.keys(p);yield trainingJobs.rootStatus();}
+        // 切换产物目录前把已有任务与数据集固定在原目录，避免历史产物在界面里失联。
+        case "training.root.pin"->{FlowPlans.keys(p);yield trainingJobs.pinRoot();}
         case "training.dataset.create"->trainingDatasets.create(p);case "training.dataset.list"->trainingDatasets.list(p);case "training.dataset.get"->trainingDatasets.get(p);
         case "training.job.preflight"->trainingJobs.preflight(p);
         case "training.job.create"->trainingJobs.create(p);case "training.job.list"->trainingJobs.list(p);case "training.job.get"->trainingJobs.get(p);

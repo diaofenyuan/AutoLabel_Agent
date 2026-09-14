@@ -21,6 +21,8 @@ export interface EngineOptions {
   localPythonPath?: () => Promise<string | undefined>;
   /** 受管原图目录（存储根下的 uploads）；缺省时引擎沿用 <数据目录>/originals。 */
   materialsRoot?: () => string | undefined;
+  /** 训练产物目录；缺省时引擎沿用 <数据目录>/training。 */
+  trainingRoot?: () => string | undefined;
   localModelAuthorizations?: () => Promise<Array<{ path: string; modelHash: string }>>;
   mediaToolPaths?: () => Promise<{ ffmpegPath?: string; ffprobePath?: string }>;
 }
@@ -115,6 +117,7 @@ export class EngineManager extends EventEmitter {
       const trainingWorkerPath = path.join(localWorkerDirectory, 'train_worker.py');
       const localPythonPath = await this.options.localPythonPath?.();
       const materialsRoot = this.options.materialsRoot?.();
+      const trainingRoot = this.options.trainingRoot?.();
       const mediaTools = await this.options.mediaToolPaths?.() ?? {};
       let localModelAuthorizations = await this.options.localModelAuthorizations?.() ?? [];
       if (localModelAuthorizations.length > 500 || Buffer.byteLength(JSON.stringify(localModelAuthorizations)) > 7 * 1024 * 1024) {
@@ -160,6 +163,7 @@ export class EngineManager extends EventEmitter {
         });
         child.stdin.write(JSON.stringify({ token: this.token, dataDir: this.options.dataDir, protocolVersion: PROTOCOL_VERSION, localWorkerPath, trainingWorkerPath, localModelAuthorizations,
           ...(materialsRoot ? { materialsRoot } : {}),
+          ...(trainingRoot ? { trainingRoot } : {}),
           ...(localPythonPath ? { localPythonPath } : {}), ...(mediaTools.ffmpegPath ? { mediaFfmpegPath: mediaTools.ffmpegPath } : {}),
           ...(mediaTools.ffprobePath ? { mediaFfprobePath: mediaTools.ffprobePath } : {}) }) + '\n');
       });

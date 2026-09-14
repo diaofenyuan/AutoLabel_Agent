@@ -22,6 +22,22 @@ export type TrainingOptimizer = (typeof TRAINING_OPTIMIZERS)[number];
 /** gpu-auto 由引擎在启动前解析：优先 GPU，不可用时回退 cpu 并记录原因。 */
 export const TRAINING_DEFAULT_DEVICE = 'gpu-auto';
 
+/** 训练产物目录状态：defaultPath 在数据目录内，actualPath 是当前真正写入的位置。 */
+export interface TrainingRootStatus {
+  savedPath: string | null;
+  defaultPath?: string;
+  actualPath?: string;
+  custom?: boolean;
+  fallbackReason?: string;
+  retentionDays?: number;
+  jobs?: number;
+  datasets?: number;
+  unpinned?: number;
+  bytes?: number;
+  files?: number;
+  engineAvailable?: boolean;
+}
+
 export type TrainingOrigin = 'upload' | 'export';
 export type TrainingDatasetStatus = 'ready' | 'invalid';
 export type TrainingJobStatus = 'queued' | 'preparing' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted';
@@ -217,6 +233,9 @@ export interface TrainingJob {
   error?: { code: string; message: string };
   cancelRequested?: boolean;
   stalledAt?: string;
+  /** 逐轮指标已按进度保留策略清理时的时间与当时的天数；产物与日志不受影响。 */
+  metricsPrunedAt?: string;
+  metricsRetentionDays?: number;
   workerHash?: string;
   parametersHash?: string;
   snapshotHash?: string;

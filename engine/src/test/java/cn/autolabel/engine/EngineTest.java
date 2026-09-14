@@ -21,11 +21,14 @@ public final class EngineTest {
     static void check(boolean ok,String message){assertions++;if(!ok)throw new AssertionError(message);}
     static JsonObject obj(Object value){return ((JsonElement)value).getAsJsonObject();}
     static JsonObject command(Engine e,String command,JsonObject payload)throws Exception{return obj(e.command(command,payload));}
+    static JsonObject command(Engine e,String command)throws Exception{return command(e,command,new JsonObject());}
     static void error(String code,Runnable runnable){try{runnable.run();throw new AssertionError("Expected "+code);}catch(ApiError e){check(e.code.equals(code),"Expected "+code+" got "+e.code);}}
     public static void main(String[] args)throws Exception{
         root=Path.of("engine/build/verification").toAbsolutePath().resolve("run-"+System.currentTimeMillis());Files.createDirectories(root);
         if(args.length>0&&args[0].equals("training-datasets")){TrainingDatasetsTest.run(root);System.out.println("PASS "+assertions+" training dataset assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("materials-root")){MaterialsRootTest.run(root);System.out.println("PASS "+assertions+" materials root assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
+        if(args.length>0&&args[0].equals("training-root")){TrainingRootTest.run(root);System.out.println("PASS "+assertions+" training root assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
+        if(args.length>0&&args[0].equals("dataset-versions")){DatasetVersionsTest.run(root);System.out.println("PASS "+assertions+" dataset version assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("view-integration")){ViewRunIntegrationTest.run(root);System.out.println("PASS "+assertions+" view integration assertions.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("local-integration")){LocalRunIntegrationTest.run(root);System.out.println("PASS "+assertions+" local run integration assertions.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("reuse-integration")){ReuseIntegrationTest.run(root);System.out.println("PASS "+assertions+" reuse integration assertions; local real request and provenance checks only.\nVERIFICATION_DIR="+root);return;}
@@ -39,7 +42,7 @@ public final class EngineTest {
         if(args.length>0&&args[0].equals("cost-rerun")){CostRerunTest.run(root);System.out.println("PASS "+assertions+" cost and rerun assertions; local protocol fixtures only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("five-task")){MultiTaskEvaluationTest.run(root);System.out.println("PASS "+assertions+" five-task evaluation assertions; independent geometry and local protocol only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("resource-integration")){ResourceIntegrationTest.run(root);System.out.println("PASS "+assertions+" resource integration assertions; local protocol only.\nVERIFICATION_DIR="+root);return;}
-        if(args.length==0||!args[0].equals("transport")){mediaAndExports();queueAndProtocols();httpProcess();}transportLimits();iccProfile();cancelWaiting();System.out.println("PASS "+assertions+" assertions; controlled local protocol verification only.");System.out.println("VERIFICATION_DIR="+root);
+        if(args.length==0||!args[0].equals("transport")){mediaAndExports();queueAndProtocols();DatasetVersionsTest.run(root.resolve("dataset-versions"));httpProcess();}transportLimits();iccProfile();cancelWaiting();System.out.println("PASS "+assertions+" assertions; controlled local protocol verification only.");System.out.println("VERIFICATION_DIR="+root);
     }
     static JsonObject project(Engine e,String type)throws Exception{return command(e,"project.create",Json.obj("name","测试 "+type,"taskType",type,"classes",Json.arr(Json.obj("id","item","name","物品","color","#3b82f6")),"settings",Json.obj("keypointNames",Json.arr("left","right"))));}
     static JsonObject label(String type){JsonObject a=Json.obj("id",Json.id(),"type",type,"classId","item");if(Set.of("detect","pose","obb").contains(type))a.add("bbox",Json.obj("x",200,"y",180,"width",200,"height",120));

@@ -22,6 +22,8 @@ final class TrainingJobs implements AutoCloseable {
 
     private final Store store;private final TrainingDatasets datasets;private final LocalModels models;
     private final LocalRuntime localRuntime;private final TrainingRuntime runtime;private final int concurrency;
+    // 进度保留策略（天）：0 表示永久保留逐轮指标。
+    private final int retentionDays;
     private final Map<String,Active> active=new LinkedHashMap<>();
     private volatile boolean closed;
 
@@ -46,6 +48,38 @@ final class TrainingJobs implements AutoCloseable {
                 data.add("error",Json.obj("code","training_interrupted","message","引擎重启导致训练中断，未自动重跑。"));
                 Store.update(c,"UPDATE training_jobs SET status='interrupted',updated_at=?,data=? WHERE id=?",Json.now(),data,id);
                 Store.event(c,"training.job.interrupted",null,null,null,Json.obj("jobId",id));
+            }
+            return null;
+        });
+        retentionDays=store.read(c->{JsonObject row=Store.one(c,"SELECT data FROM settings WHERE id='global'");
+            return row==null?0:Json.bounded(Json.parse(row.get("data").getAsString()),"trainingRetentionDays",0,0,3650);});
+        pruneMetrics();
+    }
+
+    /**
+     * 进度保留策略：按天清理已结束任务的逐轮指标（数据库记录），产物、日志与结果文件一律保留。
+     * 0 表示永久保留；被清理的任务在记录里留下 metricsPrunedAt，界面据此说明而不是显示成空曲线。
+     */
+    private void pruneMetrics(){
+        if(retentionDays<=0)return;
+        String cutoff=java.time.Instant.now().minus(retentionDays,java.time.temporal.ChronoUnit.DAYS).toString();
+        List<String> expired=store.read(c->{
+            List<String> ids=new ArrayList<>();
+            for(JsonObject row:Store.rows(c,"SELECT id,updated_at,data FROM training_jobs WHERE status NOT IN ('queued','preparing','running') AND updated_at< ?",cutoff)){
+                JsonObject data=Json.parse(Json.required(row,"data"));
+                if(data.has("metricsPrunedAt"))continue;
+                ids.add(Json.required(row,"id"));
+            }
+            return ids;
+        });
+        if(expired.isEmpty())return;
+        String prunedAt=Json.now();
+        store.tx(c->{
+            for(String id:expired){
+                Store.update(c,"DELETE FROM training_epochs WHERE job_id=?",id);
+                JsonObject record=Json.parse(Json.required(Store.one(c,"SELECT data FROM training_jobs WHERE id=?",id),"data"));
+                record.addProperty("metricsPrunedAt",prunedAt);record.addProperty("metricsRetentionDays",retentionDays);
+                Store.update(c,"UPDATE training_jobs SET data=? WHERE id=?",record,id);
             }
             return null;
         });
@@ -150,6 +184,8 @@ final class TrainingJobs implements AutoCloseable {
         String jobId=Json.id(),now=Json.now(),taskType=Json.required(data,"taskType");
         JsonObject job=Json.obj("id",jobId,"datasetId",datasetId,"projectId",data.has("projectId")?data.get("projectId"):JsonNull.INSTANCE,"taskType",taskType,
             "status","queued","stage","queued","device",device,"createdAt",now,"updatedAt",now,
+            // 产物目录随任务固定：之后更换默认产物目录，历史任务的权重、日志与指标仍可读取。
+            "artifactsDir",newJobDirectory(jobId).toString(),
             "snapshotHash",Json.required(data,"snapshotHash"),"classNames",classNames(data).deepCopy(),"keypointNames",Json.array(data,"keypointNames").deepCopy(),
             "parameters",parameters.deepCopy(),"requestedDevice",Json.required(resolved,"requestedDevice"),"actualDevice",device,
             "fallback",resolved.has("fallback")?resolved.get("fallback").deepCopy():JsonNull.INSTANCE,
@@ -267,6 +303,8 @@ final class TrainingJobs implements AutoCloseable {
             if(active.containsKey(jobId))throw error(409,"training_active","运行中的任务不能删除，请先取消。");
         }
         JsonObject record=store.read(c->Store.document(c,"training_jobs",jobId));
+        // 目录必须在删除记录前按记录解析：记录删掉后就只剩当前产物根可用。
+        Path directory=jobDirectory(record);
         JsonObject data=record;
         for(JsonElement element:Json.array(data,"artifacts")){
             JsonObject artifact=element.getAsJsonObject();String hash=Json.str(artifact,"hash",null);if(hash==null)continue;
@@ -281,7 +319,7 @@ final class TrainingJobs implements AutoCloseable {
             Store.event(c,"training.job.deleted",null,null,null,Json.obj("jobId",jobId));
             return null;
         });
-        deleteDirectory(jobDirectory(jobId));
+        deleteDirectory(directory);
         return Json.obj("deleted",true,"jobId",jobId);
     }
 
@@ -303,6 +341,60 @@ final class TrainingJobs implements AutoCloseable {
         JsonObject result=Json.obj("jobId",jobId,"kind",kind,"path",path.toString(),"hash",hash,"size",Files.size(path),
             "name",Json.required(found,"name"),"taskType",Json.required(data,"taskType"),"classNames",Json.array(data,"classNames").deepCopy());
         return result;
+    }
+
+    // ===== 产物目录（默认在数据目录内，可配置到外部磁盘） =====
+
+    /** 产物目录状态：默认位置、实际生效位置、回退原因与占用，供设置页如实显示。 */
+    JsonObject rootStatus(){
+        Path fallback=store.root.resolve("training");
+        JsonObject result=Json.obj("defaultPath",fallback.toString(),"actualPath",store.trainingRoot.toString(),
+            "custom",!store.trainingRoot.equals(fallback),"retentionDays",retentionDays);
+        if(store.trainingRootIssue!=null)result.addProperty("fallbackReason",store.trainingRootIssue);
+        long jobCount=store.read(c->Json.number(Store.one(c,"SELECT COUNT(*) AS n FROM training_jobs"),"n",0));
+        long datasetCount=store.read(c->Json.number(Store.one(c,"SELECT COUNT(*) AS n FROM training_datasets"),"n",0));
+        long unpinned=store.read(c->{
+            long missing=Json.number(Store.one(c,"SELECT COUNT(*) AS n FROM training_jobs WHERE json_extract(data,'$.artifactsDir') IS NULL"),"n",0);
+            return missing+Json.number(Store.one(c,"SELECT COUNT(*) AS n FROM training_datasets WHERE json_extract(data,'$.snapshotDir') IS NULL"),"n",0);
+        });
+        result.addProperty("jobs",jobCount);result.addProperty("datasets",datasetCount);result.addProperty("unpinned",unpinned);
+        long[] usage=usage(store.trainingRoot);
+        result.addProperty("bytes",usage[0]);result.addProperty("files",usage[1]);
+        return result;
+    }
+
+    /** 把已有任务与数据集固定在当前产物根；切换默认产物目录前调用，返回固定的记录数。 */
+    JsonObject pinRoot(){
+        List<String[]> updates=new ArrayList<>();
+        store.read(c->{
+            for(JsonObject row:Store.rows(c,"SELECT id,data FROM training_jobs")){
+                JsonObject data=Json.parse(Json.required(row,"data"));
+                if(data.has("artifactsDir"))continue;
+                updates.add(new String[]{Json.required(row,"id"),newJobDirectory(Json.required(row,"id")).toString()});
+            }
+            return null;
+        });
+        if(!updates.isEmpty())store.tx(c->{
+            for(String[] update:updates){
+                JsonObject record=Json.parse(Json.required(Store.one(c,"SELECT data FROM training_jobs WHERE id=?",update[0]),"data"));
+                record.addProperty("artifactsDir",update[1]);
+                Store.update(c,"UPDATE training_jobs SET data=? WHERE id=?",record,update[0]);
+            }
+            return null;
+        });
+        return Json.obj("jobs",updates.size(),"datasets",datasets.pinRoot(),"path",store.trainingRoot.toString());
+    }
+
+    private static long[] usage(Path directory){
+        long[] total=new long[2];
+        if(!Files.isDirectory(directory))return total;
+        try(var walk=Files.walk(directory)){
+            for(Path path:walk.toList()){
+                if(path.equals(directory)||Files.isDirectory(path))continue;
+                try{total[0]+=Files.size(path);total[1]++;}catch(Exception ignored){/* 并发删除的文件跳过即可 */}
+            }
+        }catch(Exception ignored){/* 目录不可读时按已统计的部分返回，不虚报 */}
+        return total;
     }
 
     // ===== 调度与执行 =====
@@ -669,7 +761,7 @@ final class TrainingJobs implements AutoCloseable {
         if(data.has("projectId")&&!data.get("projectId").isJsonNull())result.add("projectId",data.get("projectId"));
         for(String field:List.of("stage","message","parameters","requestedDevice","actualDevice","fallback","environment","createdAt","updatedAt","startedAt","finishedAt",
             "elapsedMs","etaSeconds","etaEstimated","completedEpochs","epochs","lastMetrics","bestMetrics","bestEpoch","error","cancelRequested","stalledAt","workerHash",
-            "parametersHash","snapshotHash","classNames","keypointNames","result")){
+            "parametersHash","snapshotHash","classNames","keypointNames","result","metricsPrunedAt","metricsRetentionDays")){
             if(data.has(field))result.add(field,data.get(field).deepCopy());
         }
         JsonArray artifacts=new JsonArray();
@@ -698,8 +790,27 @@ final class TrainingJobs implements AutoCloseable {
         return environment;
     }
 
+    /** 任务目录优先采用记录里的 artifactsDir，使更换默认产物目录后历史任务仍指向原位置。 */
     private Path jobDirectory(String id){
-        Path base=store.root.resolve("training").normalize(),directory=base.resolve(id).normalize();
+        JsonObject record=store.read(c->{
+            try{return Store.document(c,"training_jobs",id);}
+            catch(ApiError missing){return null;}
+        });
+        return record==null?newJobDirectory(id):jobDirectory(record);
+    }
+
+    private Path jobDirectory(JsonObject record){
+        // artifactsDir 与其他任务字段一样在记录根上（data 列即整个记录），不存在嵌套的 data 层。
+        String recorded=Json.str(record,"artifactsDir",null);
+        if(recorded!=null&&!recorded.isBlank()){
+            try{Path path=Path.of(recorded);if(path.isAbsolute())return path.toAbsolutePath().normalize();}
+            catch(Exception ignored){/* 记录损坏时按当前产物根重算，不因单个字段挡住任务操作。 */}
+        }
+        return newJobDirectory(Json.required(record,"id"));
+    }
+
+    private Path newJobDirectory(String id){
+        Path base=store.trainingRoot.normalize(),directory=base.resolve(id).normalize();
         if(!directory.startsWith(base))throw error(500,"training_job_path_invalid","训练任务目录无效。");
         return directory;
     }

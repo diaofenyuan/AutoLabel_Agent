@@ -478,6 +478,9 @@ function TrainingDetail({ jobId, live, onClose, onChanged }: {
         {` · 快照 ${(job.snapshotHash ?? '').slice(0, 12)}…`}
       </p>
 
+      {job.metricsPrunedAt && <div className="issue">
+        <AlertTriangle size={13} />该任务的逐轮指标已按进度保留策略（{job.metricsRetentionDays ?? 0} 天）清理；权重、日志与 results.csv 仍保留在产物目录中。
+      </div>}
       <MetricChart label="验证指标（mAP / 精确率 / 召回率，纵轴 0–1）" maximum={1}
         series={[
           { name: 'mAP50', color: '#2f80ed', points: epochs.map(row => row.metrics.mAP50) },

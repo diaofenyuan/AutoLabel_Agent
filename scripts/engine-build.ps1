@@ -1,4 +1,4 @@
-﻿param([switch]$Test, [ValidateSet('all','transport','manual','evaluation','capabilities','cost-rerun','five-task','resource-integration','data-maintenance','backup-integration','flow-foundation','flow-integration','reuse-integration','local-integration','view-integration','training-datasets','materials-root')] [string]$TestScope = 'all')
+﻿param([switch]$Test, [ValidateSet('all','transport','manual','evaluation','capabilities','cost-rerun','five-task','resource-integration','data-maintenance','backup-integration','flow-foundation','flow-integration','reuse-integration','local-integration','view-integration','training-datasets','training-root','materials-root','dataset-versions')] [string]$TestScope = 'all')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $engineRoot = Join-Path $root 'engine'

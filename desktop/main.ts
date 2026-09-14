@@ -13,7 +13,7 @@ import { CredentialVault } from './vault';
 import { LocalExecutionSettings } from './local-execution';
 import { MediaExecutionSettings } from './media-execution';
 import { DataStorage, DesktopPreferences, initializeStorageLocation, scopedVaultPath, type StorageLocation } from './storage';
-import { StoragePathSettings, resolveStoragePaths, storagePathsState, type ResolvedPaths } from './storage-paths';
+import { StoragePathSettings, resolveStoragePaths, storagePathsState, validateTrainingRoot, type ResolvedPaths } from './storage-paths';
 import { ChatStore } from './chat-store';
 import type { StoragePathsState } from '../shared/storage';
 import { PathGrants, authorizeCommandPaths, mediaTargetFromUrl, isTrustedUrl, normalizeMedia, publicInputResult, redact } from './security';
@@ -108,6 +108,8 @@ function createBackend(location: StorageLocation): ActiveStorage {
   const instance = new EngineManager({ packaged: app.isPackaged, root, resources: process.resourcesPath, dataDir: location.dataDir, credentials: () => scopedVault.all(),
     // 导入复制的受管原图落在存储根下的 uploads；引擎只接受绝对路径，未解析时沿用数据目录内的旧位置。
     materialsRoot: () => storagePaths?.entries.find(entry => entry.kind === 'uploads')?.path,
+    // 训练产物目录是引擎启动参数：设置页保存后由主进程在空闲时重启引擎让新落点生效。
+    trainingRoot: () => savedTrainingRoot() ?? undefined,
     localPythonPath: () => localExecution.pythonPath(),
     localModelAuthorizations: () => localExecution.modelAuthorizations(location.credentialScopeId),
     mediaToolPaths: () => mediaExecution.paths(),
@@ -135,6 +137,35 @@ function storagePathsReport(): StoragePathsState | undefined {
 /** Windows 路径大小写不敏感；用它判断受管原图目录是否真的换到了别处。 */
 function sameStoragePath(left: string, right: string): boolean {
   return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+}
+/** 已保存的训练产物目录；空值表示沿用数据目录内的默认位置。 */
+function savedTrainingRoot(): string | null {
+  const value = preferenceStore.value.trainingRoot;
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+/** 训练产物目录状态：引擎给出实际生效位置与占用，主进程补上「已保存的配置值」供设置页回填。 */
+async function trainingRootStatus(): Promise<Record<string, unknown>> {
+  const savedPath = savedTrainingRoot();
+  try { return { ...await engine.request('training.root.status') as object, savedPath }; }
+  catch { return { savedPath, engineAvailable: false }; }
+}
+/**
+ * 保存训练产物目录：先让引擎把已有任务与数据集固定在原目录，再写入配置并尽力重启引擎。
+ * 引擎忙时明确返回待生效，不打断正在进行或排队的训练。
+ */
+async function saveTrainingRoot(value: string | null): Promise<Record<string, unknown>> {
+  const before = savedTrainingRoot();
+  const next = value === null || !value.trim() ? null : await validateTrainingRoot(value, dataDir!);
+  if ((before ?? '') === (next ?? '') || (before && next && sameStoragePath(before, next))) return { savedPath: before, trainingRoot: 'unchanged' };
+  const pinned = await engine.request('training.root.pin') as { jobs?: number; datasets?: number };
+  preferences = await preferenceStore.update({ trainingRoot: next });
+  if (engine.status.state === 'ready') {
+    try {
+      const gate = await engine.request('system.canUpdate') as { ready?: boolean };
+      if (gate?.ready) { await engine.restart(); return { ...pinned, savedPath: next, trainingRoot: 'active' as const }; }
+    } catch { /* 引擎不可用时保留待生效标记，由界面如实提示。 */ }
+  }
+  return { ...pinned, savedPath: next, trainingRoot: 'pending-restart' as const };
 }
 agent.on('event', value => send('autolabel:agent-event', value));
 
@@ -307,6 +338,9 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
     return saved;
   }
   if (validated.command === 'storage.paths.migrate') return storagePathSettings.migrate();
+  // 训练产物目录与三类业务数据同理：走专用命令，不经过 settings.save 的路径守卫。
+  if (validated.command === 'training.root.status') return trainingRootStatus();
+  if (validated.command === 'training.root.save') return saveTrainingRoot(payload.path as string | null);
   if (validated.command.startsWith('chat.history.')) return chatHistory(validated.command, payload);
   if (validated.command === 'storage.usage') return storage!.usage();
   if (validated.command === 'storage.cleanup') return storage!.cleanup();

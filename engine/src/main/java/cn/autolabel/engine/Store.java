@@ -12,15 +12,24 @@ final class Store implements AutoCloseable {
     final Path root;
     // 受管原图根默认在数据目录内；桌面可把它指到存储根下的 uploads 目录，使导入复制的训练集可单独配置。
     final Path materialsRoot;
+    // 训练产物根默认在数据目录内；桌面可把它指到外部绝对路径，使权重与数据集快照可放到其他磁盘。
+    final Path trainingRoot;
+    // 配置的训练产物根不可用时的回退事实与原因；null 表示按配置生效，不留空让界面以为一切正常。
+    final String trainingRootIssue;
     private final String url;
     private final Connection writer;
     private final ThreadPoolExecutor writes = new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,
         new ArrayBlockingQueue<>(512), Thread.ofPlatform().name("sqlite-writer-",0).factory(),new ThreadPoolExecutor.AbortPolicy());
     volatile boolean writeFailed;
-    Store(Path root) throws Exception { this(root,null); }
-    Store(Path root,Path materialsRoot) throws Exception {
+    Store(Path root) throws Exception { this(root,null,null); }
+    Store(Path root,Path materialsRoot) throws Exception { this(root,materialsRoot,null); }
+    Store(Path root,Path materialsRoot,Path trainingRoot) throws Exception {
         this.root=root.toAbsolutePath().normalize(); Files.createDirectories(this.root);
         this.materialsRoot=resolveMaterials(this.root,materialsRoot);
+        java.util.concurrent.atomic.AtomicReference<String> trainingIssue=new java.util.concurrent.atomic.AtomicReference<>();
+        this.trainingRoot=resolveTraining(this.root,trainingRoot,trainingIssue);
+        this.trainingRootIssue=trainingIssue.get();
+        if(this.trainingRootIssue!=null)System.err.println(Json.obj("type","training_root_fallback","message",this.trainingRootIssue,"actual",this.trainingRoot.toString()));
         url="jdbc:sqlite:" + this.root.resolve("autolabel.db"); writer=connect();
         try (Statement s=writer.createStatement()) {
             int version; try(ResultSet rs=s.executeQuery("PRAGMA user_version")) {version=rs.getInt(1);}
@@ -132,6 +141,27 @@ final class Store implements AutoCloseable {
         Path path=materialsRoot.toAbsolutePath().normalize();
         if(!materialsRoot.isAbsolute()||path.getParent()==null||path.equals(root)||root.startsWith(path))throw new ApiError(400,"materials_root_invalid","受管原图目录必须是数据目录之外、非磁盘根的绝对路径。");
         Files.createDirectories(path);return path;
+    }
+    /**
+     * 训练产物根：默认 <数据目录>/training；自定义时为绝对目录，且不能是磁盘根或数据目录的上级。
+     * 与受管原图根不同，这里的配置失效（磁盘未接入、无写权限）只回退到默认位置并记录原因：
+     * 训练产物属于可重建资源，不能因为它让整个引擎拒绝启动；回退事实由 training.root.status 如实上报。
+     */
+    private static Path resolveTraining(Path root,Path trainingRoot,java.util.concurrent.atomic.AtomicReference<String> issue){
+        Path fallback=root.resolve("training");
+        if(trainingRoot==null)return fallback;
+        try{
+            Path path=trainingRoot.toAbsolutePath().normalize();
+            if(!trainingRoot.isAbsolute()||path.getParent()==null||path.equals(root)||root.startsWith(path))
+                throw new IllegalArgumentException("训练产物目录必须是数据目录之外、非磁盘根的绝对路径。");
+            Files.createDirectories(path);
+            Path marker=path.resolve(".autolabel-write-"+Json.id()+".tmp");
+            Files.writeString(marker,"autolabel");Files.deleteIfExists(marker);
+            return path;
+        }catch(Exception failure){
+            issue.set((failure.getMessage()==null||failure.getMessage().isBlank()?"训练产物目录不可用。":failure.getMessage())+"已回退到默认的训练产物目录，训练仍可继续。");
+            return fallback;
+        }
     }
     private void backupBeforeMigration(int version)throws Exception{
         try{Path directory=root.resolve("backups");Files.createDirectories(directory);Path backup=directory.resolve("schema-v"+version+"-"+Json.id()+".db");

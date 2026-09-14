@@ -45,8 +45,9 @@ final class TrainingDatasets {
         JsonObject data=Json.obj("id",id,"projectId",projectId,"origin",source,"taskType",scan.taskType,
             "classes",classTable(scan.classes),"keypointNames",scan.keypointNames.deepCopy(),"originDetail",scan.origin.deepCopy(),
             "inspection",inspection,"status",usable?"ready":"invalid","createdAt",createdAt);
+        Path directory=null;
         if(usable){
-            Path directory=datasetDirectory(id);
+            directory=datasetDirectory(id);
             try{
                 Files.createDirectories(directory);
                 data.add("files",freeze(scan.files,directory));
@@ -66,6 +67,8 @@ final class TrainingDatasets {
         data.addProperty("snapshotHash",snapshotHash);
         JsonObject record=Json.obj("id",id,"projectId",projectId,"origin",source,"taskType",scan.taskType,"snapshotHash",snapshotHash,
             "createdAt",createdAt,"data",data);
+        // 快照目录记录在记录层而不是 data 里：它带本机绝对路径，既不能进入快照指纹，也不该随视图对外暴露。
+        if(directory!=null)record.addProperty("snapshotDir",directory.toString());
         // 写入事务里只捕获终态值：projectId 允许为空但不能再被重新赋值。
         final String linkedProject=projectId;
         store.tx(c->{
@@ -101,7 +104,7 @@ final class TrainingDatasets {
         JsonObject record=store.read(c->Store.document(c,"training_datasets",id));
         JsonObject data=Json.object(record,"data");
         if(!Json.str(data,"status","").equals("ready"))throw error(409,"training_dataset_invalid","该数据集体检未通过，不能用于训练。");
-        return new Snapshot(record,data,datasetDirectory(id));
+        return new Snapshot(record,data,datasetDirectory(id,Json.str(record,"snapshotDir",null)));
     }
 
     /** 对外视图只保留受管相对清单与摘要，不暴露受管绝对路径与用户目录。 */
@@ -131,10 +134,40 @@ final class TrainingDatasets {
         return table;
     }
 
-    private Path datasetDirectory(String id){
-        Path base=store.root.resolve("training").resolve("datasets").normalize(),directory=base.resolve(id).normalize();
+    private Path datasetDirectory(String id){return datasetDirectory(id,null);}
+
+    /** 已记录目录的快照继续用记录目录；没有记录时落在当前产物根，便于更换默认产物目录。 */
+    private Path datasetDirectory(String id,String recorded){
+        if(recorded!=null&&!recorded.isBlank()){
+            try{
+                Path path=Path.of(recorded);
+                if(path.isAbsolute())return path.toAbsolutePath().normalize();
+            }catch(Exception ignored){/* 记录损坏时按当前产物根重算，不让单个坏字段挡住读取。 */}
+        }
+        Path base=store.trainingRoot.resolve("datasets").normalize(),directory=base.resolve(id).normalize();
         if(!directory.startsWith(base))throw error(500,"training_dataset_path_invalid","训练数据集目录无效。");
         return directory;
+    }
+
+    /** 把已有快照固定在当前产物根；切换默认产物目录前调用，返回实际写入的记录数。 */
+    int pinRoot(){
+        List<JsonObject> rows=store.read(c->Store.rows(c,"SELECT id,data FROM training_datasets"));
+        List<String[]> updates=new ArrayList<>();
+        for(JsonObject row:rows){
+            JsonObject record=Json.parse(Json.required(row,"data"));
+            if(record.has("snapshotDir"))continue;
+            updates.add(new String[]{Json.required(row,"id"),datasetDirectory(Json.required(row,"id")).toString()});
+        }
+        if(updates.isEmpty())return 0;
+        store.tx(c->{
+            for(String[] update:updates){
+                JsonObject record=Store.document(c,"training_datasets",update[0]);
+                JsonObject next=record.deepCopy();next.addProperty("snapshotDir",update[1]);
+                Store.update(c,"UPDATE training_datasets SET data=? WHERE id=?",next,update[0]);
+            }
+            return null;
+        });
+        return updates.size();
     }
 
     // ===== 路径 A：用户上传训练集与验证集 =====

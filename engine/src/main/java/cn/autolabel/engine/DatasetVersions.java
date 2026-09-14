@@ -44,7 +44,7 @@ final class DatasetVersions implements AutoCloseable {
     }
 
     /** 按素材标识顺序解析，保证同一输入多次解析得到完全相同的项序（I6 的前提）。 */
-    private Source resolve(String projectId,String scope)throws Exception{
+    private Source resolve(String projectId,String scope,JsonObject selection)throws Exception{
         projects.get(projectId);
         return store.read(c->{
             Source s=new Source();s.projectId=projectId;s.scope=scope;
@@ -53,12 +53,24 @@ final class DatasetVersions implements AutoCloseable {
             for(JsonElement e:Json.array(s.project,"classes"))s.classes.add(e.getAsJsonObject());
             for(int i=0;i<s.classes.size();i++)s.classIndex.put(Json.required(s.classes.get(i).getAsJsonObject(),"id"),i);
             s.keypointNames=Json.array(Json.object(s.project,"settings"),"keypointNames").deepCopy();
+            DatasetSelection.Context context=DatasetSelection.context(c,projectId);
+            List<JsonObject> candidates=new ArrayList<>();List<Path> paths=new ArrayList<>();
             for(JsonObject row:Store.rows(c,"SELECT id,data,path FROM assets WHERE project_id=? ORDER BY id",projectId)){
-                JsonObject asset=Json.parse(Json.required(row,"data")),status=asset;
-                String state=Json.str(status,"status","");
+                JsonObject asset=Json.parse(Json.required(row,"data"));
+                String state=Json.str(asset,"status","");
                 // 未纳入范围的素材同样参与解析：它们构成「遗漏范围」，只是不进入版本内容。
-                if(scope.equals("confirmed")?!state.equals("confirmed"):!LABELED.contains(state)){s.excluded.add(asset);continue;}
-                s.assets.add(asset);s.paths.put(Json.required(asset,"id"),Path.of(Json.required(row,"path")));
+                if(scope.equals("confirmed")?!state.equals("confirmed"):!LABELED.contains(state)){
+                    s.excluded.add(Json.obj("asset",asset,"reasonCode",scope.equals("confirmed")?DatasetSelection.SCOPE_CONFIRMED:DatasetSelection.SCOPE));continue;
+                }
+                candidates.add(asset);paths.add(Path.of(Json.required(row,"path")));
+            }
+            Map<String,String> groups=Exporter.groups(candidates);
+            Map<String,DatasetSelection.Decision> decisions=DatasetSelection.judge(candidates,selection,groups,context);
+            for(int i=0;i<candidates.size();i++){
+                JsonObject asset=candidates.get(i);String id=Json.required(asset,"id");
+                DatasetSelection.Decision decision=decisions.get(id);
+                if(!decision.included()){s.excluded.add(Json.obj("asset",asset,"reasonCode",decision.reasonCode()));continue;}
+                s.assets.add(asset);s.paths.put(id,paths.get(i));
             }
             if(s.assets.size()+s.excluded.size()>MAX_ITEMS)throw error(413,"dataset_too_large","单个数据集版本最多 "+MAX_ITEMS+" 张图片。");
             return s;
@@ -79,16 +91,38 @@ final class DatasetVersions implements AutoCloseable {
     // ===== 预检 =====
 
     JsonObject preflight(JsonObject p)throws Exception{
-        keys(p,"projectId","annotationScope");
-        String scope=scope(p);
-        Source s=resolve(string(p,"projectId",128),scope);
+        keys(p,"projectId","annotationScope","selection","seed");
+        String scope=scope(p);JsonObject selection=DatasetSelection.normalize(Json.object(p,"selection"));
+        String projectId=string(p,"projectId",128),seed=p.has("seed")?string(p,"seed",256):"preview";
+        Source s=resolve(projectId,scope,selection);
         JsonObject inspection=inspect(s);
         long blocking=blocking(Json.array(inspection,"issues"));
+        JsonObject reasons=reasonCounts(s);
         return Json.obj("projectId",s.projectId,"taskType",s.taskType,"annotationScope",scope,
             "assets",s.assets.size(),"excluded",s.excluded.size(),"groups",distinctGroups(s),
-            "classes",classTable(s),"keypointNames",s.keypointNames.deepCopy(),
+            "classes",classTable(s),"keypointNames",s.keypointNames.deepCopy(),"selection",selection,
+            "excludedByReason",reasons,"excludedTotal",total(reasons),
+            "sampling",samplingPreview(selection,s,seed),
             "split",Json.obj("rule",SPLIT_RULE,"train",DEFAULT_RATIO[0],"val",DEFAULT_RATIO[1],"test",DEFAULT_RATIO[2]),
             "inspection",inspection,"blocking",blocking,"canBuild",blocking==0);
+    }
+
+    private static JsonObject reasonCounts(Source s){
+        Map<String,Integer> reasons=new TreeMap<>();
+        for(JsonObject entry:s.excluded)reasons.merge(Json.required(entry,"reasonCode"),1,Integer::sum);
+        return DatasetSelection.summarize(reasons);
+    }
+    private static long total(JsonObject reasons){long sum=0;for(var entry:reasons.entrySet())sum+=entry.getValue().getAsLong();return sum;}
+
+    /** 提交前的采样预估：按预览种子走一遍划分，给出会落入训练集的张数；磁盘占用留到生成时实测。 */
+    private static JsonObject samplingPreview(JsonObject selection,Source s,String seed){
+        JsonObject sampling=Json.object(selection,"sampling");
+        Map<String,String> groups=Exporter.groups(s.assets),splits=assign(orderedGroups(groups,seed));
+        long train=0;
+        for(JsonObject asset:s.assets)if("train".equals(splits.get(groups.get(Json.required(asset,"id")))))train++;
+        return Json.obj("mode",Json.str(sampling,"mode","none"),"nearDuplicate",Json.str(sampling,"nearDuplicate","off"),
+            "quotas",Json.object(sampling,"quotas").deepCopy(),"previewSeed",seed,"trainCandidates",train,
+            "note","采样只作用于训练集，验证集与测试集保持原始内容；张数按预览种子计算。");
     }
 
     private JsonObject inspect(Source s){return exporter.inspect(new Exporter.Snapshot(s.project,s.assets,s.paths,s.taskType));}
@@ -102,16 +136,17 @@ final class DatasetVersions implements AutoCloseable {
     // ===== 生成 =====
 
     JsonObject create(JsonObject p)throws Exception{
-        keys(p,"projectId","name","annotationScope","seed");
+        keys(p,"projectId","name","annotationScope","seed","selection");
         String projectId=string(p,"projectId",128),scope=scope(p);
         String name=p.has("name")?string(p,"name",MAX_NAME):"";
         String seed=p.has("seed")&&Json.str(p,"seed","").strip().length()>0?string(p,"seed",256):Json.id();
-        Source s=resolve(projectId,scope);
+        JsonObject selection=DatasetSelection.withSeed(DatasetSelection.normalize(Json.object(p,"selection")),seed);
+        Source s=resolve(projectId,scope,selection);
         JsonObject inspection=inspect(s);
         if(blocking(Json.array(inspection,"issues"))>0)
             throw new ApiError(422,"dataset_version_blocked","数据集体检存在阻断问题，请先处理后重新生成版本。",inspection);
         if(s.assets.isEmpty())throw error(422,"dataset_version_empty","当前标注范围内没有可用素材，无法生成版本。");
-        JsonObject recipe=recipe(scope,seed);String recipeHash=hashText(recipe.toString());
+        JsonObject recipe=recipe(scope,seed,selection);String recipeHash=hashText(recipe.toString());
         String id=Json.id(),buildId=Json.id(),now=Json.now();
         store.tx(c->{
             int next=(int)Json.number(Store.one(c,"SELECT COALESCE(MAX(version),0)+1 AS n FROM dataset_versions WHERE project_id=?",projectId),"n",1);
@@ -125,19 +160,19 @@ final class DatasetVersions implements AutoCloseable {
             Store.event(c,"dataset.version.created",null,null,null,Json.obj("versionId",id,"projectId",projectId,"number",next,"recipeHash",recipeHash));
             return null;
         });
-        builds.execute(()->run(id,buildId,projectId,scope,recipe,recipeHash,seed));
+        builds.execute(()->run(id,buildId,projectId,scope,recipe,recipeHash,seed,selection));
         return get(Json.obj("versionId",id));
     }
 
-    private static JsonObject recipe(String scope,String seed){
-        return Json.obj("selection",Json.obj("annotationScope",scope),"transform",new JsonObject(),
+    private static JsonObject recipe(String scope,String seed,JsonObject selection){
+        return Json.obj("annotationScope",scope,"selection",selection,"transform",new JsonObject(),
             "split",Json.obj("mode",SPLIT_RULE,"train",DEFAULT_RATIO[0],"val",DEFAULT_RATIO[1],"test",DEFAULT_RATIO[2],"seed",seed));
     }
 
-    private void run(String versionId,String buildId,String projectId,String scope,JsonObject recipe,String recipeHash,String seed){
+    private void run(String versionId,String buildId,String projectId,String scope,JsonObject recipe,String recipeHash,String seed,JsonObject selection){
         Path temporary=null;
         try{
-            Source s=resolve(projectId,scope);
+            Source s=resolve(projectId,scope,selection);
             int total=s.assets.size()+s.excluded.size();
             progress(buildId,"scanning",0,total);
             JsonObject inspection=inspect(s);
@@ -146,6 +181,11 @@ final class DatasetVersions implements AutoCloseable {
             Map<String,String> groups=Exporter.groups(s.assets);
             List<String> order=orderedGroups(groups,seed);
             Map<String,String> splits=assign(order);
+            // 采样只作用于训练集：验证集与测试集保持原始内容，跨版本指标才可比（I5）。
+            DatasetSelection.Sampled sampled=sample(selection,s,groups,splits,projectId);
+            Set<String> dropped=new HashSet<>();Map<String,JsonObject> byId=new HashMap<>();
+            for(JsonObject item:sampled.dropped())dropped.add(Json.required(item,"assetId"));
+            for(JsonObject asset:s.assets)byId.put(Json.required(asset,"id"),asset);
             progress(buildId,"splitting",0,total);
             Path base=versionsDirectory();Files.createDirectories(base);
             temporary=base.resolve(".autolabel-partial-"+versionId);Path target=base.resolve(versionId);
@@ -156,10 +196,13 @@ final class DatasetVersions implements AutoCloseable {
             Map<String,long[]> counters=new LinkedHashMap<>();for(String split:SPLITS)counters.put(split,new long[2]);
             long bytes=0,objects=0;int position=0;
             // 被排除项先入库：它们决定「遗漏范围」，position 是稳定项序。
-            for(JsonObject asset:s.excluded)items.add(excludedItem(asset,++position,"annotation_scope_excluded"));
+            for(JsonObject entry:s.excluded)items.add(excludedItem(Json.object(entry,"asset"),++position,Json.required(entry,"reasonCode")));
+            for(JsonObject item:sampled.dropped())items.add(excludedItem(byId.get(Json.required(item,"assetId")),++position,
+                Json.str(item,"reasonCode",DatasetSelection.SAMPLED)));
             for(JsonObject asset:s.assets){
                 if(cancelled.contains(buildId))throw error(409,"dataset_version_cancelled","版本生成已取消。");
                 String assetId=Json.required(asset,"id"),contentHash=Json.required(asset,"contentHash");
+                if(dropped.contains(assetId))continue;
                 String split=splits.get(groups.get(assetId));if(split==null)split="train";
                 Path source=s.paths.get(assetId),copy=temporary.resolve(imagePath(s,asset,split,assetId,source));
                 Files.createDirectories(copy.getParent());
@@ -193,7 +236,7 @@ final class DatasetVersions implements AutoCloseable {
                 Path yaml=temporary.resolve("data.yaml");Files.writeString(yaml,yamlText(s),StandardCharsets.UTF_8);
                 auxiliary.add(Json.obj("path","data.yaml","hash",Media.hash(yaml)));
             }
-            JsonObject manifest=manifest(versionId,s,recipe,recipeHash,manifestItems,items,order.size(),inspection,auxiliary,objects,bytes,counters);
+            JsonObject manifest=manifest(versionId,s,recipe,recipeHash,manifestItems,items,order.size(),inspection,auxiliary,objects,bytes,counters,sampled.report());
             Path manifestFile=temporary.resolve("manifest.json");
             Files.writeString(manifestFile,Json.GSON.toJson(manifest),StandardCharsets.UTF_8);
             String manifestHash=Media.hash(manifestFile),contentHash=contentHash(s,items),now=Json.now();
@@ -218,6 +261,32 @@ final class DatasetVersions implements AutoCloseable {
             if(temporary!=null)deleteDirectory(temporary);
             fail(versionId,buildId,failure);
         }finally{cancelled.remove(buildId);}
+    }
+
+    /**
+     * 采样输入只包含训练集项：调用方已按来源组确定划分，采样只在训练集内部抽取子集。
+     * 近重复折叠复用既有素材筛选结果，缺少分析就如实报告「未分析」，不假装折叠过。
+     */
+    private DatasetSelection.Sampled sample(JsonObject selection,Source s,Map<String,String> groups,Map<String,String> splits,String projectId){
+        JsonObject sampling=Json.object(selection,"sampling");
+        List<JsonObject> train=new ArrayList<>();
+        for(JsonObject asset:s.assets){
+            String id=Json.required(asset,"id");
+            if(!"train".equals(splits.get(groups.get(id))))continue;
+            JsonArray classes=new JsonArray();
+            for(JsonElement e:Json.array(asset,"annotations"))classes.add(Json.required(e.getAsJsonObject(),"classId"));
+            JsonObject item=Json.obj("assetId",id,"contentHash",Json.str(asset,"contentHash",""),"status",Json.str(asset,"status",""),
+                "objects",Json.array(asset,"annotations").size(),"sourceGroup",groups.get(id),"classIds",classes);
+            if(s.classify&&!classes.isEmpty())item.addProperty("classId",classes.get(0).getAsString());
+            train.add(item);
+        }
+        JsonArray pairs=new JsonArray();String status="off";
+        if(Json.str(sampling,"nearDuplicate","off").equals("fold")){
+            JsonObject screening=exporter.mediaJobs==null?null:exporter.mediaJobs.exportInspection(projectId,s.assets);
+            if(screening==null)status="not_analyzed";
+            else{status=Json.str(screening,"status","not_analyzed");pairs=Json.array(screening,"nearPairs");}
+        }
+        return DatasetSelection.sample(selection,train,pairs,status);
     }
 
     private static JsonObject excludedItem(JsonObject asset,int position,String reason){
@@ -260,7 +329,8 @@ final class DatasetVersions implements AutoCloseable {
     }
 
     private static JsonObject manifest(String versionId,Source s,JsonObject recipe,String recipeHash,JsonArray manifestItems,
-            List<JsonObject> items,int groups,JsonObject inspection,JsonArray auxiliary,long objects,long bytes,Map<String,long[]> counters){
+            List<JsonObject> items,int groups,JsonObject inspection,JsonArray auxiliary,long objects,long bytes,Map<String,long[]> counters,
+            JsonObject samplingReport){
         JsonArray actual=new JsonArray();
         for(String split:SPLITS)actual.add(Json.obj("split",split,"images",counters.get(split)[0],"objects",counters.get(split)[1]));
         Map<String,Integer> reasons=new TreeMap<>();int excluded=0;
@@ -273,7 +343,8 @@ final class DatasetVersions implements AutoCloseable {
             "projectId",s.projectId,"taskType",s.taskType,"classes",classTable(s),"keypointNames",s.keypointNames.deepCopy(),
             "lineage",Json.obj("sourceKind","project","parentVersionId",null,"annotationScope",s.scope),
             "recipe",recipe,"recipeHash",recipeHash,
-            "selection",Json.obj("annotationScope",s.scope,"excluded",excluded,"excludedByReason",Json.GSON.toJsonTree(reasons)),
+            "selection",Json.obj("annotationScope",s.scope,"filters",Json.object(Json.object(recipe,"selection"),"filters"),
+                "excluded",excluded,"excludedByReason",Json.GSON.toJsonTree(reasons),"sampling",samplingReport),
             "transform",new JsonObject(),
             "split",Json.obj("mode",SPLIT_RULE,"rule",SPLIT_RULE,"train",DEFAULT_RATIO[0],"val",DEFAULT_RATIO[1],"test",DEFAULT_RATIO[2],
                 "seed",Json.str(Json.object(recipe,"split"),"seed",""),"groups",groups,"actual",actual),

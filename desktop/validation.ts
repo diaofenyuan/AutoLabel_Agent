@@ -436,6 +436,9 @@ const schemas: Record<string, z.ZodType> = {
   'storage.paths.probe': z.strictObject({ path: z.string().min(1).max(32767) }),
   'storage.paths.migration': empty,
   'storage.paths.migrate': empty,
+  // 训练产物目录同样走专用命令：空值表示回到数据目录内的默认位置。
+  'training.root.status': empty,
+  'training.root.save': z.strictObject({ path: z.string().max(32767).nullable() }),
   'update.status': empty, 'update.check': empty, 'update.download': empty, 'update.cancel': empty, 'update.install': empty,
   'chat.cancel': z.strictObject({ sessionId: id }),
   // 对话记录由桌面主进程管理；Agent 工具白名单不包含其中任何命令。

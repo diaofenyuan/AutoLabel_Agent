@@ -171,6 +171,18 @@ function validateSet(kinds: Record<StoragePathKind, string>, dataDirectory: stri
   }
 }
 
+/**
+ * 训练产物目录保存前校验：绝对路径、非磁盘根、可建可写，且不得是当前数据目录或把它包含进来。
+ * 训练任务删除时会清理自己的任务目录，不能让这个路径把数据目录一起卷进去。
+ */
+export async function validateTrainingRoot(target: unknown, dataDirectory: string): Promise<string> {
+  const resolved = assertUsablePath(target, '训练产物目录');
+  const base = path.resolve(dataDirectory).toLowerCase(), candidate = resolved.toLowerCase();
+  if (candidate === base || base.startsWith(candidate + path.sep)) throw new DesktopError('TRAINING_ROOT_CONFLICT', '训练产物目录不能是当前数据目录，也不能包含数据目录');
+  await ensureWritable(resolved, '训练产物目录');
+  return resolved;
+}
+
 export interface StoragePathUpdate {
   storageRoot?: string | null;
   datasetsRoot?: string | null;
