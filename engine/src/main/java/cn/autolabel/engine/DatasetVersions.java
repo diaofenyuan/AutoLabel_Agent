@@ -1,6 +1,9 @@
 package cn.autolabel.engine;
 
 import com.google.gson.*;
+import java.awt.geom.Area;
+import java.awt.geom.Rectangle2D;
+import java.awt.image.BufferedImage;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.security.MessageDigest;
@@ -24,8 +27,6 @@ final class DatasetVersions implements AutoCloseable {
     private static final Set<String> LABELED=Set.of("candidate","modified","confirmed");
     private static final Set<String> SCOPES=Set.of("labeled","confirmed");
     private static final Set<String> SPLITS=Set.of("train","val","test");
-    /** 划分规则名写入清单，消费端据此复算而不是去猜目录结构。 */
-    private static final String SPLIT_RULE="ratio-source-group-v1";
 
     private final Store store;private final Projects projects;private final Exporter exporter;
     private final ExecutorService builds=Executors.newVirtualThreadPerTaskExecutor();
@@ -36,7 +37,8 @@ final class DatasetVersions implements AutoCloseable {
     // ===== 数据源解析 =====
 
     private static final class Source {
-        String projectId,taskType,scope;JsonObject project;boolean classify;
+        String projectId,taskType,scope;JsonObject project;boolean classify;JsonObject transform=new JsonObject();
+        Set<String> omit=Set.of();
         List<JsonObject> assets=new ArrayList<>(),excluded=new ArrayList<>();
         Map<String,Path> paths=new LinkedHashMap<>();
         JsonArray classes=new JsonArray(),keypointNames=new JsonArray();
@@ -44,15 +46,21 @@ final class DatasetVersions implements AutoCloseable {
     }
 
     /** 按素材标识顺序解析，保证同一输入多次解析得到完全相同的项序（I6 的前提）。 */
-    private Source resolve(String projectId,String scope,JsonObject selection)throws Exception{
+    private Source resolve(String projectId,String scope,JsonObject selection,JsonObject transform)throws Exception{
         projects.get(projectId);
         return store.read(c->{
-            Source s=new Source();s.projectId=projectId;s.scope=scope;
+            Source s=new Source();s.projectId=projectId;s.scope=scope;s.transform=transform;
             s.project=Store.document(c,"projects",projectId);
             s.taskType=Json.required(s.project,"taskType");s.classify=s.taskType.equals("classify");
             for(JsonElement e:Json.array(s.project,"classes"))s.classes.add(e.getAsJsonObject());
-            for(int i=0;i<s.classes.size();i++)s.classIndex.put(Json.required(s.classes.get(i).getAsJsonObject(),"id"),i);
             s.keypointNames=Json.array(Json.object(s.project,"settings"),"keypointNames").deepCopy();
+            if(DatasetTransforms.enabled(transform)){
+                s.classes=DatasetTransforms.effectiveClasses(s.classes,Json.object(transform,"remap"));
+                Set<String> omit=new LinkedHashSet<>();
+                for(JsonElement e:Json.array(Json.object(transform,"remap"),"omit"))omit.add(e.getAsString());
+                s.omit=omit;
+            }
+            for(int i=0;i<s.classes.size();i++)s.classIndex.put(Json.required(s.classes.get(i).getAsJsonObject(),"id"),i);
             DatasetSelection.Context context=DatasetSelection.context(c,projectId);
             List<JsonObject> candidates=new ArrayList<>();List<Path> paths=new ArrayList<>();
             for(JsonObject row:Store.rows(c,"SELECT id,data,path FROM assets WHERE project_id=? ORDER BY id",projectId)){
@@ -91,20 +99,147 @@ final class DatasetVersions implements AutoCloseable {
     // ===== 预检 =====
 
     JsonObject preflight(JsonObject p)throws Exception{
-        keys(p,"projectId","annotationScope","selection","seed");
+        keys(p,"projectId","annotationScope","selection","seed","transform","split");
         String scope=scope(p);JsonObject selection=DatasetSelection.normalize(Json.object(p,"selection"));
+        JsonObject transform=DatasetTransforms.normalize(Json.object(p,"transform"));
+        JsonObject splitRecipe=DatasetSplitting.normalize(Json.object(p,"split"));
         String projectId=string(p,"projectId",128),seed=p.has("seed")?string(p,"seed",256):"preview";
-        Source s=resolve(projectId,scope,selection);
+        Source s=resolve(projectId,scope,selection,transform);
         JsonObject inspection=inspect(s);
         long blocking=blocking(Json.array(inspection,"issues"));
         JsonObject reasons=reasonCounts(s);
+        JsonObject preview=transformPreview(transform,s,splitRecipe,seed);
+        if(flipNeedsSymmetry(s)){
+            Json.array(inspection,"issues").add(Json.obj("annotationId",null,"severity","error","code","dataset_augment_flip_requires_symmetry",
+                "field","augment.flip","message","姿态任务的翻转增强需要先在项目设置中定义关键点对称映射。"));
+            blocking++;
+        }
+        validateExplicit(s,splitRecipe);
+        blocking+=leakIssues(s,splitRecipe,seed,Json.array(inspection,"issues"));
+        if(Json.number(preview,"estimatedItems",0)+s.excluded.size()>MAX_ITEMS){
+            Json.array(inspection,"issues").add(Json.obj("annotationId",null,"severity","error","code","dataset_too_large",
+                "field","transform","message","按当前转换估算的版本项数超过上限，请减小平铺规模或先过滤素材。"));
+            blocking++;
+        }
         return Json.obj("projectId",s.projectId,"taskType",s.taskType,"annotationScope",scope,
             "assets",s.assets.size(),"excluded",s.excluded.size(),"groups",distinctGroups(s),
-            "classes",classTable(s),"keypointNames",s.keypointNames.deepCopy(),"selection",selection,
+            "classes",classTable(s),"keypointNames",s.keypointNames.deepCopy(),"selection",selection,"transform",transform,"split",splitRecipe,
             "excludedByReason",reasons,"excludedTotal",total(reasons),
-            "sampling",samplingPreview(selection,s,seed),
-            "split",Json.obj("rule",SPLIT_RULE,"train",DEFAULT_RATIO[0],"val",DEFAULT_RATIO[1],"test",DEFAULT_RATIO[2]),
+            "sampling",samplingPreview(selection,s,seed),"transformPreview",preview,
+            "splitPreview",splitPreview(splitRecipe,s,seed),
             "inspection",inspection,"blocking",blocking,"canBuild",blocking==0);
+    }
+
+    /** 划分预览：按预览种子走一遍分配，给出各划分组数、实际比例与未达标说明（E-6）。 */
+    private static JsonObject splitPreview(JsonObject splitRecipe,Source s,String seed){
+        Map<String,String> groups=Exporter.groups(s.assets);
+        double[] ratio=DatasetSplitting.ratios(splitRecipe);
+        List<String> order=DatasetSplitting.orderedGroups(groups,seed,DatasetSplitting.algorithm(splitRecipe));
+        Map<String,String> splits=DatasetSplitting.assignGroups(order,ratio,Json.object(splitRecipe,"explicit"),groups,seed,DatasetSplitting.algorithm(splitRecipe));
+        long[] actual=new long[3];
+        for(String group:new HashSet<>(splits.values())){}
+        for(String group:splits.values()){
+            int index=group.equals("train")?0:group.equals("val")?1:2;actual[index]++;
+        }
+        int[] target=DatasetSplitting.targetCounts(order.size(),ratio);
+        JsonArray unmet=new JsonArray();
+        for(int i=0;i<3;i++)if(actual[i]!=target[i]){
+            String split=i==0?"train":i==1?"val":"test";
+            unmet.add(Json.obj("split",split,"targetGroups",target[i],"actualGroups",actual[i],
+                "reason","group_granularity"));
+        }
+        return Json.obj("rule",DatasetSplitting.RULE,"algorithm",DatasetSplitting.algorithm(splitRecipe),
+            "groups",order.size(),"actualGroups",Json.obj("train",actual[0],"val",actual[1],"test",actual[2]),
+            "targetGroups",Json.obj("train",target[0],"val",target[1],"test",target[2]),"unmet",unmet);
+    }
+
+    /** 显式清单校验：素材必须存在于当前标注范围（E-5），未知素材逐条报错。 */
+    private static void validateExplicit(Source s,JsonObject splitRecipe){
+        Set<String> known=new HashSet<>();
+        for(JsonObject asset:s.assets)known.add(Json.required(asset,"id"));
+        for(String assetId:Json.object(splitRecipe,"explicit").keySet())
+            if(!known.contains(assetId))throw error(422,"dataset_split_unknown_asset","显式划分清单中的素材不在当前标注范围内："+assetId);
+    }
+
+    /**
+     * 严格防泄漏（E-4）：近重复候选对跨划分即为泄漏。严格模式下作为阻断项返回 1；
+     * 非严格模式降级为提示。近重复检查未完整覆盖时如实标注，不假装核验过。
+     */
+    private int leakIssues(Source s,JsonObject splitRecipe,String seed,JsonArray issues){
+        Map<String,String> groups=Exporter.groups(s.assets);
+        double[] ratio=DatasetSplitting.ratios(splitRecipe);
+        List<String> order=DatasetSplitting.orderedGroups(groups,seed,DatasetSplitting.algorithm(splitRecipe));
+        Map<String,String> splits=DatasetSplitting.assignGroups(order,ratio,Json.object(splitRecipe,"explicit"),groups,seed,DatasetSplitting.algorithm(splitRecipe));
+        JsonObject screening=exporter.mediaJobs==null?null:exporter.mediaJobs.exportInspection(s.projectId,s.assets);
+        if(screening==null||!Json.str(screening,"status","").equals("complete")){
+            issues.add(Json.obj("annotationId",null,"severity","warning","code","screening_not_complete",
+                "field","split.strict","message","近重复检查尚未完整覆盖，跨划分泄漏无法核验。"));
+            return 0;
+        }
+        int leaks=0;
+        for(JsonElement e:Json.array(screening,"nearPairs")){
+            JsonObject pair=e.getAsJsonObject();
+            String left=Json.str(pair,"leftAssetId",""),right=Json.str(pair,"rightAssetId","");
+            String leftGroup=groups.get(left),rightGroup=groups.get(right);
+            if(leftGroup==null||rightGroup==null||leftGroup.equals(rightGroup))continue;
+            String leftSplit=splits.get(leftGroup),rightSplit=splits.get(rightGroup);
+            if(leftSplit==null||rightSplit==null||leftSplit.equals(rightSplit))continue;
+            leaks++;
+            issues.add(Json.obj("annotationId",left,"severity",DatasetSplitting.strict(splitRecipe)?"error":"warning",
+                "code","dataset_split_leak_detected","field","split","message","近重复候选跨划分："+leftSplit+" / "+rightSplit,
+                "relatedAssetId",right));
+        }
+        return DatasetSplitting.strict(splitRecipe)?Math.min(leaks,1):0;
+    }
+
+    /** 转换预览：视图计划按「宽×高」去重计算，给出精确张数与按源字节的体积上界（标注为估算）。 */
+    private static JsonObject transformPreview(JsonObject transform,Source s,JsonObject splitRecipe,String seed){
+        if(!DatasetTransforms.enabled(transform))return Json.obj("enabled",false);
+        JsonObject augment=Json.object(transform,"augment");int multiplier=Json.integer(augment,"multiplier",0);
+        Map<String,Integer> grids=new LinkedHashMap<>();
+        long views=0,bytes=0,trainViews=0;
+        if(multiplier>0){
+            Map<String,String> groups=Exporter.groups(s.assets);
+            double[] ratio=DatasetSplitting.ratios(splitRecipe);
+            List<String> order=DatasetSplitting.orderedGroups(groups,seed,DatasetSplitting.algorithm(splitRecipe));
+            Map<String,String> splits=DatasetSplitting.assignGroups(order,ratio,Json.object(splitRecipe,"explicit"),groups,seed,DatasetSplitting.algorithm(splitRecipe));
+            for(JsonObject asset:s.assets){
+                String assetId=Json.required(asset,"id");
+                if("train".equals(splits.get(groups.get(assetId))))trainViews+=grids.computeIfAbsent(
+                    Json.integer(asset,"width",0)+"x"+Json.integer(asset,"height",0),
+                    k->DatasetTransforms.plan(transform,asset).views().size());
+            }
+        }
+        for(JsonObject asset:s.assets){
+            String key=Json.integer(asset,"width",0)+"x"+Json.integer(asset,"height",0);
+            Integer count=grids.get(key);
+            if(count==null){count=DatasetTransforms.plan(transform,asset).views().size();grids.put(key,count);}
+            views+=count;
+            try{bytes+=Files.size(s.paths.get(Json.required(asset,"id")))*count;}
+            catch(Exception unavailable){bytes+=1024L*1024*count;}
+        }
+        long variants=trainViews*(long)multiplier;
+        return Json.obj("enabled",true,"recipe",transform.deepCopy(),"order","crop,tile,resize,grayscale",
+            "views",views,"variants",variants,"estimatedItems",views+variants,
+            "estimatedBytes",bytes+variants*(bytes/Math.max(1,views)),
+            "note","平铺与缩放场景下张数为精确计划值、磁盘占用为按源文件推算的估算值；增强变体只作用于训练集。");
+    }
+
+    /** 姿态翻转的前置校验（D-3）：没有关键点对称映射时禁止启用翻转，给出原因而不是静默镜像。 */
+    private static Map<String,String> poseSymmetry(JsonObject project){
+        Map<String,String> result=new HashMap<>();
+        for(JsonElement e:Json.array(Json.object(project,"settings"),"keypointSymmetry")){
+            JsonArray pair=e.getAsJsonArray();
+            if(pair.size()!=2)throw error(400,"dataset_symmetry_invalid","关键点对称映射必须成对给出。");
+            result.put(pair.get(0).getAsString(),pair.get(1).getAsString());
+            result.put(pair.get(1).getAsString(),pair.get(0).getAsString());
+        }
+        return result;
+    }
+
+    private static boolean flipNeedsSymmetry(Source s){
+        String flip=Json.str(Json.object(s.transform,"augment"),"flip","none");
+        return s.taskType.equals("pose")&&!flip.isEmpty()&&!flip.equals("none")&&poseSymmetry(s.project).isEmpty();
     }
 
     private static JsonObject reasonCounts(Source s){
@@ -117,7 +252,9 @@ final class DatasetVersions implements AutoCloseable {
     /** 提交前的采样预估：按预览种子走一遍划分，给出会落入训练集的张数；磁盘占用留到生成时实测。 */
     private static JsonObject samplingPreview(JsonObject selection,Source s,String seed){
         JsonObject sampling=Json.object(selection,"sampling");
-        Map<String,String> groups=Exporter.groups(s.assets),splits=assign(orderedGroups(groups,seed));
+        Map<String,String> groups=Exporter.groups(s.assets);
+        List<String> order=DatasetSplitting.orderedGroups(groups,seed,DatasetSplitting.ALGORITHM_SOURCE_GROUP);
+        Map<String,String> splits=DatasetSplitting.assignGroups(order,DEFAULT_RATIO,new JsonObject(),groups,seed,DatasetSplitting.ALGORITHM_SOURCE_GROUP);
         long train=0;
         for(JsonObject asset:s.assets)if("train".equals(splits.get(groups.get(Json.required(asset,"id")))))train++;
         return Json.obj("mode",Json.str(sampling,"mode","none"),"nearDuplicate",Json.str(sampling,"nearDuplicate","off"),
@@ -136,17 +273,22 @@ final class DatasetVersions implements AutoCloseable {
     // ===== 生成 =====
 
     JsonObject create(JsonObject p)throws Exception{
-        keys(p,"projectId","name","annotationScope","seed","selection");
+        keys(p,"projectId","name","annotationScope","seed","selection","transform","split");
         String projectId=string(p,"projectId",128),scope=scope(p);
         String name=p.has("name")?string(p,"name",MAX_NAME):"";
         String seed=p.has("seed")&&Json.str(p,"seed","").strip().length()>0?string(p,"seed",256):Json.id();
         JsonObject selection=DatasetSelection.withSeed(DatasetSelection.normalize(Json.object(p,"selection")),seed);
-        Source s=resolve(projectId,scope,selection);
+        JsonObject transform=DatasetTransforms.normalize(Json.object(p,"transform"));
+        JsonObject splitRecipe=DatasetSplitting.normalize(Json.object(p,"split"));
+        Source s=resolve(projectId,scope,selection,transform);
+        if(flipNeedsSymmetry(s))
+            throw error(422,"dataset_augment_flip_requires_symmetry","姿态任务的翻转增强需要先在项目设置中定义关键点对称映射。");
         JsonObject inspection=inspect(s);
         if(blocking(Json.array(inspection,"issues"))>0)
             throw new ApiError(422,"dataset_version_blocked","数据集体检存在阻断问题，请先处理后重新生成版本。",inspection);
         if(s.assets.isEmpty())throw error(422,"dataset_version_empty","当前标注范围内没有可用素材，无法生成版本。");
-        JsonObject recipe=recipe(scope,seed,selection);String recipeHash=hashText(recipe.toString());
+        validateExplicit(s,splitRecipe);
+        JsonObject recipe=recipe(scope,seed,selection,transform,splitRecipe);String recipeHash=hashText(recipe.toString());
         String id=Json.id(),buildId=Json.id(),now=Json.now();
         store.tx(c->{
             int next=(int)Json.number(Store.one(c,"SELECT COALESCE(MAX(version),0)+1 AS n FROM dataset_versions WHERE project_id=?",projectId),"n",1);
@@ -164,79 +306,212 @@ final class DatasetVersions implements AutoCloseable {
         return get(Json.obj("versionId",id));
     }
 
-    private static JsonObject recipe(String scope,String seed,JsonObject selection){
-        return Json.obj("annotationScope",scope,"selection",selection,"transform",new JsonObject(),
-            "split",Json.obj("mode",SPLIT_RULE,"train",DEFAULT_RATIO[0],"val",DEFAULT_RATIO[1],"test",DEFAULT_RATIO[2],"seed",seed));
+    private static JsonObject recipe(String scope,String seed,JsonObject selection,JsonObject transform,JsonObject splitRecipe){
+        JsonObject split=splitRecipe.deepCopy();
+        split.addProperty("rule",DatasetSplitting.RULE);
+        split.addProperty("seed",seed);
+        return Json.obj("annotationScope",scope,"selection",selection,"transform",transform,"split",split);
     }
 
     private void run(String versionId,String buildId,String projectId,String scope,JsonObject recipe,String recipeHash,String seed,JsonObject selection){
         Path temporary=null;
         try{
-            Source s=resolve(projectId,scope,selection);
-            int total=s.assets.size()+s.excluded.size();
-            progress(buildId,"scanning",0,total);
+            JsonObject transform=Json.object(recipe,"transform");
+            boolean transformed=DatasetTransforms.enabled(transform);
+            String boundaries=Json.str(transform,"boundaries",DatasetTransforms.BOUNDARY_CLIP);
+            JsonObject augment=Json.object(transform,"augment");int multiplier=Json.integer(augment,"multiplier",0);
+            Source s=resolve(projectId,scope,selection,transform);
+            Map<String,String> symmetry=poseSymmetry(s.project);
             JsonObject inspection=inspect(s);
             if(blocking(Json.array(inspection,"issues"))>0)
                 throw new ApiError(422,"dataset_version_blocked","数据集体检存在阻断问题，版本生成已停止。",inspection);
+            JsonObject splitRecipe=Json.object(recipe,"split");
+            double[] ratio=DatasetSplitting.ratios(splitRecipe);
+            String splitAlgorithm=DatasetSplitting.algorithm(splitRecipe);
             Map<String,String> groups=Exporter.groups(s.assets);
-            List<String> order=orderedGroups(groups,seed);
-            Map<String,String> splits=assign(order);
+            List<String> order=DatasetSplitting.orderedGroups(groups,seed,splitAlgorithm);
+            Map<String,String> splits=DatasetSplitting.assignGroups(order,ratio,Json.object(splitRecipe,"explicit"),groups,seed,splitAlgorithm);
+            // 严格防泄漏（E-4）：近重复候选跨划分时阻断生成，非严格模式仅记录提示。
+            JsonArray leakBuffer=new JsonArray();
+            if(leakIssues(s,splitRecipe,seed,leakBuffer)>0)
+                throw error(422,"dataset_split_leak_detected","严格防泄漏模式下存在跨划分的近重复候选，已停止生成。");
             // 采样只作用于训练集：验证集与测试集保持原始内容，跨版本指标才可比（I5）。
             DatasetSelection.Sampled sampled=sample(selection,s,groups,splits,projectId);
             Set<String> dropped=new HashSet<>();Map<String,JsonObject> byId=new HashMap<>();
             for(JsonObject item:sampled.dropped())dropped.add(Json.required(item,"assetId"));
             for(JsonObject asset:s.assets)byId.put(Json.required(asset,"id"),asset);
+            // 视图计划按「宽×高」去重估算总量与体积上界；逐素材在复制阶段再展开完整计划。
+            Map<String,Integer> grids=new LinkedHashMap<>();long viewTotal=0,variantTotal=0,expected=0;
+            for(JsonObject asset:s.assets){
+                String assetId=Json.required(asset,"id");
+                long size=Files.size(s.paths.get(assetId));
+                if(!transformed||dropped.contains(assetId)){if(!transformed)expected+=size;continue;}
+                String split=splits.get(groups.get(assetId));if(split==null)split="train";
+                String key=Json.integer(asset,"width",0)+"x"+Json.integer(asset,"height",0);
+                Integer count=grids.get(key);
+                if(count==null){count=DatasetTransforms.plan(transform,asset).views().size();grids.put(key,count);}
+                viewTotal+=count;expected+=size*count;
+                if(split.equals("train")&&multiplier>0){variantTotal+=count*(long)multiplier;expected+=size*count*multiplier;}
+            }
+            int total=(int)(s.excluded.size()+sampled.dropped().size()+viewTotal+variantTotal);
+            progress(buildId,"scanning",0,total);
             progress(buildId,"splitting",0,total);
             Path base=versionsDirectory();Files.createDirectories(base);
             temporary=base.resolve(".autolabel-partial-"+versionId);Path target=base.resolve(versionId);
             Files.createDirectory(temporary);
-            long expected=0;for(Path path:s.paths.values())expected+=Files.size(path);
             store.requireSpace(expected+128L*1024*1024);
             List<JsonObject> items=new ArrayList<>();JsonArray manifestItems=new JsonArray();
             Map<String,long[]> counters=new LinkedHashMap<>();for(String split:SPLITS)counters.put(split,new long[2]);
-            long bytes=0,objects=0;int position=0;
+            long bytes=0,objects=0;int position=0,processed=0,rejectedViews=0;
             // 被排除项先入库：它们决定「遗漏范围」，position 是稳定项序。
-            for(JsonObject entry:s.excluded)items.add(excludedItem(Json.object(entry,"asset"),++position,Json.required(entry,"reasonCode")));
-            for(JsonObject item:sampled.dropped())items.add(excludedItem(byId.get(Json.required(item,"assetId")),++position,
-                Json.str(item,"reasonCode",DatasetSelection.SAMPLED)));
+            for(JsonObject entry:s.excluded){items.add(excludedItem(Json.object(entry,"asset"),++position,Json.required(entry,"reasonCode")));processed++;}
+            for(JsonObject item:sampled.dropped()){items.add(excludedItem(byId.get(Json.required(item,"assetId")),++position,
+                Json.str(item,"reasonCode",DatasetSelection.SAMPLED)));processed++;}
             for(JsonObject asset:s.assets){
                 if(cancelled.contains(buildId))throw error(409,"dataset_version_cancelled","版本生成已取消。");
                 String assetId=Json.required(asset,"id"),contentHash=Json.required(asset,"contentHash");
                 if(dropped.contains(assetId))continue;
                 String split=splits.get(groups.get(assetId));if(split==null)split="train";
-                Path source=s.paths.get(assetId),copy=temporary.resolve(imagePath(s,asset,split,assetId,source));
-                Files.createDirectories(copy.getParent());
+                Path source=s.paths.get(assetId);
+                if(!transformed){
+                    Path copy=temporary.resolve(imagePath(s,asset,split,assetId,source,null));
+                    Files.createDirectories(copy.getParent());
+                    if(!Media.hash(source).equals(contentHash))throw error(409,"dataset_source_changed","基准图片内容在生成期间被改变，版本生成已停止。");
+                    Files.copy(source,copy);
+                    if(!Media.hash(copy).equals(contentHash))throw error(500,"dataset_copy_failed","版本图片副本校验失败。");
+                    String image=relative(temporary,copy),label=null,labelHash=null;bytes+=Files.size(copy);
+                    if(!s.classify){
+                        String text=ExportWriters.yolo(asset,s.taskType,s.classIndex,PRECISION);
+                        Path labelFile=temporary.resolve("labels").resolve(split).resolve(assetId+".txt");
+                        Files.createDirectories(labelFile.getParent());Files.writeString(labelFile,text,StandardCharsets.UTF_8);
+                        label=relative(temporary,labelFile);labelHash=Media.hash(labelFile);bytes+=Files.size(labelFile);
+                    }
+                    int count=Json.array(asset,"annotations").size();objects+=count;
+                    long[] counter=counters.get(split);counter[0]++;counter[1]+=count;
+                    JsonObject item=Json.obj("position",++position,"assetId",assetId,"outcome","included","split",split,
+                        "sourceGroup",groups.get(assetId),"image",image,"contentHash",contentHash,"width",Json.integer(asset,"width",0),
+                        "height",Json.integer(asset,"height",0),"objects",count,"annotationVersion",Json.integer(asset,"version",0),
+                        "name",Json.str(asset,"name",assetId),"bytes",Files.size(copy));
+                    if(s.classify&&!Json.array(asset,"annotations").isEmpty()){
+                        String classId=Json.required(Json.array(asset,"annotations").get(0).getAsJsonObject(),"classId");
+                        item.addProperty("classId",classId);item.addProperty("className",className(s,classId));
+                    }
+                    if(label!=null){item.addProperty("label",label);item.addProperty("labelHash",labelHash);}
+                    items.add(item);manifestItems.add(item);
+                    if(++processed%32==0)progress(buildId,"copying",processed,total);
+                    continue;
+                }
+                // 转换路径：先做类别省略与跨片判定的整体过滤，再逐视图渲染与标注重建。
                 if(!Media.hash(source).equals(contentHash))throw error(409,"dataset_source_changed","基准图片内容在生成期间被改变，版本生成已停止。");
-                Files.copy(source,copy);
-                if(!Media.hash(copy).equals(contentHash))throw error(500,"dataset_copy_failed","版本图片副本校验失败。");
-                String image=relative(temporary,copy),label=null,labelHash=null;bytes+=Files.size(copy);
-                if(!s.classify){
-                    String text=ExportWriters.yolo(asset,s.taskType,s.classIndex,PRECISION);
-                    Path labelFile=temporary.resolve("labels").resolve(split).resolve(assetId+".txt");
-                    Files.createDirectories(labelFile.getParent());Files.writeString(labelFile,text,StandardCharsets.UTF_8);
-                    label=relative(temporary,labelFile);labelHash=Media.hash(labelFile);bytes+=Files.size(labelFile);
+                BufferedImage baselineImage=DatasetTransforms.decode(source,Json.integer(asset,"width",0),Json.integer(asset,"height",0));
+                JsonArray annotations=new JsonArray();int omitted=0;
+                for(JsonElement e:Json.array(asset,"annotations")){
+                    JsonObject annotation=e.getAsJsonObject();
+                    if(s.omit.contains(Json.str(annotation,"classId","")))omitted++;else annotations.add(annotation.deepCopy());
                 }
-                int count=Json.array(asset,"annotations").size();objects+=count;
-                long[] counter=counters.get(split);counter[0]++;counter[1]+=count;
-                JsonObject item=Json.obj("position",++position,"assetId",assetId,"outcome","included","split",split,
-                    "sourceGroup",groups.get(assetId),"image",image,"contentHash",contentHash,"width",Json.integer(asset,"width",0),
-                    "height",Json.integer(asset,"height",0),"objects",count,"annotationVersion",Json.integer(asset,"version",0),
-                    "name",Json.str(asset,"name",assetId),"bytes",Files.size(copy));
-                if(s.classify&&!Json.array(asset,"annotations").isEmpty()){
-                    String classId=Json.required(Json.array(asset,"annotations").get(0).getAsJsonObject(),"classId");
-                    item.addProperty("classId",classId);item.addProperty("className",className(s,classId));
+                Set<String> crossSkipped=Set.of();int crossCount=0;
+                if(transform.has("tile")&&Json.str(transform,"crossTile",DatasetTransforms.CROSS_CLIP).equals(DatasetTransforms.CROSS_SKIP)&&!annotations.isEmpty()){
+                    DatasetTransforms.Plan crossPlan=DatasetTransforms.plan(transform,asset);
+                    crossSkipped=crossTileObjects(crossPlan,annotations);crossCount=crossSkipped.size();
                 }
-                if(label!=null){item.addProperty("label",label);item.addProperty("labelHash",labelHash);}
-                items.add(item);manifestItems.add(item);
-                if(position%32==0)progress(buildId,"copying",position,total);
+                JsonArray effective=new JsonArray();
+                for(JsonElement e:annotations)if(!crossSkipped.contains(Json.required(e.getAsJsonObject(),"id")))effective.add(e.getAsJsonObject());
+                DatasetTransforms.Plan plan=DatasetTransforms.plan(transform,asset);
+                JsonArray views=plan.views();int viewCount=views.size(),viewIndex=0;
+                for(JsonElement v:views){
+                    JsonObject view=v.getAsJsonObject();String viewId=Json.required(view,"viewId");
+                    DatasetTransforms.Rebuild rebuild=DatasetTransforms.forward(plan.geometry(),viewId,s.project,effective,boundaries);
+                    if(rebuild.rejected()){
+                        JsonObject rejected=Json.obj("position",++position,"assetId",assetId,"viewId",viewId,"outcome","filtered_out",
+                            "split",split,"sourceGroup",groups.get(assetId),"reasonCode","transform_boundary_rejected",
+                            "viewIndex",viewIndex,"viewCount",viewCount,"name",Json.str(asset,"name",assetId));
+                        items.add(rejected);processed++;rejectedViews++;continue;
+                    }
+                    BufferedImage rendered=DatasetTransforms.render(baselineImage,transform,view);
+                    Path copy=temporary.resolve(imagePath(s,asset,split,assetId,source,viewId));
+                    DatasetTransforms.writePng(rendered,copy);
+                    String image=relative(temporary,copy),viewHash=Media.hash(copy),label=null,labelHash=null;bytes+=Files.size(copy);
+                    int width=Json.integer(view,"width",rendered.getWidth()),height=Json.integer(view,"height",rendered.getHeight());
+                    if(!s.classify){
+                        JsonObject pseudo=Json.obj("width",width,"height",height,"annotations",rebuild.annotations());
+                        String text=ExportWriters.yolo(pseudo,s.taskType,s.classIndex,PRECISION);
+                        Path labelFile=temporary.resolve("labels").resolve(split).resolve(assetId+"_"+viewId+".txt");
+                        Files.createDirectories(labelFile.getParent());Files.writeString(labelFile,text,StandardCharsets.UTF_8);
+                        label=relative(temporary,labelFile);labelHash=Media.hash(labelFile);bytes+=Files.size(labelFile);
+                    }
+                    int count=rebuild.annotations().size();objects+=count;
+                    long[] counter=counters.get(split);counter[0]++;counter[1]+=count;
+                    JsonObject item=Json.obj("position",++position,"assetId",assetId,"viewId",viewId,"viewIndex",viewIndex,"viewCount",viewCount,
+                        "outcome","included","split",split,"sourceGroup",groups.get(assetId),"image",image,"contentHash",viewHash,
+                        "width",width,"height",height,"objects",count,"annotationVersion",Json.integer(asset,"version",0),
+                        "name",Json.str(asset,"name",assetId),"bytes",Files.size(copy));
+                    if(omitted>0)item.addProperty("omittedObjects",omitted);
+                    if(crossCount>0)item.addProperty("crossTileSkipped",crossCount);
+                    if(!rebuild.issues().isEmpty()){
+                        JsonArray issueRecords=new JsonArray();
+                        for(var entry:rebuild.issues().entrySet())issueRecords.add(Json.obj("code",entry.getKey(),"count",entry.getValue()));
+                        item.add("issues",issueRecords);
+                    }
+                    if(s.classify&&!rebuild.annotations().isEmpty()){
+                        String classId=Json.required(rebuild.annotations().get(0).getAsJsonObject(),"classId");
+                        item.addProperty("classId",classId);item.addProperty("className",className(s,classId));
+                    }
+                    if(label!=null){item.addProperty("label",label);item.addProperty("labelHash",labelHash);}
+                    items.add(item);manifestItems.add(item);
+                    viewIndex++;
+                    if(++processed%32==0)progress(buildId,"copying",processed,total);
+                    // 增强（阶段 D）：只对训练集视图生成变体；变体继承视图划分并逐项记录（I5、D-5）。
+                    if(split.equals("train")&&multiplier>0){
+                        for(int variantIndex=1;variantIndex<=multiplier;variantIndex++){
+                            if(cancelled.contains(buildId))throw error(409,"dataset_version_cancelled","版本生成已取消。");
+                            String variantId=viewId+"-aug"+variantIndex;
+                            JsonObject params=DatasetTransforms.variantParams(augment,seed,assetId+"|"+viewId,variantIndex);
+                            BufferedImage variantImage=DatasetTransforms.renderVariant(rendered,params);
+                            Path variantFile=temporary.resolve(imagePath(s,asset,split,assetId,source,variantId));
+                            DatasetTransforms.writePng(variantImage,variantFile);
+                            String variantHash=Media.hash(variantFile);bytes+=Files.size(variantFile);
+                            JsonArray variantAnnotations=new JsonArray();int cutoutDropped=0,geometryDropped=0;
+                            for(JsonElement ae:rebuild.annotations()){
+                                JsonObject mapped=DatasetTransforms.mapVariantAnnotation(ae.getAsJsonObject(),params,width,height,symmetry);
+                                if(Json.bool(params,"cutout",false)&&DatasetTransforms.cutoutCoverage(mapped,params,width,height)>=DatasetTransforms.CUTOUT_COVERAGE_PERCENT/100.0){
+                                    cutoutDropped++;continue;
+                                }
+                                try{variantAnnotations.addAll(Annotations.validate(Json.arr(mapped),Json.obj("width",width,"height",height),s.project));}
+                                catch(ApiError invalidGeometry){geometryDropped++;}
+                            }
+                            String variantLabel=null,variantLabelHash=null;
+                            if(!s.classify){
+                                String text=ExportWriters.yolo(Json.obj("width",width,"height",height,"annotations",variantAnnotations),s.taskType,s.classIndex,PRECISION);
+                                Path labelFile=temporary.resolve("labels").resolve(split).resolve(assetId+"_"+variantId+".txt");
+                                Files.createDirectories(labelFile.getParent());Files.writeString(labelFile,text,StandardCharsets.UTF_8);
+                                variantLabel=relative(temporary,labelFile);variantLabelHash=Media.hash(labelFile);bytes+=Files.size(labelFile);
+                            }
+                            int variantObjects=variantAnnotations.size();objects+=variantObjects;
+                            long[] variantCounter=counters.get(split);variantCounter[0]++;variantCounter[1]+=variantObjects;
+                            JsonObject variant=Json.obj("position",++position,"assetId",assetId,"viewId",variantId,"variantIndex",variantIndex,
+                                "parentViewId",viewId,"outcome","variant","split",split,"sourceGroup",groups.get(assetId),
+                                "image",relative(temporary,variantFile),"contentHash",variantHash,"width",width,"height",height,
+                                "objects",variantObjects,"annotationVersion",Json.integer(asset,"version",0),
+                                "name",Json.str(asset,"name",assetId),"bytes",Files.size(variantFile),"augment",params.deepCopy());
+                            if(cutoutDropped>0)variant.addProperty("cutoutDropped",cutoutDropped);
+                            if(geometryDropped>0)variant.addProperty("geometryDropped",geometryDropped);
+                            if(omitted>0)variant.addProperty("omittedObjects",omitted);
+                            if(variantLabel!=null){variant.addProperty("label",variantLabel);variant.addProperty("labelHash",variantLabelHash);}
+                            items.add(variant);manifestItems.add(variant);
+                            if(++processed%32==0)progress(buildId,"copying",processed,total);
+                        }
+                    }
+                }
             }
-            progress(buildId,"copying",position,total);
+            progress(buildId,"copying",processed,total);
             JsonArray auxiliary=new JsonArray();
             if(!s.classify){
                 Path yaml=temporary.resolve("data.yaml");Files.writeString(yaml,yamlText(s),StandardCharsets.UTF_8);
                 auxiliary.add(Json.obj("path","data.yaml","hash",Media.hash(yaml)));
             }
-            JsonObject manifest=manifest(versionId,s,recipe,recipeHash,manifestItems,items,order.size(),inspection,auxiliary,objects,bytes,counters,sampled.report());
+            JsonObject manifest=manifest(versionId,s,recipe,recipeHash,manifestItems,items,order.size(),inspection,auxiliary,objects,bytes,counters,sampled.report(),
+                transformSection(transform,transformed,viewTotal,variantTotal,rejectedViews),
+                splitReport(splitRecipe,order,splits,items,counters));
             Path manifestFile=temporary.resolve("manifest.json");
             Files.writeString(manifestFile,Json.GSON.toJson(manifest),StandardCharsets.UTF_8);
             String manifestHash=Media.hash(manifestFile),contentHash=contentHash(s,items),now=Json.now();
@@ -249,9 +524,9 @@ final class DatasetVersions implements AutoCloseable {
                     Store.update(c,"INSERT INTO dataset_version_items(version_id,position,asset_id,outcome,split,data) VALUES(?,?,?,?,?,?)",
                         versionId,Json.integer(item,"position",0),Json.str(item,"assetId",null),Json.required(item,"outcome"),Json.required(item,"split"),item);
                 Store.update(c,"UPDATE dataset_versions SET status='ready',content_hash=?,manifest_hash=?,completed_at=?,"
-                    +"data=json_set(data,'$.status','ready','$.completedAt',?,'$.summary',json(?),'$.split',json(?),'$.selection',json(?),'$.inspection',json(?)) WHERE id=?",
+                    +"data=json_set(data,'$.status','ready','$.completedAt',?,'$.summary',json(?),'$.split',json(?),'$.selection',json(?),'$.transform',json(?),'$.inspection',json(?)) WHERE id=?",
                     contentHash,manifestHash,now,now,manifest.get("summary").toString(),manifest.get("split").toString(),
-                    manifest.get("selection").toString(),inspection.toString(),versionId);
+                    manifest.get("selection").toString(),manifest.get("transform").toString(),inspection.toString(),versionId);
                 Store.update(c,"UPDATE dataset_version_builds SET status='done',updated_at=?,data=json_set(data,'$.progress',json(?)) WHERE id=?",
                     now,Json.obj("stage","done","done",frozen.size(),"total",frozen.size()).toString(),buildId);
                 Store.event(c,"dataset.version.ready",null,null,null,Json.obj("versionId",versionId,"projectId",projectId,"contentHash",contentHash,"manifestHash",manifestHash));
@@ -294,8 +569,9 @@ final class DatasetVersions implements AutoCloseable {
             "reasonCode",reason,"status",Json.str(asset,"status",""),"name",Json.str(asset,"name",Json.required(asset,"id")));
     }
 
-    private static String imagePath(Source s,JsonObject asset,String split,String assetId,Path source){
-        String extension=TrainingDatasets.suffix(source.getFileName().toString());
+    private static String imagePath(Source s,JsonObject asset,String split,String assetId,Path source,String viewId){
+        // 转换路径全部重编码为 PNG；未转换路径沿用基准图扩展名（导入已统一为 PNG）。
+        String extension=viewId!=null?"png":TrainingDatasets.suffix(source.getFileName().toString());
         if(extension.isEmpty())extension="png";
         String folder="";
         if(s.classify){
@@ -303,36 +579,53 @@ final class DatasetVersions implements AutoCloseable {
             // 分类目录用类别标识而不是展示名：目录名必须唯一且不受重命名影响。
             folder=annotations.isEmpty()?"unlabeled":Json.required(annotations.get(0).getAsJsonObject(),"classId");
         }
-        return "images/"+split+"/"+(folder.isEmpty()?"":folder+"/")+assetId+"."+extension;
+        String base=viewId==null?assetId:assetId+"_"+viewId;
+        return "images/"+split+"/"+(folder.isEmpty()?"":folder+"/")+base+"."+extension;
     }
 
-    /** 确定性排序：按种子与来源组标识的哈希排序，同种子必然得到同一划分（I6）。 */
-    private static List<String> orderedGroups(Map<String,String> groups,String seed){
-        List<String> labels=new ArrayList<>(groups.values().stream().distinct().toList());
-        labels.sort(Comparator.comparing(label->hashText(seed+"|"+label)));
-        return labels;
-    }
+    /** 确定性排序已迁移到 DatasetSplitting.orderedGroups；此处仅保留清单与报告的组装。 */
 
-    /** 以来源组为单位逼近目标比例；组数不足时保证每个非空划分至少一组，实际比例如实写入清单（7.4）。 */
-    private static Map<String,String> assign(List<String> order){
-        int total=order.size();
-        if(total==0)return Map.of();
-        int train,val;
-        if(total<3){train=1;val=total>=2?1:0;}
-        else{
-            train=Math.max(1,Math.min((int)Math.round(total*DEFAULT_RATIO[0]),total-2));
-            val=Math.max(1,Math.min((int)Math.round(total*DEFAULT_RATIO[1]),total-train-1));
+    /** 划分报告（E-6）：目标与实际组数、原图/变体两套口径、未达标说明，全部写入清单。 */
+    private static JsonObject splitReport(JsonObject splitRecipe,List<String> order,Map<String,String> splits,
+            List<JsonObject> items,Map<String,long[]> counters){
+        double[] ratio=DatasetSplitting.ratios(splitRecipe);
+        int[] target=DatasetSplitting.targetCounts(order.size(),ratio);
+        long[] actualGroups=new long[3];
+        for(String split:splits.values()){
+            if(split.equals("train"))actualGroups[0]++;
+            else if(split.equals("val"))actualGroups[1]++;
+            else actualGroups[2]++;
         }
-        Map<String,String> result=new HashMap<>();
-        for(int i=0;i<total;i++)result.put(order.get(i),i<train?"train":i<train+val?"val":"test");
-        return result;
+        long[][] byOutcome=new long[3][2];
+        for(JsonObject item:items){
+            String outcome=Json.str(item,"outcome","");
+            if(!outcome.equals("included")&&!outcome.equals("variant"))continue;
+            String split=Json.required(item,"split");
+            byOutcome[split.equals("train")?0:split.equals("val")?1:2][outcome.equals("variant")?1:0]++;
+        }
+        JsonArray actual=new JsonArray();
+        JsonArray unmet=new JsonArray();
+        String[] names={"train","val","test"};
+        for(int i=0;i<3;i++){
+            actual.add(Json.obj("split",names[i],"originals",byOutcome[i][0],"variants",byOutcome[i][1],
+                "images",byOutcome[i][0]+byOutcome[i][1],"objects",counters.get(names[i])[1]));
+            if(actualGroups[i]!=target[i])unmet.add(Json.obj("split",names[i],"targetGroups",target[i],
+                "actualGroups",actualGroups[i],"reason","group_granularity"));
+        }
+        return Json.obj("rule",DatasetSplitting.RULE,"algorithm",DatasetSplitting.algorithm(splitRecipe),
+            "strict",DatasetSplitting.strict(splitRecipe),
+            "ratios",Json.obj("train",ratio[0],"val",ratio[1],"test",ratio[2]),
+            "seed",Json.str(splitRecipe,"seed",""),
+            "explicit",Json.object(splitRecipe,"explicit").size(),
+            "groups",order.size(),
+            "targetGroups",Json.obj("train",target[0],"val",target[1],"test",target[2]),
+            "actualGroups",Json.obj("train",actualGroups[0],"val",actualGroups[1],"test",actualGroups[2]),
+            "unmet",unmet,"actual",actual);
     }
 
     private static JsonObject manifest(String versionId,Source s,JsonObject recipe,String recipeHash,JsonArray manifestItems,
             List<JsonObject> items,int groups,JsonObject inspection,JsonArray auxiliary,long objects,long bytes,Map<String,long[]> counters,
-            JsonObject samplingReport){
-        JsonArray actual=new JsonArray();
-        for(String split:SPLITS)actual.add(Json.obj("split",split,"images",counters.get(split)[0],"objects",counters.get(split)[1]));
+            JsonObject samplingReport,JsonObject transformSection,JsonObject splitReport){
         Map<String,Integer> reasons=new TreeMap<>();int excluded=0;
         for(JsonObject item:items)if(Json.str(item,"outcome","").equals("filtered_out")){
             excluded++;reasons.merge(Json.str(item,"reasonCode","unspecified"),1,Integer::sum);
@@ -345,12 +638,50 @@ final class DatasetVersions implements AutoCloseable {
             "recipe",recipe,"recipeHash",recipeHash,
             "selection",Json.obj("annotationScope",s.scope,"filters",Json.object(Json.object(recipe,"selection"),"filters"),
                 "excluded",excluded,"excludedByReason",Json.GSON.toJsonTree(reasons),"sampling",samplingReport),
-            "transform",new JsonObject(),
-            "split",Json.obj("mode",SPLIT_RULE,"rule",SPLIT_RULE,"train",DEFAULT_RATIO[0],"val",DEFAULT_RATIO[1],"test",DEFAULT_RATIO[2],
-                "seed",Json.str(Json.object(recipe,"split"),"seed",""),"groups",groups,"actual",actual),
+            "transform",transformSection,
+            "split",splitReport,
             "summary",Json.obj("images",manifestItems.size(),"excluded",excluded,"objects",objects,"bytes",bytes,"groups",groups,
                 "issues",issues,"errors",errors,"warnings",issues-errors),
             "inspection",inspection,"items",copy,"auxiliaryFiles",auxiliary);
+    }
+
+    /** 清单的转换段：配方与顺序原样固定，生成过程只读原始素材（autoOrient 在导入时已生效）。 */
+    private static JsonObject transformSection(JsonObject transform,boolean transformed,long viewTotal,long variantTotal,int rejectedViews){
+        JsonObject section=transform.deepCopy();
+        section.addProperty("enabled",transformed);
+        if(transformed){
+            section.addProperty("order","crop,tile,resize,grayscale");
+            section.addProperty("autoOrient","applied-at-import");
+            section.addProperty("renderedViews",viewTotal);
+            section.addProperty("renderedVariants",variantTotal);
+            if(rejectedViews>0)section.addProperty("rejectedViews",rejectedViews);
+        }
+        return section;
+    }
+
+    /** 跨片判定：对象区域与多个瓦片覆盖范围相交即视为跨片对象（skip 策略下从所有瓦片剔除并计数）。 */
+    private static Set<String> crossTileObjects(DatasetTransforms.Plan plan,JsonArray annotations){
+        List<Area> coverages=new ArrayList<>();
+        for(JsonElement v:plan.views()){
+            JsonObject coverage=Json.object(v.getAsJsonObject(),"baselineCoverageRect");
+            coverages.add(new Area(new Rectangle2D.Double(Json.decimal(coverage,"x",0),Json.decimal(coverage,"y",0),
+                Json.decimal(coverage,"width",0),Json.decimal(coverage,"height",0))));
+        }
+        Set<String> result=new LinkedHashSet<>();
+        for(JsonElement e:annotations){
+            JsonObject annotation=e.getAsJsonObject();Area shape;
+            if(Json.str(annotation,"type","").equals("detect")||Json.str(annotation,"type","").equals("pose")){
+                JsonObject box=Json.object(annotation,"bbox");
+                shape=new Area(new Rectangle2D.Double(Json.decimal(box,"x",0),Json.decimal(box,"y",0),
+                    Json.decimal(box,"width",0),Json.decimal(box,"height",0)));
+            }else shape=RegionGeometry.region(annotation).shape();
+            int hits=0;
+            for(Area coverage:coverages){
+                Area part=(Area)shape.clone();part.intersect(coverage);
+                if(!part.isEmpty()&&++hits>1){result.add(Json.required(annotation,"id"));break;}
+            }
+        }
+        return result;
     }
 
     private static String contentHash(Source s,List<JsonObject> items){
@@ -428,7 +759,7 @@ final class DatasetVersions implements AutoCloseable {
     private JsonObject view(Connection c,JsonObject record)throws Exception{
         JsonObject result=new JsonObject();
         for(String field:List.of("id","projectId","number","name","status","sourceKind","taskType","annotationScope",
-            "recipe","recipeHash","contentHash","manifestHash","classes","keypointNames","summary","split","selection","createdAt","completedAt","failure"))
+            "recipe","recipeHash","contentHash","manifestHash","classes","keypointNames","summary","split","selection","transform","createdAt","completedAt","failure"))
             if(record.has(field))result.add(field,record.get(field).deepCopy());
         if(record.has("inspection")){
             JsonObject inspection=Json.object(record,"inspection");
@@ -481,23 +812,31 @@ final class DatasetVersions implements AutoCloseable {
             JsonArray added=new JsonArray(),removed=new JsonArray(),changed=new JsonArray();int unchanged=0;
             for(var entry:first.entrySet()){
                 JsonObject other=second.get(entry.getKey());
-                if(other==null){removed.add(entry.getKey());continue;}
+                if(other==null){removed.add(itemRef(entry.getValue()));continue;}
                 JsonArray fields=new JsonArray();
                 for(String field:List.of("contentHash","labelHash","split","sourceGroup","objects"))
                     if(!Objects.equals(entry.getValue().get(field),other.get(field)))fields.add(field);
-                if(fields.isEmpty())unchanged++;else changed.add(Json.obj("assetId",entry.getKey(),"fields",fields));
+                if(fields.isEmpty())unchanged++;else changed.add(itemRef(entry.getValue()));
             }
-            for(String id:second.keySet())if(!first.containsKey(id))added.add(id);
+            for(var entry:second.entrySet())if(!first.containsKey(entry.getKey()))added.add(itemRef(entry.getValue()));
             return Json.obj("versionId",left,"otherVersionId",right,"added",added,"removed",removed,"changed",changed,"unchanged",unchanged,
                 "classesChanged",!Json.array(a,"classes").equals(Json.array(b,"classes"))||!Json.array(a,"keypointNames").equals(Json.array(b,"keypointNames")),
                 "recipeChanged",!Objects.equals(Json.object(a,"recipe"),Json.object(b,"recipe")));
         });
     }
 
+    /** 平铺使一个素材对应多个视图项：对比键为「素材标识+视图标识」。 */
+    private static JsonObject itemRef(JsonObject item){
+        JsonObject ref=Json.obj("assetId",Json.required(item,"assetId"));
+        if(item.has("viewId"))ref.add("viewId",item.get("viewId"));
+        return ref;
+    }
+
     private static Map<String,JsonObject> included(Connection c,String versionId)throws Exception{
         Map<String,JsonObject> result=new LinkedHashMap<>();
-        for(JsonObject row:Store.rows(c,"SELECT data FROM dataset_version_items WHERE version_id=? AND outcome='included' ORDER BY position",versionId)){
-            JsonObject item=Json.parse(Json.required(row,"data"));result.put(Json.required(item,"assetId"),item);
+        for(JsonObject row:Store.rows(c,"SELECT data FROM dataset_version_items WHERE version_id=? AND outcome IN ('included','variant') ORDER BY position",versionId)){
+            JsonObject item=Json.parse(Json.required(row,"data"));
+            result.put(Json.str(item,"assetId","-")+"|"+Json.str(item,"viewId","-"),item);
         }
         return result;
     }
@@ -517,7 +856,8 @@ final class DatasetVersions implements AutoCloseable {
         List<String[]> members=new ArrayList<>();
         for(JsonElement e:Json.array(manifest,"items")){
             JsonObject item=e.getAsJsonObject();
-            if(!Json.str(item,"outcome","").equals("included"))continue;
+            String outcome=Json.str(item,"outcome","");
+            if(!outcome.equals("included")&&!outcome.equals("variant"))continue;
             members.add(new String[]{Json.required(item,"image"),Json.required(item,"contentHash")});
             if(item.has("label"))members.add(new String[]{Json.required(item,"label"),Json.required(item,"labelHash")});
         }
@@ -534,6 +874,23 @@ final class DatasetVersions implements AutoCloseable {
     }
 
     // ===== 目录与辅助 =====
+
+    /** 诊断摘要（F-5）：只含状态计数，不含项目内容与路径。 */
+    JsonObject diagnostics(){
+        return store.read(c->{
+            long building=0,ready=0,failed=0;
+            for(JsonObject row:Store.rows(c,"SELECT status,COUNT(*) AS n FROM dataset_versions GROUP BY status")){
+                long count=Json.number(row,"n",0);
+                switch(Json.str(row,"status","")){
+                    case "building"->building=count;
+                    case "ready"->ready=count;
+                    case "failed","cancelled"->failed+=count;
+                    default->{}
+                }
+            }
+            return Json.obj("building",building,"ready",ready,"failed",failed);
+        });
+    }
 
     private Path versionsDirectory(){return store.root.resolve("datasets").resolve("versions").normalize();}
     /** 版本目录：只有 ready 版本才存在对应内容，消费端引用前必须校验状态。 */

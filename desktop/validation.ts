@@ -179,6 +179,37 @@ const exportFormatFields = { labelFormat: z.enum(['yolo', 'coco', 'voc', 'csv'])
 const exportFormatSpec = z.strictObject(exportFormatFields);
 const trainingName = z.string().trim().min(1).max(200);
 const datasetName = z.string().trim().min(1).max(200);
+// 数据集版本配方（阶段 B~E）：与引擎 DatasetSelection/DatasetTransforms/DatasetSplitting 的规范化字段一致。
+const datasetSelection = z.strictObject({
+  filters: z.strictObject({
+    emptyLabel: z.enum(['keep', 'limit', 'exclude']).optional(), emptyLabelLimit: z.number().int().min(0).max(200000).optional(),
+    includeClasses: z.array(id).max(200).optional(), excludeClasses: z.array(id).max(200).optional(),
+    minWidth: finite.optional(), maxWidth: finite.optional(), minHeight: finite.optional(), maxHeight: finite.optional(),
+    minAspect: finite.optional(), maxAspect: finite.optional(), sourceGroups: z.array(z.string().min(1).max(200)).max(1000).optional(),
+    importedAfter: z.string().max(40).optional(), importedBefore: z.string().max(40).optional(),
+    explicitExclude: z.array(id).max(10000).optional() }).optional(),
+  sampling: z.strictObject({
+    mode: z.enum(['none', 'random', 'stratified']).optional(), ratio: finite.optional(), count: z.number().int().min(1).max(200000).optional(),
+    seed: z.string().max(256).optional(), quotas: z.record(z.string(), z.number().int().min(0).max(200000)).optional(),
+    nearDuplicate: z.enum(['off', 'fold']).optional() }).optional() });
+const datasetTransform = z.strictObject({
+  crop: z.strictObject({ left: finite, top: finite, right: finite, bottom: finite }).optional(),
+  tile: z.strictObject({ mode: z.enum(['rows', 'size', 'ratio']), rows: z.number().int().min(1).max(100).optional(),
+    cols: z.number().int().min(1).max(100).optional(), width: z.number().int().min(1).max(20000).optional(),
+    height: z.number().int().min(1).max(20000).optional(), widthRatio: finite.optional(), heightRatio: finite.optional(),
+    overlapX: z.number().int().min(0).max(19999).optional(), overlapY: z.number().int().min(0).max(19999).optional() }).optional(),
+  resize: z.strictObject({ width: z.number().int().min(1).max(20000), height: z.number().int().min(1).max(20000),
+    fit: z.enum(['contain', 'stretch']).optional(), paddingColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional() }).optional(),
+  grayscale: z.boolean().optional(),
+  remap: z.strictObject({ omit: z.array(id).optional(), rename: z.record(z.string(), z.string().min(1).max(100)).optional() }).optional(),
+  boundaries: z.enum(['clip', 'drop', 'keep', 'reject']).optional(), crossTile: z.enum(['clip', 'skip']).optional(),
+  augment: z.strictObject({ multiplier: z.number().int().min(0).max(4).optional(),
+    flip: z.enum(['none', 'horizontal', 'vertical']).optional(), rotate90: z.boolean().optional(), cutout: z.boolean().optional(),
+    brightness: z.boolean().optional(), contrast: z.boolean().optional(), saturation: z.boolean().optional(), noise: z.boolean().optional() }).optional() });
+const datasetSplit = z.strictObject({
+  algorithm: z.enum(['source-group', 'random-shuffle', 'minimal-move']).optional(),
+  train: finite.optional(), val: finite.optional(), test: finite.optional(), strict: z.boolean().optional(),
+  explicit: z.record(z.string(), z.enum(['train', 'val', 'test'])).optional() });
 const trainingPage = { offset: z.number().int().min(0).max(2147483647).optional(), limit: z.number().int().min(1).max(100).optional() };
 const trainingDevice = z.string().regex(/^(gpu-auto|cpu|0|[1-9][0-9]{0,2})$/);
 const trainingParameters = z.strictObject({
@@ -276,7 +307,7 @@ const schemas: Record<string, z.ZodType> = {
   'export.preflight': z.strictObject(exportFields),
   // outputDir 可缺省：主进程会注入受管「划分好的训练集」目录下的「项目名-时间戳」子目录并授权。
   'export.create': z.strictObject({ ...exportFields, outputDir: z.string().min(1).max(32767).optional(), trainRatio: finite.gt(0).lt(1).optional(),
-    onlyConfirmed: z.boolean().optional(), format: exportFormatSpec.optional() }),
+    onlyConfirmed: z.boolean().optional(), format: exportFormatSpec.optional(), datasetVersionId: id.optional() }),
   'export.list': z.strictObject({ projectId: id }),
   'export.format.list': z.strictObject({ taskType: taskType.optional() }),
   'export.format.get': z.strictObject({ formatId: id, version: resourceVersion.optional() }),
@@ -289,12 +320,13 @@ const schemas: Record<string, z.ZodType> = {
   // 训练参数边界与引擎 TrainingParameters 一一对应；这里只做结构与区间前置校验，语义由引擎复核。
   'training.runtime.get': empty,
   'training.dataset.list': z.strictObject({ projectId: id.optional(), ...trainingPage }),
-  'training.dataset.create': z.strictObject({ projectId: id.optional(), source: z.enum(['upload', 'export']),
+  'training.dataset.create': z.strictObject({ projectId: id.optional(), source: z.enum(['upload', 'export', 'version']),
     trainDir: z.string().min(1).max(32767).optional(), valDir: z.string().min(1).max(32767).optional(),
     yamlDir: z.string().min(1).max(32767).optional(), taskType: taskType.optional(),
     classNames: z.array(trainingName).min(1).max(10000).optional(),
-    keypointNames: z.array(trainingName).min(1).max(64).optional(), exportId: id.optional() })
-    .refine(value => value.source === 'upload' ? !!value.trainDir && !!value.valDir : !!value.exportId && !value.trainDir && !value.valDir,
+    keypointNames: z.array(trainingName).min(1).max(64).optional(), exportId: id.optional(), versionId: id.optional() })
+    .refine(value => value.source === 'upload' ? !!value.trainDir && !!value.valDir
+      : value.source === 'version' ? !!value.versionId && !value.trainDir && !value.valDir : !!value.exportId && !value.trainDir && !value.valDir,
       '数据来源与所选目录不一致'),
   'training.dataset.get': z.strictObject({ datasetId: id }),
   'training.job.preflight': z.strictObject({ datasetId: id, parameters: trainingParameters.optional() }),
@@ -312,13 +344,17 @@ const schemas: Record<string, z.ZodType> = {
   // 登记为本地模型由桌面主进程先解析受管产物路径并授权，再走既有登记入口；渲染层拿不到产物绝对路径。
   'training.job.registerModel': z.strictObject({ jobId: id, checkpoint: z.enum(['best', 'last']), name }),
   // 数据集版本：写操作不进 Agent 工具白名单，只能由用户在界面显式触发。
-  'dataset.version.preflight': z.strictObject({ projectId: id, annotationScope: z.enum(['labeled', 'confirmed']).optional() }),
+  // 选择/转换/划分配方结构与引擎 DatasetSelection/DatasetTransforms/DatasetSplitting 一一对应；这里做结构前置校验，语义由引擎复核。
+  'dataset.version.preflight': z.strictObject({ projectId: id, annotationScope: z.enum(['labeled', 'confirmed']).optional(),
+    selection: datasetSelection.optional(), transform: datasetTransform.optional(), split: datasetSplit.optional(),
+    seed: z.string().min(1).max(256).optional() }),
   'dataset.version.create': z.strictObject({ projectId: id, name: datasetName.optional(),
-    annotationScope: z.enum(['labeled', 'confirmed']).optional(), seed: z.string().min(1).max(256).optional() }),
+    annotationScope: z.enum(['labeled', 'confirmed']).optional(), seed: z.string().min(1).max(256).optional(),
+    selection: datasetSelection.optional(), transform: datasetTransform.optional(), split: datasetSplit.optional() }),
   'dataset.version.get': z.strictObject({ versionId: id }),
   'dataset.version.list': z.strictObject({ projectId: id.optional(), ...trainingPage }),
   'dataset.version.items': z.strictObject({ versionId: id,
-    outcome: z.enum(['included', 'filtered_out']).optional(), ...trainingPage, limit: z.number().int().min(1).max(500).optional() }),
+    outcome: z.enum(['included', 'filtered_out', 'variant']).optional(), ...trainingPage, limit: z.number().int().min(1).max(500).optional() }),
   'dataset.version.cancel': z.strictObject({ versionId: id }),
   'dataset.version.delete': z.strictObject({ versionId: id, confirm: z.literal(true) }),
   'dataset.version.compare': z.strictObject({ versionId: id, otherVersionId: id }),

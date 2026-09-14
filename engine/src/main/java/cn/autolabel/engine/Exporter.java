@@ -9,6 +9,7 @@ import java.util.function.BooleanSupplier;
 final class Exporter {
     private final Store store;private final Projects projects;private final ExportFormats formats;
     MediaJobs mediaJobs;
+    DatasetVersions datasetVersions;
     Exporter(Store store,Projects projects){this.store=store;this.projects=projects;this.formats=new ExportFormats(store);}
     record Snapshot(JsonObject project,List<JsonObject> assets,Map<String,Path> paths,String type){}
     Snapshot snapshot(JsonObject p){String id=Json.required(p,"projectId");return store.read(c->{JsonObject project=Store.document(c,"projects",id);String type=Json.str(p,"taskType",Json.required(project,"taskType"));
@@ -142,7 +143,17 @@ final class Exporter {
                 auxiliary.add(Json.obj("path","data.yaml","hash",Media.hash(temp.resolve("data.yaml"))));
                 record.addProperty("yamlHash",Media.hash(temp.resolve("data.yaml")));
             }
-            JsonObject manifest=Json.obj("schemaVersion",2,"exporterVersion","0.2.0","id",id,"createdAt",record.get("createdAt"),"taskType",s.type,"classes",definition,"keypointNames",Json.array(Json.object(s.project,"settings"),"keypointNames"),"trainRatio",ratio,"splitRule","content-source-components-v2","screening",inspection.get("screening"),"format",format,"assets",manifestAssets,"auxiliaryFiles",auxiliary);
+            // 数据集版本血缘（F-1）：导出必须记录来源版本；旧数据（无版本）保持 lineage 为空对象，读取侧只追加字段。
+            String sourceVersionId=null;
+            if(p.has("datasetVersionId")&&!Json.str(p,"datasetVersionId","").isEmpty()){
+                sourceVersionId=Json.str(p,"datasetVersionId","");
+                JsonObject version=datasetVersions.get(Json.obj("versionId",sourceVersionId));
+                if(!Json.str(version,"status","").equals("ready"))
+                    throw new ApiError(409,"dataset_version_not_ready","数据集版本尚未生成完成，不能作为导出来源。");
+                record.addProperty("datasetVersionId",sourceVersionId);
+            }
+            JsonObject manifest=Json.obj("schemaVersion",3,"exporterVersion","0.2.0","id",id,"createdAt",record.get("createdAt"),"taskType",s.type,"classes",definition,"keypointNames",Json.array(Json.object(s.project,"settings"),"keypointNames"),"trainRatio",ratio,"splitRule","content-source-components-v2","screening",inspection.get("screening"),"format",format,"assets",manifestAssets,"auxiliaryFiles",auxiliary,
+                "lineage",Json.obj("sourceDatasetVersionId",sourceVersionId));
             Files.writeString(temp.resolve("manifest.json"),Json.GSON.toJson(manifest),StandardCharsets.UTF_8);
             record.addProperty("manifestHash",Media.hash(temp.resolve("manifest.json")));
             record.add("formatId",format.get("id"));record.add("formatName",format.get("name"));record.addProperty("labelFormat",labelFormat);record.addProperty("auxiliaryCount",auxiliary.size());

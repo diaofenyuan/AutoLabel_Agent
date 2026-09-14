@@ -18,9 +18,9 @@ final class TrainingDatasets {
     private static final Set<String> TASKS=Annotations.TYPES;
     private static final Set<String> IMAGE_SUFFIXES=Set.of("png","jpg","jpeg","bmp","webp");
 
-    private final Store store;private final Projects projects;
+    private final Store store;private final Projects projects;private final DatasetVersions datasetVersions;
 
-    TrainingDatasets(Store store,Projects projects){this.store=store;this.projects=projects;}
+    TrainingDatasets(Store store,Projects projects,DatasetVersions datasetVersions){this.store=store;this.projects=projects;this.datasetVersions=datasetVersions;}
 
     /** 扫描累积器：来源清单与逐文件问题，尚未复制任何文件。 */
     private static final class Scan {
@@ -33,12 +33,12 @@ final class TrainingDatasets {
     record Snapshot(JsonObject record,JsonObject data,Path directory){}
 
     JsonObject create(JsonObject p)throws Exception{
-        keys(p,"projectId","source","trainDir","valDir","yamlDir","taskType","classNames","keypointNames","exportId");
+        keys(p,"projectId","source","trainDir","valDir","yamlDir","taskType","classNames","keypointNames","exportId","versionId");
         String source=string(p,"source",32);
-        if(!Set.of("upload","export").contains(source))throw error(400,"training_source_invalid","训练数据来源应为 upload 或 export。");
+        if(!Set.of("upload","export","version").contains(source))throw error(400,"training_source_invalid","训练数据来源应为 upload、export 或 version。");
         String projectId=null;
         if(p.has("projectId")){projectId=string(p,"projectId",128);projects.get(projectId);}
-        Scan scan=source.equals("upload")?scanUpload(p):scanExport(p);
+        Scan scan=source.equals("upload")?scanUpload(p):source.equals("export")?scanExport(p):scanVersion(p);
         JsonObject inspection=inspect(scan);
         boolean usable=!hasError(scan.issues);
         String id=Json.id(),createdAt=Json.now();
@@ -477,6 +477,83 @@ final class TrainingDatasets {
             scan.files.add(file);
         }
         scan.origin=Json.obj("kind","export","exportId",exportId,"manifestHash",Json.required(fixed.record(),"manifestHash"),
+            "taskType",taskType,"labelFormat","yolo","sourceClassIds",sourceIds);
+        return scan;
+    }
+
+    // ===== 路径 C：引用数据集版本（阶段 F）=====
+
+    /**
+     * 版本快照：版本目录本身已是逐文件校验的受管副本，这里按清单逐项复核哈希后冻结为训练快照，
+     * 与 export 路径同一口径；被排除项与变体按清单 outcome 区分，只有 included/variant 进入训练。
+     */
+    private Scan scanVersion(JsonObject p)throws Exception{
+        String versionId=string(p,"versionId",128);
+        JsonObject version=datasetVersions.get(Json.obj("versionId",versionId));
+        if(!Json.str(version,"status","").equals("ready"))
+            throw error(409,"dataset_version_not_ready","数据集版本尚未生成完成，不能用于训练。");
+        Path directory=datasetVersions.version(versionId);
+        Path manifestFile=directory.resolve("manifest.json");
+        if(!Files.isRegularFile(manifestFile))throw error(409,"dataset_manifest_missing","版本清单缺失，无法用于训练。");
+        String manifestHash=Json.str(version,"manifestHash","");
+        if(manifestHash.isEmpty()||!Media.hash(manifestFile).equals(manifestHash))
+            throw error(409,"dataset_manifest_changed","版本清单已被外部修改，不能用于训练。");
+        JsonObject manifest=Json.parse(Files.readString(manifestFile,StandardCharsets.UTF_8));
+        String taskType=Json.required(manifest,"taskType");
+        if(!TASKS.contains(taskType))throw error(422,"training_task_invalid","版本任务类型不能用于训练。");
+        JsonArray definition=Json.array(manifest,"classes");
+        if(definition.isEmpty())throw error(422,"training_classes_undetermined","版本清单缺少类别表，无法建立训练标签空间。");
+        JsonArray keypointNames=Json.array(manifest,"keypointNames");
+        if(taskType.equals("pose")&&keypointNames.isEmpty())throw error(422,"training_keypoints_undetermined","姿态版本缺少关键点模板，无法校验标签列数。");
+        Scan scan=new Scan(taskType);
+        // 清单类别表自带 index（从 0 连续），训练类别表按该顺序重建为 id=序号。
+        JsonArray sourceIds=new JsonArray();
+        for(JsonElement element:definition){
+            JsonObject declared=element.getAsJsonObject();
+            scan.classes.add(Json.required(declared,"name"));
+            sourceIds.add(Json.required(declared,"id"));
+        }
+        scan.keypointNames=keypointNames.deepCopy();
+        scan.classCounts=new int[scan.classes.size()];
+        boolean classify=taskType.equals("classify");
+        for(JsonElement element:Json.array(manifest,"items")){
+            JsonObject item=element.getAsJsonObject();
+            String outcome=Json.str(item,"outcome","");
+            if(!outcome.equals("included")&&!outcome.equals("variant"))continue;
+            String split=Json.required(item,"split"),image=Json.required(item,"image");
+            Path source=ExportHistory.inside(directory,image);
+            if(!Media.hash(source).equals(Json.required(item,"contentHash")))
+                throw error(409,"dataset_dependency_changed","版本图片副本已被外部修改，不能作为训练数据。");
+            JsonObject file=Json.obj("split",split,"name",source.getFileName().toString(),"source",source.toString(),
+                "hash",item.get("contentHash"),"bytes",Files.size(source),
+                "width",Json.integer(item,"width",0),"height",Json.integer(item,"height",0));
+            if(classify){
+                if(!item.has("className"))throw error(422,"training_class_folder_missing","分类版本缺少类别目录，无法建立训练标签空间。");
+                file.addProperty("className",Json.required(item,"className"));
+            }
+            int objects=0;
+            if(item.has("label")&&!item.get("label").isJsonNull()){
+                String label=Json.required(item,"label");Path labelPath=ExportHistory.inside(directory,label);
+                if(Files.size(labelPath)>MAX_LABEL_BYTES)throw error(413,"training_label_too_large","单个标签文件不能超过 2 MiB。");
+                objects=checkLabel(scan,Files.readString(labelPath,StandardCharsets.UTF_8),label,scan.classes.size());
+                file.addProperty("label",labelPath.getFileName().toString());
+                file.addProperty("labelHash",Json.required(item,"labelHash"));
+                file.addProperty("labelSource",labelPath.toString());
+                file.addProperty("labelBytes",Files.size(labelPath));
+                if(objects==0){scan.emptyLabels++;issue(scan,"warning","training_empty_label",label,0,"空标签文件：该图会被当作显式无目标样本。");}
+            }else if(!classify){
+                issue(scan,"error","training_label_missing",image,0,"版本清单没有该图片的标签文件。");
+            }else{
+                int index=classIndex(scan,file.get("className").getAsString());
+                if(index<0){issue(scan,"error","training_class_unknown",image,0,"类别目录不在版本类别表中。");continue;}
+                scan.classCounts[index]++;
+            }
+            file.addProperty("objects",objects);
+            scan.images++;scan.objects+=objects;scan.bytes+=Files.size(source)+Json.number(file,"labelBytes",0);
+            scan.files.add(file);
+        }
+        scan.origin=Json.obj("kind","version","versionId",versionId,
+            "versionContentHash",Json.str(version,"contentHash",""),"manifestHash",manifestHash,
             "taskType",taskType,"labelFormat","yolo","sourceClassIds",sourceIds);
         return scan;
     }
