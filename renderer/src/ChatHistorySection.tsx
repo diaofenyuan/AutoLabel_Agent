@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { FolderOpen, RefreshCw, Trash2, Download, ShieldCheck } from 'lucide-react';
-import type { ChatHistoryStatus, ChatMutationResult } from '../../shared/chat';
+import type { ChatHistoryStatus, ChatMutationResult, ChatTrashList } from '../../shared/chat';
 import { useApp } from './context';
 import { errorMessage, getBridge, isDemo, request } from './bridge';
 import { Button, Notice } from './ui';
@@ -14,6 +14,7 @@ function bytes(value: number) {
 export default function ChatHistorySection({ onBusyChange }: { onBusyChange: (busy: boolean) => void }) {
   const { notify } = useApp();
   const [status, setStatus] = useState<ChatHistoryStatus | null>(null);
+  const [trash, setTrash] = useState<ChatTrashList | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
@@ -25,7 +26,11 @@ export default function ChatHistorySection({ onBusyChange }: { onBusyChange: (bu
     try { const next = await request<ChatHistoryStatus>('chat.history.status'); if (mounted) setStatus(next); }
     catch (e) { if (mounted) setError(errorMessage(e)); }
   }, [mounted]);
-  useEffect(() => { if (!isDemo) void (async () => { setBusy(true); await load(); if (mounted) setBusy(false); })(); }, [load, mounted]);
+  const loadTrash = useCallback(async () => {
+    try { const next = await request<ChatTrashList>('chat.history.trash.list'); if (mounted) setTrash(next); }
+    catch (e) { if (mounted) setError(errorMessage(e)); }
+  }, [mounted]);
+  useEffect(() => { if (!isDemo) void (async () => { setBusy(true); await load(); await loadTrash(); if (mounted) setBusy(false); })(); }, [load, loadTrash, mounted]);
 
   async function run(action: () => Promise<void>, message?: string) {
     if (busy) return;
@@ -59,6 +64,7 @@ export default function ChatHistorySection({ onBusyChange }: { onBusyChange: (bu
         <Button disabled={busy || !status?.sessions} onClick={() => void exportAll()}><Download size={14} />导出全部</Button>
         <Button disabled={busy || !status?.trash.entries} onClick={() => void run(async () => {
           const result = await request<ChatMutationResult>('chat.history.purge', { all: true });
+          await loadTrash();
           notify(`已清空回收站 ${result.removed} 项。`);
         })}><Trash2 size={14} />清空回收站</Button>
       </div>
@@ -77,6 +83,32 @@ export default function ChatHistorySection({ onBusyChange }: { onBusyChange: (bu
             notify(`已移入回收站 ${result.removed} 个对话。`);
           })}>确认清空 {status?.sessions ?? 0} 个对话</Button>
         </div>}
+    </section>
+    <section className="settings-section">
+      <div className="section-toolbar"><h2>回收站</h2>
+        <Button disabled={busy} onClick={() => void run(async () => { await loadTrash(); })}><RefreshCw size={13} />刷新</Button>
+      </div>
+      <p className="muted">删除的对话在这里保留 {trash?.retentionDays ?? status?.trash.retentionDays ?? 7} 天，可随时恢复；过期后由清空操作移除。</p>
+      {!trash?.entries.length
+        ? <p className="quiet-empty">回收站是空的。</p>
+        : <>
+          <div className="chat-trash-list">{trash.entries.map(entry => <p key={entry.id} className="chat-trash-item">
+            <span className="truncate">{entry.title || '未命名对话'}</span>
+            <span className="muted tiny">{entry.messageCount} 条 · 删除于 {new Date(entry.deletedAt).toLocaleString()} · 保留至 {new Date(entry.expiresAt).toLocaleDateString()}</span>
+            <Button disabled={busy} onClick={() => void run(async () => {
+              const result = await request<ChatMutationResult>('chat.history.restore', { trashIds: [entry.id] });
+              await load(); await loadTrash();
+              notify(`已恢复 ${result.restored ?? 1} 个对话。`);
+            })}>恢复</Button>
+          </p>)}</div>
+          <div className="actions">
+            <Button disabled={busy} onClick={() => void run(async () => {
+              const result = await request<ChatMutationResult>('chat.history.restore', { trashIds: trash.entries.map(item => item.id) });
+              await load(); await loadTrash();
+              notify(`已恢复 ${result.restored ?? 0} 个对话。`);
+            })}>全部恢复</Button>
+          </div>
+        </>}
     </section>
     {error && <p className="inline-error storage-error" role="alert">{error}</p>}
   </div>;

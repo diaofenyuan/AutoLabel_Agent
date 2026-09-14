@@ -58,7 +58,7 @@ final class Media {
         if(!ImageIO.write(normalized,"png",temporary.toFile()))throw new IOException("PNG writer unavailable");
         Files.move(temporary,destination,StandardCopyOption.ATOMIC_MOVE);normalized.flush();
         String sourceHash=hash(source);Path original=source.toAbsolutePath().normalize();
-        if(copy){Path originals=store.root.resolve("originals");Files.createDirectories(originals);original=originals.resolve(assetId+(format.equals("jpeg")?".jpg":".png"));Files.copy(source,original);}
+        if(copy){Path originals=store.materialsRoot;Files.createDirectories(originals);original=originals.resolve(assetId+(format.equals("jpeg")?".jpg":".png"));Files.copy(source,original);}
         JsonObject metadata=Json.obj("normalizationVersion",NORMALIZATION_VERSION,"inputVersion",1,"sourceWidth",sw,"sourceHeight",sh,
             "exifOrientation",orientation,"sourceToBaseline",matrix(orientation,sw,sh),"colorSpace","sRGB","alphaBackground",background,
             "sourceHash",sourceHash,"sourcePath",original.toString(),"importMode",copy?"copy":"reference","originalFormat",format,"pngIccApplied",pngProfile!=null);

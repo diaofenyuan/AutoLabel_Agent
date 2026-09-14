@@ -4,6 +4,7 @@ import { useApp } from './context';
 import { getBridge, request, isDemo, errorMessage } from './bridge';
 import { Button, Empty, Field, IconButton, Notice } from './ui';
 import { taskNames, statusNames, type Annotation, type Asset, type Point, type Project, type TaskType } from './types';
+import type { StoragePathProbe, StoragePathsState } from '../../shared/storage';
 import ExportDialog from './ExportDialog';
 import ChatPanel from './ChatPanel';
 import AssetActions from './AssetActions';
@@ -32,6 +33,16 @@ export default function Workbench() {
   const switchLock = useRef(false);
   const [pageInput, setPageInput] = useState('1');
   const [importing, setImporting] = useState(false);
+  // 只读取存储设置里的实际生效目录用于提示，界面不自行拼接路径。
+  const [uploadRoot, setUploadRoot] = useState('');
+  useEffect(() => {
+    if (isDemo) return;
+    let disposed = false;
+    void request<StoragePathsState>('storage.paths.get')
+      .then(state => { if (!disposed) setUploadRoot(state.entries.find(entry => entry.kind === 'uploads')?.path ?? ''); })
+      .catch(() => { /* 读取失败时退回不显示落点，导入仍由引擎校验。 */ });
+    return () => { disposed = true; };
+  }, []);
   const [videoImport, setVideoImport] = useState(false);
   async function showVideoImport() { try { await guard.current?.(); setVideoImport(true); } catch (e) { notify(errorMessage(e), true); } }
   const [exporting, setExporting] = useState(false);
@@ -58,6 +69,11 @@ export default function Workbench() {
     setImporting(true);
     try {
       await guard.current?.();
+      // 复制模式的原图落在存储设置的上传目录；先探测可写性，避免把失败留到逐张复制阶段。
+      if (uploadRoot) {
+        const probe = await request<StoragePathProbe>('storage.paths.probe', { path: uploadRoot });
+        if (!probe.writable) throw new Error(`上传训练集目录不可用：${probe.reason ?? uploadRoot}。请在设置 → 存储位置中调整。`);
+      }
       const paths = await (await getBridge()).chooseFiles({ kind: 'images', multiple: true });
       if (!paths.length) return;
       const result = await request<{ imported: number; skipped: number; errors: Array<string | { name?: string; message: string }> }>('asset.import', { projectId: project.id, paths, mode: 'copy' });
@@ -101,11 +117,11 @@ export default function Workbench() {
   }, [notify, selectAsset, guard]);
   if (!project) return <Empty icon={<FolderOpen size={28} />} title="选择一个项目" description="打开已有项目，或从预置人工样例开始。"><div className="empty-projects">{projects.map(p => <Button key={p.id} onClick={() => void openProject(p).catch(e => notify(errorMessage(e), true))}>{p.name}<ChevronRight size={14} /></Button>)}<Button className="primary" onClick={() => void request<Project>('project.example').then(openProject).then(refreshProjects).catch(e => notify(errorMessage(e), true))}><Scan size={15} />打开人工示例</Button></div></Empty>;
   return <div className={`workbench ${showTimeline ? 'has-video-timeline' : ''}`}>
-    <div className="workbench-projectbar"><div className="project-picker"><select aria-label="当前项目" disabled={assetsLoading || switching || importing} value={project.id} onChange={e => { const p = projects.find(p => p.id === e.target.value); if (p) void openProject(p).catch(error => notify(errorMessage(error), true)); }}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select><span className="subtle-separator" /><span className="muted truncate">{active?.name ?? '还没有图片'}</span></div><div className="actions"><Button busy={importing} disabled={assetsLoading || switching} onClick={() => void importImages()}><Upload size={14} />导入图片</Button><Button disabled={isDemo || assetsLoading || switching || importing} onClick={() => void showVideoImport()}>从视频抽帧</Button><IconButton label="类别与点位模板" disabled={assetsLoading || switching} onClick={() => void Promise.resolve(guard.current?.()).then(() => setTemplate(true)).catch(e => notify(errorMessage(e), true))}><SlidersHorizontal size={16} /></IconButton><IconButton label="导出数据集" disabled={!assetTotal || assetsLoading || switching} onClick={() => void Promise.resolve(guard.current?.()).then(() => setExporting(true)).catch(e => notify(errorMessage(e), true))}><Download size={16} /></IconButton></div></div>
+    <div className="workbench-projectbar"><div className="project-picker"><select aria-label="当前项目" disabled={assetsLoading || switching || importing} value={project.id} onChange={e => { const p = projects.find(p => p.id === e.target.value); if (p) void openProject(p).catch(error => notify(errorMessage(error), true)); }}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select><span className="subtle-separator" /><span className="muted truncate">{active?.name ?? '还没有图片'}</span></div><div className="actions"><Button busy={importing} disabled={assetsLoading || switching} title={uploadRoot ? `导入复制的原图保存到 ${uploadRoot}` : undefined} onClick={() => void importImages()}><Upload size={14} />导入图片</Button><Button disabled={isDemo || assetsLoading || switching || importing} onClick={() => void showVideoImport()}>从视频抽帧</Button><IconButton label="类别与点位模板" disabled={assetsLoading || switching} onClick={() => void Promise.resolve(guard.current?.()).then(() => setTemplate(true)).catch(e => notify(errorMessage(e), true))}><SlidersHorizontal size={16} /></IconButton><IconButton label="导出数据集" disabled={!assetTotal || assetsLoading || switching} onClick={() => void Promise.resolve(guard.current?.()).then(() => setExporting(true)).catch(e => notify(errorMessage(e), true))}><Download size={16} /></IconButton></div></div>
     {['detect', 'pose'].includes(project.taskType) && <div className="tabs workbench-view-tabs"><button className={!showTimeline?'selected':''} disabled={assetsLoading||switching||importing} onClick={()=>void switchView('images')}>图片标注</button><button className={showTimeline?'selected':''} disabled={isDemo||assetsLoading||switching||importing} onClick={()=>void switchView('video')}>视频轨迹</button></div>}
     <div className="asset-pagination" aria-label="素材分页"><div className="asset-page-selection"><label><input type="checkbox" aria-label="勾选当前页" disabled={!assets.length || assetsLoading || switching} checked={assets.length > 0 && assets.every(a => selectedAssetIds.includes(a.id))} onChange={e => setSelectedAssetIds(ids => e.target.checked ? [...new Set([...ids, ...assets.map(a => a.id)])] : ids.filter(id => !assets.some(a => a.id === id)))}/>当前页</label><span>已勾选 {selectedAssetIds.length} 张（跨页）</span><button className="text-button" disabled={!selectedAssetIds.length || assetsLoading || switching} onClick={() => setSelectedAssetIds([])}>清空勾选</button></div><div className="asset-page-navigation"><span aria-live="polite">{assetsLoading ? '正在保存草稿并读取素材…' : `第 ${assetTotal ? assetOffset + 1 : 0}–${assetOffset + assets.length} 张 / 共 ${assetTotal} 张`}</span><IconButton label="上一页素材" disabled={assetOffset === 0 || assetsLoading || switching} onClick={() => void turnPage(assetOffset - assetPageSize)}><ChevronLeft size={15}/></IconButton><form onSubmit={e => { e.preventDefault(); const next = Number(pageInput); if (Number.isInteger(next) && next >= 1 && next <= pageCount) void turnPage((next - 1) * assetPageSize); else { setPageInput(String(pageNumber)); notify(`页码范围为 1–${pageCount}。`, true); } }}><input aria-label="素材页码" type="number" min={1} max={pageCount} value={pageInput} disabled={assetsLoading || switching} onChange={e => setPageInput(e.target.value)}/><span>/ {pageCount} 页</span><Button type="submit" disabled={assetsLoading || switching}>跳转</Button></form><IconButton label="下一页素材" disabled={assetOffset + assets.length >= assetTotal || assetsLoading || switching} onClick={() => void turnPage(assetOffset + assetPageSize)}><ChevronRight size={15}/></IconButton></div></div>
     {focusedAsset?.id === active?.id && active && <div className="focused-asset-note">单图定位：{active.name}<button className="text-button" onClick={() => void selectAsset(assets[0]?.id ?? '')}>返回当前页</button></div>}
-    {showTimeline ? <VideoTimeline key={project.id} project={project}/> : active ? <Editor key={active.id} asset={active} switching={switching} onSelect={selectAsset} onMove={moveAsset} onAssetUpdated={updated => setFocusedAsset(current => current?.id === updated.id ? updated : current)} onExport={() => setExporting(true)} /> : <Empty icon={<Upload size={28} />} title="导入第一张图片" description="支持 JPEG 与 PNG。无需配置模型，即可人工标注。"><Button busy={importing} className="primary" onClick={() => void importImages()}>选择图片</Button></Empty>}
+    {showTimeline ? <VideoTimeline key={project.id} project={project}/> : active ? <Editor key={active.id} asset={active} switching={switching} onSelect={selectAsset} onMove={moveAsset} onAssetUpdated={updated => setFocusedAsset(current => current?.id === updated.id ? updated : current)} onExport={() => setExporting(true)} /> : <Empty icon={<Upload size={28} />} title="导入第一张图片" description={`支持 JPEG 与 PNG。无需配置模型，即可人工标注。${uploadRoot ? `导入复制的原图保存到 ${uploadRoot}。` : ''}`}><Button busy={importing} className="primary" onClick={() => void importImages()}>选择图片</Button></Empty>}
     {videoImport && <VideoImport projectId={project.id} onClose={() => setVideoImport(false)} onCreated={job => { setVideoImport(false); setMediaTaskId(job.id); void navigate('tasks'); }}/>}
     {exporting && <ExportDialog onClose={() => setExporting(false)} />}
     {template && <TemplateDialog onClose={() => setTemplate(false)} />}

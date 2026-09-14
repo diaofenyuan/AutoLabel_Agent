@@ -33,7 +33,17 @@ export default function ExportDialog({ onClose, initialScope = 'project' }: { on
   // 自定义布局是逐字符输入：预检去抖，避免每个按键都打一次引擎。
   const [settledFormatKey, setSettledFormatKey] = useState(formatKey);
   useEffect(() => { const timer = setTimeout(() => setSettledFormatKey(formatKey), 350); return () => clearTimeout(timer); }, [formatKey]);
+  // 默认落点由主进程在缺省时注入；这里只读取实际生效目录用于提示，不做路径拼接判断。
+  useEffect(() => {
+    if (isDemo) return;
+    let active = true;
+    void request<{ entries: Array<{ kind: string; path: string }> }>('storage.paths.get')
+      .then(state => { if (active) setDatasetsRoot(state.entries.find(entry => entry.kind === 'datasets')?.path ?? ''); })
+      .catch(() => { if (active) setDatasetsRoot(''); });
+    return () => { active = false; };
+  }, []);
   const [outputDir, setOutputDir] = useState('');
+  const [datasetsRoot, setDatasetsRoot] = useState('');
   const [preflight, setPreflight] = useState<Preflight | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -53,9 +63,8 @@ export default function ExportDialog({ onClose, initialScope = 'project' }: { on
   async function exportData() {
     setBusy(true); setError('');
     try {
-      if (!isDemo && !outputDir) throw new Error('请先选择输出目录。');
       if (!range.count) throw new Error('当前范围为空，无法导出。');
-      const data = await request<{ path: string; status: string }>('export.create', { projectId: project!.id, outputDir, taskType, onlyConfirmed, trainRatio, ...formatPayload(format), ...(range.assetIds ? { assetIds: range.assetIds } : {}) });
+      const data = await request<{ path: string; status: string }>('export.create', { projectId: project!.id, ...(outputDir ? { outputDir } : {}), taskType, onlyConfirmed, trainRatio, ...formatPayload(format), ...(range.assetIds ? { assetIds: range.assetIds } : {}) });
       setResult(data); notify(data.status === 'demo_download' ? '已发起演示 JSON 下载。' : `导出任务状态：${statusNames[data.status]??data.status}。`);
     } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   }
@@ -69,7 +78,7 @@ export default function ExportDialog({ onClose, initialScope = 'project' }: { on
     <div className="field-grid"><Field label="导出任务"><select value={taskType} onChange={e => setTaskType(e.target.value as TaskType)}>{Object.entries(taskNames).map(([key,value]) => <option key={key} value={key}>{key.toUpperCase()} · {value}</option>)}</select></Field><Field label="训练集比例"><input type="number" min={0.01} max={0.99} step={0.05} value={trainRatio} onChange={e => setTrainRatio(Number(e.target.value))} /></Field></div>
     <label className="checkbox-row"><input type="checkbox" checked={onlyConfirmed} onChange={e => setOnlyConfirmed(e.target.checked)} />仅导出人工确认的图片</label>
     <ExportFormatPicker taskType={taskType} disabled={busy} selection={format} onChange={setFormat}/>
-    {!isDemo && <Field label="输出目录"><div className="input-action"><input readOnly value={outputDir} placeholder="请选择目录" /><Button onClick={() => void getBridge().then(b => b.chooseFiles({ kind: 'directory' })).then(paths => { if (paths[0]) setOutputDir(paths[0]); }).catch(e => setError(errorMessage(e)))}><FolderOpen size={15} />选择</Button></div></Field>}
+    {!isDemo && <Field label="输出目录" hint="留空时保存到受管训练集落点（划分好的训练集目录）下的「项目名-时间戳」子目录。"><div className="input-action"><input readOnly value={outputDir} placeholder={datasetsRoot ? `${datasetsRoot}\\${project?.name ?? '项目'}-时间戳` : '默认落点（读取中）'} /><Button onClick={() => void getBridge().then(b => b.chooseFiles({ kind: 'directory' })).then(paths => { if (paths[0]) setOutputDir(paths[0]); }).catch(e => setError(errorMessage(e)))}><FolderOpen size={15} />选择</Button>{outputDir && <Button onClick={() => setOutputDir('')}>用默认落点</Button>}</div></Field>}
     <div className="preflight"><h3>导出前检查</h3>{loading ? <Loading compact label="正在读取项目与标注…" /> : preflight && <><p className="muted">{preflight.issues.length ? `发现 ${preflight.issues.length} 项提示` : '本次检查未返回问题'}</p>{preflight.format && <p className="muted break-word">生效格式：{preflight.format.name||'自定义'} · {formatSummary(preflight.format)}</p>}{preflight.issues.map((issue,i) => <div className="issue" key={i}><AlertCircle size={14} />{typeof issue === 'string' ? issue : issue.message || issue.code}</div>)}<details><summary>检查详情</summary><pre>{JSON.stringify(preflight.summary, null, 2)}</pre></details></>}</div>
     </>:isDemo?<Notice>固定导出历史由桌面引擎保存。浏览器演示 JSON 下载不属于可校验的数据集副本。</Notice>:<><Notice>对比与复现读取历史固定清单。之后对项目的编辑不进入旧副本；复现前会核对图片、标签与配置文件。</Notice><div className="section-toolbar"><h3>已保存导出</h3><Button busy={historyLoading} disabled={busy} onClick={()=>void loadHistory()}><RefreshCw size={13}/>刷新</Button></div>{historyLoading?<Loading compact label="正在读取导出记录…" />:!records.length?<p className="quiet-empty">还没有导出记录。</p>:<><Field label="基准导出"><select value={selected} disabled={busy} onChange={e=>{setSelected(e.target.value);setDifference(null);setResult(null);}}><option value="">选择历史导出</option>{records.map(item=><option key={item.id} value={item.id}>{recordLabel(item)}</option>)}</select></Field>{record&&<div className="export-record"><strong>{record.status==='writing'?'写入中':statusNames[record.status]??record.status}</strong><p className="break-word muted">{record.path}</p>{record.sourceExportId&&<small>复现来源：{record.sourceExportId}</small>}{record.status==='completed'&&!record.manifestHash&&<p className="inline-error">legacy_export_unverified：早期记录缺少清单校验值，无法证明副本未被修改。请保留旧副本并新建导出。</p>}</div>}<section className="operation-section"><h3>比较两个固定副本</h3><Field label="对比导出"><select value={other} disabled={busy} onChange={e=>{setOther(e.target.value);setDifference(null);}}><option value="">选择另一次导出</option>{records.filter(item=>item.id!==selected).map(item=><option key={item.id} value={item.id}>{recordLabel(item)}</option>)}</select></Field>{otherRecord?.status==='completed'&&!otherRecord.manifestHash&&<p className="inline-error">legacy_export_unverified：对比记录没有清单校验值。</p>}<Button disabled={!usable(record)||!usable(otherRecord)||selected===other} busy={busy} onClick={()=>void compare()}><GitCompareArrows size={14}/>比较固定清单</Button>{difference&&<div className="export-difference"><p>从基准导出到对比导出：新增 {difference.added.length} · 移除 {difference.removed.length} · 变化 {difference.changed.length} · 不变 {difference.unchanged}</p>{difference.classesChanged&&<p>类别或点位模板有变化。</p>}{difference.added.map(id=><p key={`a-${id}`}>新增 · {assetName(id)}</p>)}{difference.removed.map(id=><p key={`r-${id}`}>移除 · {assetName(id)}</p>)}{difference.changed.map(item=><p key={item.assetId}>{assetName(item.assetId)}：{item.fields.map(f=>fieldNames[f]??f).join('、')}</p>)}</div>}</section><section className="operation-section"><h3>复现基准导出</h3><Field label="新副本保存目录"><div className="input-action"><input readOnly value={reproduceDir} placeholder="请选择新副本所在目录"/><Button disabled={busy} onClick={()=>void getBridge().then(b=>b.chooseFiles({kind:'directory'})).then(paths=>{if(paths[0])setReproduceDir(paths[0]);}).catch(e=>setError(errorMessage(e)))}><FolderOpen size={14}/>选择</Button></div></Field><Button className="primary" disabled={!usable(record)||!reproduceDir} busy={busy} onClick={()=>void reproduce()}><Download size={14}/>校验并生成新副本</Button></section></>}</>}
     {error && <p className="inline-error" role="alert">{error}</p>}

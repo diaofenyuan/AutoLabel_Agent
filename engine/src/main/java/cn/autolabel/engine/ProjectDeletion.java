@@ -203,7 +203,7 @@ final class ProjectDeletion {
             JsonObject metadata=Json.object(Json.parse(Json.required(row,"data")),"metadata");
             if(Json.str(metadata,"importMode","").equals("copy")){
                 String extension=Json.str(metadata,"originalFormat","").equals("jpeg")?".jpg":".png";
-                addFile(files,root.resolve("originals").resolve(id+extension));
+                addFile(files,store.materialsRoot.resolve(id+extension));
             }
         }
         for(JsonObject row:Store.rows(c,"SELECT id FROM media_jobs WHERE project_id=?",pid))addTree(files,root.resolve("media-jobs").resolve(Json.required(row,"id")));
@@ -241,11 +241,12 @@ final class ProjectDeletion {
             catch(Exception ignored){/* 非空目录或有并发访问时保留。 */}
         }
     }
-    /** 越界路径一律拒绝，避免删除数据目录之外的任何文件。 */
+    /** 越界路径一律拒绝，避免删除受管目录之外的任何文件；受管原图根可独立配置，同样在允许范围内。 */
     private Path confined(Path candidate){
         try{
             Path path=candidate.toAbsolutePath().normalize();
-            return path.startsWith(store.root)&&!path.equals(store.root)?path:null;
+            boolean managed=path.startsWith(store.root)||path.startsWith(store.materialsRoot);
+            return managed&&!path.equals(store.root)&&!path.equals(store.materialsRoot)?path:null;
         }catch(Exception e){return null;}
     }
 }

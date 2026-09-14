@@ -9,6 +9,7 @@ final class LocalRuntime implements AutoCloseable {
     final LocalModels models;private final Path worker;
     private final Map<String,Slot> slots=new LinkedHashMap<>();private final Map<String,String> authorizations=new HashMap<>();
     private Path python;private JsonObject environment=new JsonObject();private boolean closed;
+    private volatile TrainingRuntime trainingOwner;
     final class Slot {
         final String device;final LocalInference bridge;final ThreadPoolExecutor executor;
         boolean busy;volatile boolean cancelRequested;String runId,inputId;JsonObject loaded;
@@ -33,7 +34,13 @@ final class LocalRuntime implements AutoCloseable {
         for(Slot slot:previous){slot.bridge.close();slot.executor.shutdownNow();}return state();
     }
     private void requireConfigured(){if(closed)throw new ApiError(503,"local_closed","本地运行时已停止。");if(worker==null||!Files.isRegularFile(worker))throw new ApiError(409,"local_worker_missing","本地推理组件缺失，请检查安装文件。");if(python==null||!Files.isRegularFile(python))throw new ApiError(409,"local_python_required","请先通过桌面配置 Python 环境。");}
-    synchronized Slot reserve(String device,String runId,String inputId){requireConfigured();if(!slots.containsKey(device)&&slots.size()>=8)throw new ApiError(409,"local_slot_limit","本地运行时最多保留 8 个设备槽，请释放现有设备后再载入。");Slot slot=slots.computeIfAbsent(device,Slot::new);if(slot.busy)return null;slot.busy=true;slot.cancelRequested=false;slot.runId=runId;slot.inputId=inputId;return slot;}
+    /** 训练与推理共享设备：训练占用期间拒绝一切本设备上的推理，不排队、不共享显存。 */
+    void shareTrainingRuntime(TrainingRuntime runtime){trainingOwner=runtime;}
+    private boolean heldByTraining(String device){TrainingRuntime current=trainingOwner;return current!=null&&current.claimed().contains(device);}
+    synchronized boolean deviceBusy(String device){Slot slot=slots.get(device);return slot!=null&&slot.busy;}
+    synchronized Slot reserve(String device,String runId,String inputId){requireConfigured();
+        if(heldByTraining(device))throw new ApiError(409,"device_busy_by_training","设备 "+device+" 正被训练任务占用，请等待训练结束或改用其他设备。");
+        if(!slots.containsKey(device)&&slots.size()>=8)throw new ApiError(409,"local_slot_limit","本地运行时最多保留 8 个设备槽，请释放现有设备后再载入。");Slot slot=slots.computeIfAbsent(device,Slot::new);if(slot.busy)return null;slot.busy=true;slot.cancelRequested=false;slot.runId=runId;slot.inputId=inputId;return slot;}
     synchronized void release(Slot slot){slot.busy=false;slot.runId=null;slot.inputId=null;}
     JsonObject probe(JsonObject p){FlowPlans.keys(p);Slot slot=reserve("cpu",null,null);if(slot==null)throw new ApiError(409,"local_device_busy","CPU 设备正在执行，稍后再检查环境。");try{JsonObject result=slot.bridge.probe(60000);synchronized(this){environment=result.deepCopy();}}finally{release(slot);}return state();}
     JsonObject load(JsonObject p)throws Exception{

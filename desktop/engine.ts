@@ -19,6 +19,8 @@ export interface EngineOptions {
   credentials: () => Promise<Array<{ providerId: string; key: string; credentialBindingVersion?: string }>>;
   requireExistingData?: boolean;
   localPythonPath?: () => Promise<string | undefined>;
+  /** 受管原图目录（存储根下的 uploads）；缺省时引擎沿用 <数据目录>/originals。 */
+  materialsRoot?: () => string | undefined;
   localModelAuthorizations?: () => Promise<Array<{ path: string; modelHash: string }>>;
   mediaToolPaths?: () => Promise<{ ffmpegPath?: string; ffprobePath?: string }>;
 }
@@ -109,7 +111,10 @@ export class EngineManager extends EventEmitter {
       const localWorkerDirectory = this.options.packaged ? path.join(this.options.resources, 'inference')
         : process.env.AUTOLABEL_INFERENCE_DIR ? path.resolve(process.env.AUTOLABEL_INFERENCE_DIR) : path.join(this.options.root, 'inference');
       const localWorkerPath = path.join(localWorkerDirectory, 'worker.py');
+      // 训练脚本与推理脚本同目录；打包放行前缺失时引擎会把环境探测标为不可用而不是崩溃。
+      const trainingWorkerPath = path.join(localWorkerDirectory, 'train_worker.py');
       const localPythonPath = await this.options.localPythonPath?.();
+      const materialsRoot = this.options.materialsRoot?.();
       const mediaTools = await this.options.mediaToolPaths?.() ?? {};
       let localModelAuthorizations = await this.options.localModelAuthorizations?.() ?? [];
       if (localModelAuthorizations.length > 500 || Buffer.byteLength(JSON.stringify(localModelAuthorizations)) > 7 * 1024 * 1024) {
@@ -153,7 +158,8 @@ export class EngineManager extends EventEmitter {
             clean(); resolve(value);
           } catch (error) { if (error instanceof DesktopError) { clean(); reject(error); } }
         });
-        child.stdin.write(JSON.stringify({ token: this.token, dataDir: this.options.dataDir, protocolVersion: PROTOCOL_VERSION, localWorkerPath, localModelAuthorizations,
+        child.stdin.write(JSON.stringify({ token: this.token, dataDir: this.options.dataDir, protocolVersion: PROTOCOL_VERSION, localWorkerPath, trainingWorkerPath, localModelAuthorizations,
+          ...(materialsRoot ? { materialsRoot } : {}),
           ...(localPythonPath ? { localPythonPath } : {}), ...(mediaTools.ffmpegPath ? { mediaFfmpegPath: mediaTools.ffmpegPath } : {}),
           ...(mediaTools.ffprobePath ? { mediaFfprobePath: mediaTools.ffprobePath } : {}) }) + '\n');
       });

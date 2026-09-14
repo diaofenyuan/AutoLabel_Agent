@@ -59,6 +59,12 @@ export class PathGrants {
 // 各入口共用同一组选择授权，读取历史记录不能间接扩大文件访问范围。
 export async function authorizeCommandPaths(command: string, payload: Record<string, unknown>, grants: PathGrants): Promise<void> {
   if (command === 'local.model.register') payload.modelPath = await grants.require(payload.modelPath, ['model']);
+  // 训练数据集只能来自用户显式选择的目录；引用已完成导出版本时不涉及外部路径。
+  if (command === 'training.dataset.create') {
+    for (const field of ['trainDir', 'valDir', 'yamlDir']) {
+      if (typeof payload[field] === 'string') payload[field] = await grants.require(payload[field], ['directory']);
+    }
+  }
   if (['media.video.inspect', 'media.video.create'].includes(command)) payload.sourcePath = await grants.require(payload.sourcePath, ['video']);
   if (command.startsWith('flow.') && payload.definition && typeof payload.definition === 'object') {
     const steps = (payload.definition as { steps?: Array<{ kind: string; parameters: Record<string, unknown> }> }).steps;

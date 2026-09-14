@@ -9,6 +9,7 @@ const selectedInference = process.env.AUTOLABEL_INFERENCE_DIR;
 if (!selectedInference) throw new Error('里程碑打包必须通过 AUTOLABEL_INFERENCE_DIR 明确指定已验收的推理脚本目录');
 const inference = path.resolve(root, selectedInference);
 await access(path.join(inference, 'worker.py'));
+await access(path.join(inference, 'train_worker.py'));
 const jar = path.resolve(root, selectedJar);
 await access(jar); await access(path.join(root, 'build/runtime/bin/java.exe'));
 const builderHome = path.join(root, 'node_modules/electron-builder');

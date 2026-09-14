@@ -7,16 +7,20 @@ import java.util.*;
 import java.util.concurrent.*;
 
 final class Store implements AutoCloseable {
-    static final int SCHEMA_VERSION=8;
+    static final int SCHEMA_VERSION=10;
     interface Work<T> { T run(Connection c) throws Exception; }
     final Path root;
+    // 受管原图根默认在数据目录内；桌面可把它指到存储根下的 uploads 目录，使导入复制的训练集可单独配置。
+    final Path materialsRoot;
     private final String url;
     private final Connection writer;
     private final ThreadPoolExecutor writes = new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,
         new ArrayBlockingQueue<>(512), Thread.ofPlatform().name("sqlite-writer-",0).factory(),new ThreadPoolExecutor.AbortPolicy());
     volatile boolean writeFailed;
-    Store(Path root) throws Exception {
+    Store(Path root) throws Exception { this(root,null); }
+    Store(Path root,Path materialsRoot) throws Exception {
         this.root=root.toAbsolutePath().normalize(); Files.createDirectories(this.root);
+        this.materialsRoot=resolveMaterials(this.root,materialsRoot);
         url="jdbc:sqlite:" + this.root.resolve("autolabel.db"); writer=connect();
         try (Statement s=writer.createStatement()) {
             int version; try(ResultSet rs=s.executeQuery("PRAGMA user_version")) {version=rs.getInt(1);}
@@ -101,8 +105,33 @@ final class Store implements AutoCloseable {
             if(!eventColumns.contains("flow_run_id"))s.execute("ALTER TABLE events ADD COLUMN flow_run_id TEXT");
             if(!eventColumns.contains("step_id"))s.execute("ALTER TABLE events ADD COLUMN step_id TEXT");
             s.execute("CREATE INDEX IF NOT EXISTS events_flow ON events(flow_run_id,sequence)");
+            // 软件内模型训练：数据集快照（不可变）、任务、逐轮指标与产物清单分开存放。
+            // 逐轮指标独立成表而不是塞进任务 JSON，避免长训练任务的读放大。
+            s.execute("CREATE TABLE IF NOT EXISTS training_datasets(id TEXT PRIMARY KEY,project_id TEXT,origin TEXT NOT NULL,task_type TEXT NOT NULL,snapshot_hash TEXT NOT NULL,created_at TEXT NOT NULL,data TEXT NOT NULL)");
+            s.execute("CREATE TABLE IF NOT EXISTS training_jobs(id TEXT PRIMARY KEY,dataset_id TEXT NOT NULL REFERENCES training_datasets(id),project_id TEXT,status TEXT NOT NULL,device TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,data TEXT NOT NULL)");
+            s.execute("CREATE INDEX IF NOT EXISTS training_jobs_dataset ON training_jobs(dataset_id,created_at)");
+            s.execute("CREATE INDEX IF NOT EXISTS training_jobs_dispatch ON training_jobs(status)");
+            s.execute("CREATE TABLE IF NOT EXISTS training_epochs(job_id TEXT NOT NULL REFERENCES training_jobs(id),epoch INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(job_id,epoch))");
+            s.execute("CREATE TABLE IF NOT EXISTS training_artifacts(id TEXT PRIMARY KEY,job_id TEXT NOT NULL REFERENCES training_jobs(id),kind TEXT NOT NULL,path TEXT NOT NULL,size INTEGER,hash TEXT,data TEXT NOT NULL)");
+            s.execute("CREATE INDEX IF NOT EXISTS training_artifacts_job ON training_artifacts(job_id,kind)");
+            // 数据集版本：配方、内容指纹与清单校验值单独成列，便于引用方按状态过滤；其余详情仍在 data 中。
+            // number 在项目内递增并唯一；builds 与版本解耦，允许中断后重试图保持版本号不变。
+            s.execute("CREATE TABLE IF NOT EXISTS dataset_versions(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),version INTEGER NOT NULL,status TEXT NOT NULL,recipe_hash TEXT,content_hash TEXT,manifest_hash TEXT,created_at TEXT NOT NULL,completed_at TEXT,data TEXT NOT NULL,UNIQUE(project_id,version))");
+            s.execute("CREATE INDEX IF NOT EXISTS dataset_versions_project ON dataset_versions(project_id,version DESC)");
+            // 被排除项同样入库并带原因码，用于说明遗漏范围；outcome 与 split 作为列便于聚合计数。
+            s.execute("CREATE TABLE IF NOT EXISTS dataset_version_items(version_id TEXT NOT NULL REFERENCES dataset_versions(id),position INTEGER NOT NULL,asset_id TEXT,outcome TEXT NOT NULL,split TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(version_id,position))");
+            s.execute("CREATE INDEX IF NOT EXISTS dataset_version_items_outcome ON dataset_version_items(version_id,outcome)");
+            s.execute("CREATE TABLE IF NOT EXISTS dataset_version_builds(id TEXT PRIMARY KEY,version_id TEXT NOT NULL REFERENCES dataset_versions(id),status TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,data TEXT NOT NULL)");
+            s.execute("CREATE INDEX IF NOT EXISTS dataset_version_builds_version ON dataset_version_builds(version_id,created_at DESC)");
             s.execute("PRAGMA user_version="+SCHEMA_VERSION); writer.commit(); writer.setAutoCommit(true);
         } catch(Exception e) {try{if(!writer.getAutoCommit())writer.rollback();}finally{writer.close();writes.shutdownNow();}if(e instanceof ApiError a)throw a;throw new ApiError(500,"database_migration_failed","数据库升级失败，未提交迁移；请保留原数据目录及迁移备份并查看诊断。");}
+    }
+    /** 受管原图根：默认 <数据目录>/originals；自定义时为绝对目录，且不能是磁盘根或数据目录的上级。 */
+    private static Path resolveMaterials(Path root,Path materialsRoot)throws Exception{
+        if(materialsRoot==null){Path fallback=root.resolve("originals");Files.createDirectories(fallback);return fallback;}
+        Path path=materialsRoot.toAbsolutePath().normalize();
+        if(!materialsRoot.isAbsolute()||path.getParent()==null||path.equals(root)||root.startsWith(path))throw new ApiError(400,"materials_root_invalid","受管原图目录必须是数据目录之外、非磁盘根的绝对路径。");
+        Files.createDirectories(path);return path;
     }
     private void backupBeforeMigration(int version)throws Exception{
         try{Path directory=root.resolve("backups");Files.createDirectories(directory);Path backup=directory.resolve("schema-v"+version+"-"+Json.id()+".db");
@@ -146,7 +175,7 @@ final class Store implements AutoCloseable {
     }
     static JsonObject one(Connection c,String sql,Object... args)throws SQLException{List<JsonObject> list=rows(c,sql,args);return list.isEmpty()?null:list.getFirst();}
     static JsonObject document(Connection c,String table,String id)throws SQLException{
-        if(!Set.of("projects","assets","providers","runs","resources","exports","evaluation_sets","evaluation_set_versions","evaluations","review_items","review_samples","flow_runs","flow_steps","flow_artifacts","flow_artifact_items","input_results","run_asset_results","media_jobs","video_sources","screening_features","track_timelines","timeline_frames","tracks","track_versions","track_generations","track_generation_frames","track_contributions","local_tracking_candidates","export_formats").contains(table))throw new IllegalArgumentException();
+        if(!Set.of("projects","assets","providers","runs","resources","exports","evaluation_sets","evaluation_set_versions","evaluations","review_items","review_samples","flow_runs","flow_steps","flow_artifacts","flow_artifact_items","input_results","run_asset_results","media_jobs","video_sources","screening_features","track_timelines","timeline_frames","tracks","track_versions","track_generations","track_generation_frames","track_contributions","local_tracking_candidates","export_formats","training_datasets","training_jobs","dataset_versions","dataset_version_builds").contains(table))throw new IllegalArgumentException();
         JsonObject row=one(c,"SELECT data FROM "+table+" WHERE id=?",id);
         if(row==null)throw new ApiError(404,"not_found","记录不存在。");return Json.parse(row.get("data").getAsString());
     }

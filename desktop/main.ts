@@ -1,18 +1,21 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage, protocol, session, powerMonitor, safeStorage } from 'electron';
 import type { IpcMainInvokeEvent, OpenDialogOptions } from 'electron';
 import path from 'node:path';
-import { readFile, writeFile, mkdir, stat, statfs } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, stat, statfs, realpath } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { EngineManager } from './engine';
 import { AgentManager } from './agent-manager';
 import { UpdateManager, assertUpdateIdle, validateUpdateUrl } from './updater';
 import { readExecutableIdentity, verifyUpdatePackage } from './update-package';
-import { checkDesktopUi, checkDesktopConnection, checkPersistedUiEdit, checkPackagedRelease } from './ui-check';
+import { checkDesktopUi, checkDesktopConnection, checkPersistedUiEdit, checkPackagedRelease, checkTrainingUi } from './ui-check';
 import { DialogFixtures } from './dialog-fixtures';
 import { CredentialVault } from './vault';
 import { LocalExecutionSettings } from './local-execution';
 import { MediaExecutionSettings } from './media-execution';
 import { DataStorage, DesktopPreferences, initializeStorageLocation, scopedVaultPath, type StorageLocation } from './storage';
+import { StoragePathSettings, resolveStoragePaths, storagePathsState, type ResolvedPaths } from './storage-paths';
+import { ChatStore } from './chat-store';
+import type { StoragePathsState } from '../shared/storage';
 import { PathGrants, authorizeCommandPaths, mediaTargetFromUrl, isTrustedUrl, normalizeMedia, publicInputResult, redact } from './security';
 import { DesktopError, validateCommand, assertAgentCommand, fileSelectionSchema, saveFileSchema, windowActionSchema } from './validation';
 
@@ -30,6 +33,12 @@ const dialogFixtures = manualCheck ? new DialogFixtures(userData) : undefined;
 let dataDir = path.join(userData, 'data');
 const preferencesPath = path.join(userData, 'desktop-settings.json');
 const preferenceStore = new DesktopPreferences(preferencesPath);
+// 三类业务数据的默认根跟随安装目录；开发态使用仓库内独立目录，避免与打包产物混写。
+const installDirectory = app.isPackaged ? path.dirname(process.execPath) : path.join(root, 'build', 'dev-install');
+const storagePathSettings = new StoragePathSettings(preferenceStore, () => installDirectory, () => dataDir);
+let storagePaths: ResolvedPaths | undefined;
+// 对话记录目录取自解析后的三类路径，改路径后无需重启即可生效。
+const chatStore = new ChatStore(() => storagePaths?.entries.find(entry => entry.kind === 'chats')?.path ?? '');
 const iconPath = path.join(root, 'build', 'icon.png');
 const grants = new PathGrants();
 const localExecution = new LocalExecutionSettings(preferenceStore, grants);
@@ -97,6 +106,8 @@ function send(channel: string, value: unknown): void { if (window && !window.isD
 function createBackend(location: StorageLocation): ActiveStorage {
   const scopedVault = new CredentialVault(scopedVaultPath(userData, location.credentialScopeId));
   const instance = new EngineManager({ packaged: app.isPackaged, root, resources: process.resourcesPath, dataDir: location.dataDir, credentials: () => scopedVault.all(),
+    // 导入复制的受管原图落在存储根下的 uploads；引擎只接受绝对路径，未解析时沿用数据目录内的旧位置。
+    materialsRoot: () => storagePaths?.entries.find(entry => entry.kind === 'uploads')?.path,
     localPythonPath: () => localExecution.pythonPath(),
     localModelAuthorizations: () => localExecution.modelAuthorizations(location.credentialScopeId),
     mediaToolPaths: () => mediaExecution.paths(),
@@ -110,6 +121,20 @@ function createBackend(location: StorageLocation): ActiveStorage {
 }
 function setActiveStorage(active: ActiveStorage): void {
   engine = active.engine; vault = active.vault; dataDir = active.dataDir;
+}
+/** 解析三类数据落点、建目录并预授权受管数据集目录；回退信息随状态返回，不静默降级。 */
+async function refreshStoragePaths(): Promise<StoragePathsState> {
+  storagePaths = await resolveStoragePaths(preferenceStore, installDirectory, dataDir);
+  try { await grants.add(storagePaths.entries.find(entry => entry.kind === 'datasets')!.path, 'directory'); }
+  catch { engine.log('默认数据集目录未能预授权，导出时将要求手动选择目录'); }
+  return storagePathsState(storagePaths);
+}
+function storagePathsReport(): StoragePathsState | undefined {
+  return storagePaths ? storagePathsState(storagePaths) : undefined;
+}
+/** Windows 路径大小写不敏感；用它判断受管原图目录是否真的换到了别处。 */
+function sameStoragePath(left: string, right: string): boolean {
+  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
 }
 agent.on('event', value => send('autolabel:agent-event', value));
 
@@ -133,12 +158,125 @@ async function diagnostics(): Promise<Record<string, unknown>> {
   const usage = await storage?.usage();
   return { appVersion: app.getVersion(), electronVersion: process.versions.electron, nodeVersion: process.versions.node,
     platform: process.platform, arch: process.arch, packaged: app.isPackaged, credentialProtection: safeStorage.isEncryptionAvailable(),
-    ...engine.diagnostics(), storage: { ...await diskDiagnostics(), ...(usage ? { usage } : {}) }, exportScope: ['应用和引擎版本', '连接状态与错误代码', '有限脱敏启动日志'],
+    ...engine.diagnostics(), storage: { ...await diskDiagnostics(), ...(usage ? { usage } : {}) },
+    storagePaths: storagePathsReport() ?? { available: false },
+    exportScope: ['应用和引擎版本', '连接状态与错误代码', '有限脱敏启动日志'],
     excluded: ['API Key 和认证头', '图片', '完整提示词与响应', '接口 URL', '个人绝对路径'] };
 }
 function containsSensitiveFields(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
   return Object.entries(value).some(([key, child]) => /authorization|api.?key|secret|password|token/i.test(key) || containsSensitiveFields(child));
+}
+/** 对话记录只涉及 chats 目录；导出目标必须已由保存对话框授权。 */
+async function chatHistory(command: string, payload: Record<string, unknown>): Promise<unknown> {
+  if (command === 'chat.history.list') return chatStore.list(payload.projectId as string | undefined);
+  if (command === 'chat.history.get') return chatStore.get(payload.sessionId);
+  if (command === 'chat.history.status') return chatStore.status();
+  if (command === 'chat.history.trash.list') return chatStore.trashList();
+  if (command === 'chat.history.ensure') return chatStore.ensure({
+    sessionId: payload.sessionId as string,
+    ...(payload.projectId ? { projectId: payload.projectId as string } : {}),
+    ...(payload.title !== undefined ? { title: payload.title as string } : {}),
+    ...(payload.projectName !== undefined ? { projectName: payload.projectName as string } : {}),
+    ...(payload.providerId !== undefined ? { providerId: payload.providerId as string } : {}),
+    ...(payload.model !== undefined ? { model: payload.model as string } : {}),
+  });
+  if (command === 'chat.history.rename') return chatStore.rename(payload.sessionId, payload.title);
+  if (command === 'chat.history.pin') return chatStore.pin(payload.sessionId, payload.pinned);
+  if (command === 'chat.history.delete') return chatStore.delete(payload.sessionIds);
+  if (command === 'chat.history.clear') return chatStore.clear(payload.before);
+  if (command === 'chat.history.restore') return chatStore.restore(payload.trashIds);
+  if (command === 'chat.history.purge') return chatStore.purge(payload.all);
+  if (command === 'chat.history.export') {
+    const target = await grants.requireOutput(payload.targetPath);
+    const bundle = await chatStore.bundle(payload.sessionIds);
+    await writeFile(target, JSON.stringify(bundle, null, 2));
+    return { saved: true, sessions: bundle.sessions.length };
+  }
+  throw new DesktopError('COMMAND_DENIED', '此操作未开放给界面');
+}
+/** 默认备份目录位于存储根下，与数据库目录分离，避免备份被下一次删除覆盖。 */
+async function prepareDefaultBackupDirectory(): Promise<string> {
+  const root = storagePaths?.root ?? path.join(userData, 'AutoLabelData');
+  const backupDir = path.join(root, 'backups');
+  await mkdir(backupDir, { recursive: true });
+  return grants.add(backupDir, 'directory');
+}
+/**
+ * 项目删除：先按选项完成备份，再在同一套维护锁内执行级联删除。
+ * 备份失败即中止，避免留下「已删除但无备份」的状态。
+ */
+async function deleteProject(payload: Record<string, unknown>): Promise<unknown> {
+  const projectId = payload.projectId as string;
+  if (payload.createBackup !== false) {
+    const backupDir = typeof payload.backupDir === 'string' && payload.backupDir
+      ? await grants.require(payload.backupDir, ['directory']) : await prepareDefaultBackupDirectory();
+    await storage!.createBackup(backupDir);
+  }
+  const result = await storage!.withMaintenance(() => engine.request('project.delete', payload)) as Record<string, unknown>;
+  // 历史对话保留，只标记来源项目已删除。
+  await chatStore.markProjectDeleted(projectId).catch(error => engine.log(`对话记录标记未更新：${error instanceof DesktopError ? error.code : 'CHAT_MARK_FAILED'}`));
+  return result;
+}
+/**
+ * 导出默认落点：受管「划分好的训练集」目录下的「项目名-时间戳」子目录。
+ * 目录由主进程创建并授权，用户改选时仍走文件选择器的逐项授权。
+ */
+async function defaultExportDirectory(projectId: string): Promise<string> {
+  const root = storagePaths?.entries.find(entry => entry.kind === 'datasets')?.path;
+  if (!root) throw new DesktopError('STORAGE_UNAVAILABLE', '尚未解析训练集落点，请在设置中检查存储位置后重试');
+  const project = await engine.request('project.open', { projectId }) as { name?: string };
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15).replace('T', '-');
+  const safe = (project.name ?? '项目').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60) || '项目';
+  const target = path.join(root, `${safe}-${stamp}`);
+  await mkdir(target, { recursive: true });
+  await grants.add(target, 'directory');
+  return target;
+}
+/** 流程定义的导出步骤缺省同样使用受管默认落点；模板里写了路径的步骤保持逐一授权。 */
+async function injectExportDefaults(definition: unknown, projectId: string): Promise<void> {
+  if (!definition || typeof definition !== 'object') return;
+  for (const step of (definition as { steps?: Array<{ kind: string; enabled: boolean; parameters: Record<string, unknown> }> }).steps ?? []) {
+    if (step.kind !== 'export' || !step.enabled) continue;
+    if (typeof step.parameters.outputDir === 'string' && step.parameters.outputDir) continue;
+    step.parameters.outputDir = await defaultExportDirectory(projectId);
+  }
+}
+/**
+ * 训练产物登记为本地模型：产物路径由引擎生成而不经文件对话框，
+ * 因此由主进程解析受管路径后执行一次显式授权，再走既有登记入口，不放宽本地模型登记规则。
+ */
+async function registerTrainingModel(payload: Record<string, unknown>): Promise<unknown> {
+  const artifact = await engine.request('training.job.artifact', { jobId: payload.jobId, kind: payload.checkpoint }) as
+    { path: string; hash: string; taskType: string; classNames?: string[] };
+  const modelPath = await grants.add(artifact.path, 'model');
+  const result = await engine.request('local.model.register', {
+    name: payload.name as string, taskType: artifact.taskType, modelPath,
+    ...(artifact.classNames?.length ? { classNames: artifact.classNames } : {}),
+  }) as Record<string, unknown>;
+  if (result.modelHash !== artifact.hash) throw new DesktopError('TRAINING_ARTIFACT_MISMATCH', '登记结果与训练产物哈希不一致，请重新核对产物');
+  return result;
+}
+/** 对话完成后由主进程落盘；记录失败不改变本次对话结果，只写诊断日志。 */
+async function recordAgentChat(payload: Record<string, unknown>): Promise<unknown> {
+  const record: Parameters<ChatStore['record']>[0] = {
+    sessionId: payload.sessionId as string,
+    ...(payload.projectId ? { projectId: payload.projectId as string } : {}),
+    providerId: payload.providerId as string,
+    model: payload.model as string,
+    messages: (payload.messages ?? []) as Array<{ role: string; content: string }>,
+  };
+  const logFailure = (error: unknown) => engine.log(`对话记录未写入：${error instanceof DesktopError ? error.code : 'CHAT_RECORD_FAILED'}`);
+  try {
+    const result = await agent.request('agent.chat', payload) as { content?: string; status?: string } | undefined;
+    const reply = result?.content || (result?.status === 'cancelled' ? '对话已停止。' : '接口未返回文本。');
+    await chatStore.record({ ...record, reply }).catch(logFailure);
+    return result;
+  } catch (error) {
+    const message = error instanceof DesktopError ? `${error.message}（${error.code}）` : '本次调用未完成';
+    await chatStore.record({ ...record, error: message }).catch(logFailure);
+    throw error;
+  }
 }
 async function request(command: unknown, input: unknown, fromAgent = false): Promise<unknown> {
   const requestEngine = engine; const requestVault = vault;
@@ -149,7 +287,27 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
   if (validated.command === 'storage.status') { await storage!.reconcile(); return storage!.status(); }
   if (validated.command === 'diagnostics.get') return diagnostics();
   if (validated.command === 'diagnostics.save') return saveDiagnostics();
+  if (validated.command === 'storage.paths.get') return storagePathSettings.status();
+  if (validated.command === 'storage.paths.migration') return storagePathSettings.migration();
   if (storage?.busy && validated.command !== 'update.status') throw new DesktopError('STORAGE_BUSY', '数据维护正在进行，请等待完成');
+  if (validated.command === 'storage.paths.probe') return storagePathSettings.probe(payload.path);
+  if (validated.command === 'storage.paths.save') {
+    const previous = storagePaths?.entries.find(entry => entry.kind === 'uploads')?.path;
+    const saved = await storagePathSettings.save(payload);
+    await refreshStoragePaths();
+    const current = storagePaths?.entries.find(entry => entry.kind === 'uploads')?.path;
+    if (previous && current && !sameStoragePath(previous, current) && engine.status.state === 'ready') {
+      // 受管原图目录由引擎启动参数决定：空闲时立即重启让新落点生效，忙时明确标记待生效而不打断任务。
+      try {
+        const gate = await engine.request('system.canUpdate') as { ready?: boolean };
+        if (gate?.ready) { await engine.restart(); return { ...saved, materialsRoot: 'active' as const }; }
+      } catch { /* 引擎不可用时保留待生效标记，由界面如实提示。 */ }
+      return { ...saved, materialsRoot: 'pending-restart' as const };
+    }
+    return saved;
+  }
+  if (validated.command === 'storage.paths.migrate') return storagePathSettings.migrate();
+  if (validated.command.startsWith('chat.history.')) return chatHistory(validated.command, payload);
   if (validated.command === 'storage.usage') return storage!.usage();
   if (validated.command === 'storage.cleanup') return storage!.cleanup();
   if (validated.command.startsWith('update.')) {
@@ -196,6 +354,9 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
   }
   if (['local.model.load', 'local.run.create'].includes(validated.command)) await authorizeLocal(payload);
   if (['flow.create', 'flow.rerun'].includes(validated.command) && payload.definition) await authorizeLocalSteps(payload.definition);
+  // 导出默认落点由主进程注入并授权：未显式指定时用受管「划分好的训练集」目录。
+  if (validated.command === 'export.create' && !payload.outputDir) payload.outputDir = await defaultExportDirectory(payload.projectId as string);
+  if (['flow.create', 'flow.rerun'].includes(validated.command) && payload.definition) await injectExportDefaults(payload.definition, payload.projectId as string);
   await authorizeCommandPaths(validated.command, payload, grants);
   if (storage?.busy || requestEngine !== engine) throw new DesktopError('STORAGE_BUSY', '数据目录正在切换，请重新操作');
   if (validated.command === 'local.runtime.configure') {
@@ -213,6 +374,8 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
   if (validated.command.startsWith('local.') && !['local.runtime.get', 'local.model.get', 'local.model.list'].includes(validated.command)
     && (localExecution.busy || localExecution.uncertain)) throw new DesktopError('LOCAL_CONFIGURATION_BUSY', '本地执行配置尚未就绪，请完成保存或重新连接引擎');
   if (validated.command === 'backup.create') return storage!.createBackup(payload.outputDir as string);
+  if (validated.command === 'project.delete') return deleteProject(payload);
+  if (validated.command === 'training.job.registerModel') return registerTrainingModel(payload);
   if (validated.command === 'restore.prepare') return storage!.prepareRestore(payload.backupPath as string, payload.targetParent as string);
   if (validated.command === 'storage.activate' || validated.command === 'storage.migrate') {
     const result = validated.command === 'storage.activate' ? await storage!.activate(payload.preparationId as string) : await storage!.migrate(payload.targetParent as string);
@@ -224,6 +387,8 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
     if (validated.command === 'agent.chat' && providerCredentialMutations.has(payload.providerId as string)) {
       throw new DesktopError('CREDENTIAL_BUSY', '该接口凭据正在删除或保存，请稍后重试');
     }
+    // 拦截点已持有完整上下文，落盘在此完成；流式增量不落盘。
+    if (validated.command === 'agent.chat') return recordAgentChat(payload);
     return agent.request(validated.command, payload);
   }
   if (validated.command === 'credential.set') {
@@ -276,8 +441,8 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
       if (settings.updateManifestUrl) validateUpdateUrl(settings.updateManifestUrl, allowLocalUpdateTest);
       if (['checking', 'downloading', 'verifying', 'installing'].includes(updates.status().state)) throw new DesktopError('UPDATE_BUSY', '更新操作进行中，请稍后保存设置');
     }
-    // 数据目录迁移由引擎的一致性流程完成，不能通过普通设置直接替换路径。
-    if (Object.keys(settings).some(key => /path|dataDir|directory|credentialScope/i.test(key))) throw new DesktopError('SETTING_REQUIRES_MIGRATION', '此目录设置需要通过专门的数据迁移流程修改');
+    // 数据目录与三类业务数据的落点由引擎一致性流程或专用命令管理，不能通过普通设置直接替换路径。
+    if (Object.keys(settings).some(key => /path|dataDir|directory|credentialScope|root/i.test(key))) throw new DesktopError('SETTING_REQUIRES_MIGRATION', '此目录设置需要通过专门的数据迁移流程修改');
     const engineSettings = { ...settings }; delete engineSettings.desktop; delete engineSettings.updateManifestUrl; delete engineSettings.closeBehavior;
     const result = Object.keys(engineSettings).length ? await requestEngine.request(validated.command, { settings: engineSettings }) : {};
     preferences = await preferenceStore.update({ ...(next ? { closeBehavior: next } : {}), ...(settings.updateManifestUrl !== undefined ? { updateManifestUrl: settings.updateManifestUrl } : {}) });
@@ -353,7 +518,11 @@ function registerIpc(): void {
     return result.canceled || !result.filePath ? null : grants.addOutput(result.filePath);
   });
   handle('autolabel:open-path', async (_event, value) => {
-    const permitted = await grants.require(value, ['directory', 'images', 'video', 'model', 'backup', 'labels', 'output'], false);
+    // 受管存储目录由应用自己确定，允许直接打开；其余路径仍必须先经文件选择器授权。
+    const managed = storagePaths && [storagePaths.root, ...storagePaths.entries.map(entry => entry.path)]
+      .some(entry => path.resolve(entry).toLowerCase() === path.resolve(String(value)).toLowerCase());
+    const permitted = managed ? await realpath(String(value))
+      : await grants.require(value, ['directory', 'images', 'video', 'model', 'backup', 'labels', 'output'], false);
     if ((await stat(permitted)).isDirectory()) {
       const error = await shell.openPath(permitted); if (error) throw new DesktopError('OPEN_PATH_FAILED', '文件夹无法打开');
     } else shell.showItemInFolder(permitted);
@@ -483,6 +652,19 @@ async function smoke(): Promise<void> {
     await checkDesktopManual(window!, output); app.quit(); return;
   }
   if (process.argv.includes('--desktop-ui-resume')) { await checkPersistedUiEdit(window!, output); app.quit(); return; }
+  if (process.argv.includes('--desktop-training-check')) {
+    await checkTrainingUi(window!, output, {
+      // 训练页验收用真实数据：示例项目导出为固定版本，再生成不可变训练快照。
+      prepareDataset: async () => {
+        const directory = path.join(userData, 'training-fixtures');
+        await mkdir(directory, { recursive: true });
+        const example = await engine.request('project.example', {}) as { id: string };
+        const exported = await engine.request('export.create', { projectId: example.id, outputDir: directory, annotationSelection: 'confirmed' }) as { id: string };
+        return await engine.request('training.dataset.create', { projectId: example.id, source: 'export', exportId: exported.id }) as Record<string, unknown>;
+      },
+    });
+    app.quit(); return;
+  }
   if (process.argv.includes('--desktop-connection-check')) { await checkDesktopConnection(window!, output, { stop: () => engine.stop(), restart: () => engine.restart() }); app.quit(); return; }
   if (process.argv.includes('--desktop-ui-check')) { await checkDesktopUi(window!, output); app.quit(); return; }
   if (process.argv.includes('--desktop-window-check')) {
@@ -573,6 +755,7 @@ else {
     preferences = await preferenceStore.load();
     const initial = createBackend(await initializeStorageLocation(userData, preferenceStore));
     preferences = preferenceStore.value; setActiveStorage(initial);
+    await refreshStoragePaths();
     storage = new DataStorage({ active: initial, create: createBackend,
       commit: async location => { preferences = await preferenceStore.update({ ...location, dataEstablished: true }); }, activate: setActiveStorage,
       guard: () => { if (installingUpdate || agent.activeCount || credentialSaves || localExecution.busy || mediaExecution.busy || shutdownStarted) throw new DesktopError('STORAGE_TASKS_ACTIVE', '请先完成对话、配置保存或更新，再维护数据目录'); },

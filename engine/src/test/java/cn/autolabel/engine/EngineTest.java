@@ -24,6 +24,8 @@ public final class EngineTest {
     static void error(String code,Runnable runnable){try{runnable.run();throw new AssertionError("Expected "+code);}catch(ApiError e){check(e.code.equals(code),"Expected "+code+" got "+e.code);}}
     public static void main(String[] args)throws Exception{
         root=Path.of("engine/build/verification").toAbsolutePath().resolve("run-"+System.currentTimeMillis());Files.createDirectories(root);
+        if(args.length>0&&args[0].equals("training-datasets")){TrainingDatasetsTest.run(root);System.out.println("PASS "+assertions+" training dataset assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
+        if(args.length>0&&args[0].equals("materials-root")){MaterialsRootTest.run(root);System.out.println("PASS "+assertions+" materials root assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("view-integration")){ViewRunIntegrationTest.run(root);System.out.println("PASS "+assertions+" view integration assertions.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("local-integration")){LocalRunIntegrationTest.run(root);System.out.println("PASS "+assertions+" local run integration assertions.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("reuse-integration")){ReuseIntegrationTest.run(root);System.out.println("PASS "+assertions+" reuse integration assertions; local real request and provenance checks only.\nVERIFICATION_DIR="+root);return;}

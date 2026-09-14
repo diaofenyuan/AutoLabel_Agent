@@ -5,9 +5,16 @@ import java.nio.file.*;
 import java.util.*;
 
 final class Engine implements AutoCloseable {
-    final Store store;final Projects projects;final Exporter exporter;final ExportFormats exportFormats;final Providers providers;final Runs runs;final Flows flows;final Maintenance maintenance;final LocalModels localModels;final LocalRuntime localRuntime;final LocalRuns localRuns;final RunResults runResults;final InputResultReuse inputReuse;final MediaJobs mediaJobs;final Tracks tracks;final TrackGenerations trackGenerations;
+    final Store store;final Projects projects;final Exporter exporter;final ExportFormats exportFormats;final Providers providers;final Runs runs;final Flows flows;final Maintenance maintenance;final LocalModels localModels;final LocalRuntime localRuntime;final LocalRuns localRuns;final RunResults runResults;final InputResultReuse inputReuse;final MediaJobs mediaJobs;final Tracks tracks;final TrackGenerations trackGenerations;final TrainingRuntime trainingRuntime;final TrainingDatasets trainingDatasets;final TrainingJobs trainingJobs;final DatasetVersions datasetVersions;final ProjectDeletion projectDeletion;
     Engine(Path path)throws Exception{this(path,new JsonObject());}
-    Engine(Path path,JsonObject startup)throws Exception{store=new Store(path);projects=new Projects(store);exporter=new Exporter(store,projects);exportFormats=new ExportFormats(store);providers=new Providers(store);localModels=new LocalModels(store,projects);localRuntime=new LocalRuntime(localModels,startup);runs=new Runs(store,projects,providers);runResults=new RunResults(this);inputReuse=new InputResultReuse(this);runs.inputResults=runResults;runs.inputReuse=inputReuse;localRuns=new LocalRuns(this);flows=new Flows(this);mediaJobs=new MediaJobs(this,startup);exporter.mediaJobs=mediaJobs;tracks=new Tracks(this);trackGenerations=new TrackGenerations(this,tracks);tracks.generations=trackGenerations;runs.flowTick=()->{flows.tick();localRuns.tick();mediaJobs.tick();trackGenerations.tick();};maintenance=new Maintenance(this);}
+    /** 启动参数里的 materialsRoot 为存储根下的受管原图目录；缺省保持 <数据目录>/originals。 */
+    static Path materialsRoot(JsonObject startup){
+        String value=Json.str(startup,"materialsRoot","");
+        if(value.isBlank())return null;
+        if(value.length()>32767)throw new ApiError(400,"materials_root_invalid","受管原图目录必须是绝对路径。");
+        try{Path path=Path.of(value);if(!path.isAbsolute())throw new ApiError(400,"materials_root_invalid","受管原图目录必须是绝对路径。");return path;}catch(ApiError e){throw e;}catch(Exception e){throw new ApiError(400,"materials_root_invalid","受管原图目录必须是绝对路径。");}
+    }
+    Engine(Path path,JsonObject startup)throws Exception{store=new Store(path,materialsRoot(startup));projects=new Projects(store);exporter=new Exporter(store,projects);exportFormats=new ExportFormats(store);providers=new Providers(store);localModels=new LocalModels(store,projects);localRuntime=new LocalRuntime(localModels,startup);runs=new Runs(store,projects,providers);runResults=new RunResults(this);inputReuse=new InputResultReuse(this);runs.inputResults=runResults;runs.inputReuse=inputReuse;localRuns=new LocalRuns(this);flows=new Flows(this);mediaJobs=new MediaJobs(this,startup);exporter.mediaJobs=mediaJobs;datasetVersions=new DatasetVersions(store,projects,exporter);tracks=new Tracks(this);trackGenerations=new TrackGenerations(this,tracks);tracks.generations=trackGenerations;trainingRuntime=new TrainingRuntime(localRuntime,startup);localRuntime.shareTrainingRuntime(trainingRuntime);trainingDatasets=new TrainingDatasets(store,projects);trainingJobs=new TrainingJobs(store,trainingDatasets,localModels,localRuntime,trainingRuntime);runs.flowTick=()->{flows.tick();localRuns.tick();mediaJobs.tick();trackGenerations.tick();trainingJobs.tick();};maintenance=new Maintenance(this);projectDeletion=new ProjectDeletion(this);}
     Object command(String command,JsonObject p)throws Exception{
         if(command.equals("system.canUpdate"))return maintenance.status();if(command.equals("system.prepareUpdate"))return maintenance.prepare();if(command.equals("system.cancelUpdate"))return maintenance.cancel();
         if(command.equals("system.prepareDataMaintenance"))return maintenance.prepareData(p);if(command.equals("system.cancelDataMaintenance"))return maintenance.cancelData(p);
@@ -16,6 +23,8 @@ final class Engine implements AutoCloseable {
     }
     private Object execute(String command,JsonObject p)throws Exception{return switch(command){
         case "project.list"->projects.list();case "project.create"->projects.create(p);case "project.update"->projects.update(p);case "project.open"->projects.get(Json.required(p,"projectId"));case "project.example"->projects.example();
+        // 项目删除只接受显式用户操作，不进入 Agent 工具白名单。
+        case "project.delete.preflight"->projectDeletion.preflight(p);case "project.delete"->projectDeletion.delete(p);
         case "asset.list"->projects.listAssets(p);case "asset.get"->projects.asset(Json.required(p,"assetId"));case "asset.import"->projects.importAssets(p);
         case "track.timeline.create"->tracks.timelines.create(p);case "track.timeline.list"->tracks.timelines.list(p);case "track.timeline.get"->tracks.timelines.get(p);case "track.timeline.frames"->tracks.timelines.page(p);case "track.timeline.update"->tracks.timelines.update(p);
         case "track.create"->tracks.create(p);case "track.list"->tracks.list(p);case "track.get"->tracks.get(p);case "track.update"->tracks.update(p);case "track.delete"->tracks.delete(p);
@@ -50,6 +59,18 @@ final class Engine implements AutoCloseable {
         case "export.preflight"->exporter.preflight(p);case "export.create"->exporter.create(p);case "export.list"->exporter.list(Json.required(p,"projectId"));
         case "export.format.list"->exportFormats.list(p);case "export.format.get"->exportFormats.get(p);case "export.format.save"->exportFormats.save(p);case "export.format.delete"->exportFormats.delete(p);
         case "export.reproduce"->new ExportHistory(store).reproduce(p);case "export.compare"->new ExportHistory(store).compare(p);
+        case "training.runtime.get"->{FlowPlans.keys(p);yield trainingRuntime.probe(p);}
+        case "training.dataset.create"->trainingDatasets.create(p);case "training.dataset.list"->trainingDatasets.list(p);case "training.dataset.get"->trainingDatasets.get(p);
+        case "training.job.preflight"->trainingJobs.preflight(p);
+        case "training.job.create"->trainingJobs.create(p);case "training.job.list"->trainingJobs.list(p);case "training.job.get"->trainingJobs.get(p);
+        case "training.job.metrics"->trainingJobs.metrics(p);case "training.job.log"->trainingJobs.log(p);
+        case "training.job.cancel"->trainingJobs.cancel(p);case "training.job.retry"->trainingJobs.retry(p);case "training.job.delete"->trainingJobs.delete(p);
+        // 受管产物路径只给桌面主进程做授权解析，不返回给渲染层。
+        case "training.job.artifact"->trainingJobs.artifact(p);
+        case "dataset.version.preflight"->datasetVersions.preflight(p);case "dataset.version.create"->datasetVersions.create(p);
+        case "dataset.version.get"->datasetVersions.get(p);case "dataset.version.list"->datasetVersions.list(p);case "dataset.version.items"->datasetVersions.items(p);
+        case "dataset.version.cancel"->datasetVersions.cancel(p);case "dataset.version.delete"->datasetVersions.delete(p);
+        case "dataset.version.compare"->datasetVersions.compare(p);case "dataset.version.verify"->datasetVersions.verify(p);
         case "provider.list"->providers.list();case "provider.save"->providers.save(p);case "provider.delete"->providers.delete(p);case "provider.models"->providers.models(Json.required(p,"providerId"));case "provider.test"->providers.test(p);case "provider.capabilities"->providers.capabilities(p);case "credential.set"->providers.credential(p);
         case "chat.send"->providers.chat(p);
         case "chat.cancel"->providers.cancel(Json.required(p,"sessionId"));
@@ -66,7 +87,7 @@ final class Engine implements AutoCloseable {
         case "resource.get"->new ResourceLibrary(store,projects).get(p);case "resource.apply"->new ResourceLibrary(store,projects).apply(p);case "resource.reference"->new ResourceLibrary(store,projects).addReference(p);case "resource.image"->resourceImage(p);
         case "settings.get"->settings();
         case "settings.save"->{JsonObject settings=Json.object(p,"settings");Providers.rejectSecrets(settings);Json.bounded(settings,"globalConcurrency",8,1,32);yield store.tx(c->{JsonObject r=Store.one(c,"SELECT data FROM settings WHERE id='global'");JsonObject current=r==null?new JsonObject():Json.parse(r.get("data").getAsString());for(var e:settings.entrySet())current.add(e.getKey(),e.getValue());Store.update(c,"INSERT INTO settings(id,data) VALUES('global',?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",current);Store.event(c,"settings.saved",null,null,null,Json.obj("globalConcurrencyRequiresRestart",settings.has("globalConcurrency")));return current;});}
-        case "diagnostics.get"->Json.obj("engineVersion","0.1.0","protocolVersion",1,"javaVersion",System.getProperty("java.version"),"os",System.getProperty("os.name"),"architecture",System.getProperty("os.arch"),"databaseMode","WAL","databaseVersion",Store.SCHEMA_VERSION,"writeFailed",store.writeFailed,"queue",runs.diagnostics(),"timestamp",Json.now());
+        case "diagnostics.get"->Json.obj("engineVersion","0.1.0","protocolVersion",1,"javaVersion",System.getProperty("java.version"),"os",System.getProperty("os.name"),"architecture",System.getProperty("os.arch"),"databaseMode","WAL","databaseVersion",Store.SCHEMA_VERSION,"writeFailed",store.writeFailed,"queue",runs.diagnostics(),"training",trainingJobs.diagnostics(),"timestamp",Json.now());
         default->throw new ApiError(501,"command_not_implemented","此功能尚未实现："+command);
     };}
     private JsonObject trackLocalSequence(JsonObject p)throws Exception{
@@ -226,5 +247,5 @@ final class Engine implements AutoCloseable {
     static boolean trackingReviewRequired(JsonObject raw){return Json.bool(raw,"requiresTrackingReview",false);}
     JsonObject settings(){return store.read(c->{JsonObject r=Store.one(c,"SELECT data FROM settings WHERE id='global'");return r==null?Json.obj("theme","light","globalConcurrency",8,"closeBehavior","ask"):Json.parse(r.get("data").getAsString());});}
     JsonObject resourceImage(JsonObject p){ResourceLibrary library=new ResourceLibrary(store,projects);JsonObject resource=library.get(p);if(!Json.required(resource,"kind").equals("reference"))throw new ApiError(422,"reference_invalid","只有人工参考资源包含固定图片。");JsonObject content=Json.object(resource,"content");return Json.obj("resourceId",resource.get("id"),"resourceVersion",resource.get("version"),"path",library.referencePath(content).toString(),"contentHash",content.get("contentHash"),"width",content.get("width"),"height",content.get("height"));}
-    @Override public void close(){trackGenerations.close();mediaJobs.close();localRuns.close();flows.close();runs.close();providers.close();store.close();}
+    @Override public void close(){trainingJobs.close();datasetVersions.close();trainingRuntime.close();trackGenerations.close();mediaJobs.close();localRuns.close();flows.close();runs.close();providers.close();store.close();}
 }

@@ -19,13 +19,14 @@ const release7bOnly = process.argv.includes('--release7b');
 const updateUiOnly = process.argv.includes('--update-ui');
 const runControlOnly = process.argv.includes('--run-controls');
 const mediaOnly = process.argv.includes('--media');
+const trainingUiOnly = process.argv.includes('--training-ui');
 if ((manualOnly || mediaOnly) && packaged) throw new Error('手工开发验收不能在稳定安装包中运行');
-const label = mediaOnly ? 'media-check' : runControlOnly ? 'run-control-check' : updateUiOnly ? 'update-ui-check' : connectionOnly ? 'connection-ui-check' : release7bOnly ? 'release7b-check' : release7aOnly ? 'release7a-check' : release6bOnly ? 'release6b-check' : release6aOnly ? 'release6a-check' : release5Only ? 'release5-check' : releaseOnly ? 'release-check' : manualOnly ? 'manual-check' : uiOnly ? 'ui-check' : windowOnly ? 'window-check' : packaged ? 'packaged-smoke' : 'desktop-smoke';
+const label = trainingUiOnly ? 'training-ui-check' : mediaOnly ? 'media-check' : runControlOnly ? 'run-control-check' : updateUiOnly ? 'update-ui-check' : connectionOnly ? 'connection-ui-check' : release7bOnly ? 'release7b-check' : release7aOnly ? 'release7a-check' : release6bOnly ? 'release6b-check' : release6aOnly ? 'release6a-check' : release5Only ? 'release5-check' : releaseOnly ? 'release-check' : manualOnly ? 'manual-check' : uiOnly ? 'ui-check' : windowOnly ? 'window-check' : packaged ? 'packaged-smoke' : 'desktop-smoke';
 const output = path.join(root, 'build', label + '.json');
 await mkdir(path.dirname(output), { recursive: true });
 const testUserData = process.env.AUTOLABEL_TEST_USER_DATA
   ? path.resolve(root, process.env.AUTOLABEL_TEST_USER_DATA)
-  : path.join(root, 'build', label + ((updateUiOnly || runControlOnly || mediaOnly) ? `-user-data-${Date.now()}` : '-user-data'));
+  : path.join(root, 'build', label + ((updateUiOnly || runControlOnly || mediaOnly || trainingUiOnly) ? `-user-data-${Date.now()}` : '-user-data'));
 const env = { ...process.env, AUTOLABEL_TEST_USER_DATA: testUserData, AUTOLABEL_SMOKE_OUTPUT: output };
 delete env.ELECTRON_RUN_AS_NODE;
 if (packaged) { env.JAVA_HOME = 'C:\\nonexistent'; env.AUTOLABEL_JAVA_HOME = 'C:\\nonexistent'; }
@@ -45,6 +46,7 @@ if (release7aOnly) args.push('--desktop-release7a-check');
 if (release7bOnly) args.push('--desktop-release7b-check');
 if (updateUiOnly || runControlOnly || mediaOnly) args.push('--desktop-manual-check');
 if (connectionOnly) args.push('--desktop-connection-check');
+if (trainingUiOnly) args.push('--desktop-training-check');
 if (manualOnly || updateUiOnly || runControlOnly || mediaOnly) {
   const { build } = await import('esbuild');
   await build({ entryPoints: [path.join(root, 'renderer/tests/desktop-manual-check.ts')], bundle: true, platform: 'node', format: 'cjs',
@@ -109,15 +111,16 @@ if (manualOnly) { assert.equal(result.passed, true); console.log(`新源码手�
 if (updateUiOnly) { assert.equal(result.passed, true); assert.deepEqual(result.states, ['available','ready','install-gate','cancelled','checksum-error']); console.log(`更新界面本地回环检查通过：${output}`); process.exit(0); }
 if (runControlOnly) { assert.equal(result.passed, true); assert.equal(result.paused.cancelled, true); assert.equal(result.failedRetry.retryDispatched, true); assert.ok(result.failedRetry.callsAfter > result.failedRetry.callsBefore); console.log(`任务中心暂停/恢复/取消/失败重试界面检查通过：${output}`); process.exit(0); }
 if (mediaOnly) { assert.equal(result.passed, true); assert.equal(result.timeline?.frameCount, 4); assert.equal(result.timeline?.previewLoaded, true); console.log(`视频时间轴与轨迹候选界面检查通过：${output}`); process.exit(0); }
+if (trainingUiOnly) { assert.equal(result.passed, true); assert.ok(['ready', 'invalid'].includes(result.dataset.status)); assert.equal(result.wizard.tabs.length, 3); console.log(`训练页向导与真实快照界面检查通过：${output}`); process.exit(0); }
 if (connectionOnly) { assert.equal(result.before.ready, true); assert.equal(result.before.banner, false); assert.equal(result.disconnected.visible, true); assert.equal(result.disconnected.buttonEnabled, true); assert.equal(result.restored.ready, true); assert.equal(result.restored.banner, false); console.log(`断线重连桌面界面检查通过：${output}`); process.exit(0); }
 if (uiOnly) {
   const pages = result.pages.filter(page => page.page);
-  assert.equal(pages.length, 7); assert.ok(pages.every(page => page.bridge && page.bodyLength > 40 && !page.error));
+  assert.equal(pages.length, 8); assert.ok(pages.every(page => page.bridge && page.bodyLength > 40 && !page.error));
   assert.ok(result.pages.find(page => page.check === 'manual-example')?.loaded);
   assert.ok(pages.find(page => page.page === 'workbench').canvasObjects > 0);
   assert.equal(await run(args.map(arg => arg === '--desktop-ui-check' ? '--desktop-ui-resume' : arg)), 0);
   result = JSON.parse(await readFile(output, 'utf8')); assert.equal(result.restartPersistence.restored, true);
-  console.log(`七页桌面与人工示例检查通过：${output}`); process.exit(0);
+  console.log(`八页桌面与人工示例检查通过：${output}`); process.exit(0);
 }
 if (windowOnly) {
   for (const view of [result.ui, result.fallback]) {

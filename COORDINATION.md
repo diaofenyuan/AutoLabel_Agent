@@ -65,6 +65,12 @@
 | settings.save | settings | object |
 | diagnostics.get | 空 | object |
 | chat.send | projectId?, providerId, model, messages, tools? | {content, toolCalls?, usage?} |
+| dataset.version.preflight | projectId, annotationScope? | {assets, excluded, groups, inspection, blocking, canBuild} |
+| dataset.version.create | projectId, name?, annotationScope?, seed? | 版本视图（status=building，异步生成） |
+| dataset.version.get / list / items | versionId / projectId?,offset?,limit? / versionId,outcome?,offset?,limit? | 版本视图 / {items,total} / 逐项记录 |
+| dataset.version.cancel / delete | versionId / versionId, confirm:true | {cancelled} / {deleted} |
+| dataset.version.compare | versionId, otherVersionId | {added, removed, changed, unchanged, classesChanged, recipeChanged} |
+| dataset.version.verify | versionId | {verified, total, missing, changed, consistent, contentHash, manifestHash} |
 
 第一轮先打通项目、离线人工示例、编辑保存及导出。所有未实现入口须说明缺少条件，禁止虚构任务数据、成功提示和远端百分比。总目标继续覆盖全部八阶段，不因首轮完成宣布全部完成。
 
@@ -92,6 +98,42 @@
 - OBB 输出现带 geometryIssues（annotationId/code/severity/field/message）和 requiresGeometryReview，越界原始角点完整保留。实际 boats 推理 169 个对象，其中 18 个明确标记越界；矩形直角关系保留。--allow-reviewable-geometry 只验证问题识别与关联，当前验证器用 basicStructureAndBoundsPassed 区分基础范围，并明确 adoptionValidation=requires_java_validation，不能跳过 Java 几何采用校验。
 - Segment 从 masks.data 检查完整轮廓树，孔洞、多区域、退化或越界边界生成 segment_topology_unsupported，并在 geometryDiagnostics 保留 annotationId、所有 rings/parentRingId/depth/hole、基准像素坐标及 maskToBaseline。不能仅以 masks.xy 的单外轮廓作为完整结果。LocalInference.Prediction 保留完整 rawResult/issues/provenance；adoptable=false 时 annotations=null，不得以空标签覆盖。
 - TransformedImages 在专属 generation 目录内持锁，逐视图发布 input.png/input.json，原子发布为完成点；close 保留已发布文件与有效空目录，仅清理本会话临时文件。外部取消通过 Control，不能依赖同步 close 打断 render。TransformGeometry 与像素生成均须接入流程产物、基准坐标回映及导出复核检查后开放节点。
+
+## 软件内模型训练模块（本轮新增，阶段 9）
+
+- 边界修订：`SPEC.md` 原先“不纳入软件内训练”的条款已按用户最新要求修订为第 10 节。训练在本地执行，不使用业务云，**不计入模型 API 预算**（不接入 `Budgets`/`Costs`），仅记录任务事件与耗时。本模块未实现前，不得在界面或说明中声称训练可用。
+- 数据集统一为不可变快照 `training_datasets`（`snapshotHash`）：来源为 `upload`（用户选择的训练集与验证集目录）或 `export`（引用已完成导出版本，逐文件校验清单哈希后复制）。训练只读快照，启动后不可变；换数据即新快照与新任务。划分沿用导出既有的 `{split}` 与来源组防泄漏规则，效果图不进入训练图片。
+- 引擎命令（参数与响应边界写入新增的 `shared/training.ts`，界面与桌面共用）：`training.runtime.get`、`training.dataset.create/list/get`、`training.job.preflight/create/list/get/metrics/log/cancel/retry`、`training.job.artifact`、`training.job.registerModel`、`training.job.delete`。
+- 桌面：`training.dataset.create` 的 `trainDir`/`valDir` 必须经 `PathGrants.require(..., ['directory'])`；`training.job.artifact` 与 `local.model.resolve` 同级，不向渲染层开放。`local.model.register` 只接受经文件对话框或受管产物授权通道产生的 `modelPath`：训练产物由主进程先经 `training.job.artifact` 解析受管绝对路径，再 `PathGrants.add(path,'model')`，**不得为此放宽既有校验规则**。
+- 训练进程：新增 `inference/train_worker.py`，沿用 `inference/worker.py` 的行级 JSON 协议族（`ready` 握手、`event` 进度、`response` 结果）、`AUTOLABEL_PARENT_PID` 父进程句柄监测与 `YOLO_AUTOINSTALL=false`；命令为 `probe`/`train`/`cancel`/`shutdown`。训练请求**不设固定总超时**，由 Java 侧心跳与停滞判定管理；**不得复用 `LocalInference`**（该类硬限制单请求 `timeout<=600000ms` 且一进程单活动请求）。
+- 训练进程的实现约束（实测踩坑，不得改动）：Windows 上只要存在一个阻塞在 stdin 读取上的线程，之后再导入 `torch`/`ultralytics` 就会永久挂起。因此依赖必须在控制线程启动之前完成预加载（`preload()`），训练在主线程内联执行，控制线程只处理 `cancel`/`shutdown` 这类无导入的回执。协议通道固定为真实 stdout（`protocol` 引用），训练期的 `redirect_stdout` 不得改写协议行。
+- 逐轮指标只上报 ultralytics 真实输出（`metrics/precision(B)`、`recall`、`mAP50`、`mAP50-95`、`train/*_loss`），落库值与 `results.csv` 同源；`on_fit_epoch_end` 在训练收尾时会以同一轮次再触发一次，重复与越界轮次必须忽略，不得重复计入任务进度。取消通过 `trainer.stop`（8.4）在当前轮次边界生效。
+- 设备互斥：训练与 `LocalRuntime` 共享设备占用。训练占用设备时 `local.model.load`/`local.run.create`/`track.local.sequence` 返回 `device_busy_by_training`；推理占用设备时 `training.job.create` 返回 `device_busy`。不静默共享显存、不自动降级设备、不排队抢占。
+- 进度真实性：进度只来自工作进程实际完成的训练轮次，不伪造百分比；估算剩余时间必须标注为估算；停滞只记录并提示，不静默终止进程；取消为优雅停止并保留已产出轮次指标与最后权重，超时后仅强制终止自身进程树。
+- 打包（已落实，不得回退）：`build/electron-builder.cjs` 的 `extraResources` 中 `inference` 过滤为 `['worker.py','train_worker.py']`；冻结打包脚本（`desktop-pack-frozen.mjs`/`desktop-pack-milestone.mjs`）的输入校验与复制步骤已纳入 `train_worker.py`，缺少该文件时打包必须直接失败。
+- Agent：训练命令**不进入** `agent/tools.ts` 白名单；后续如需只读能力，仅允许读取已提交任务状态。
+
+## 本地数据存储与对话记录（阶段 1～6 已实现；阶段 7 验收部分完成）
+
+- 存储根：默认 `<安装目录>\AutoLabelData`（开发态为 `<repo>\build\dev-install\AutoLabelData`），根下分三类受管目录 `datasets/`（划分好的训练集＝导出默认落点）、`uploads/`（用户上传的训练集）、`chats/`（对话记录）。三类均可单独覆盖为外部绝对路径，留空跟随存储根。启动时做可写探测，不可写则回退 `%LOCALAPPDATA%\自动标注小助手\AutoLabelData`，并在设置页与诊断中显示实际生效目录与回退原因，**不静默降级**。
+- 命令：`storage.paths.get/save/probe/migration/migrate`。路径类设置**不得**走 `settings.save`（该命令对命中 `/path|dataDir|directory|credentialScope|root/i` 的字段一律以 `SETTING_REQUIRES_MIGRATION` 拒绝）；校验规则为绝对路径且非磁盘根、互不嵌套、不存在则创建、已有内容不清空，保存后立即生效且不自动搬移既有文件。
+- 对话记录（对齐 Codex）：`<chats>/index.json`（会话索引：`id/title/titleSource/pinned/pinOrder/projectId/providerId/model/createdAt/updatedAt/lastMessageAt/messageCount/status`）+ `<sessionId>.jsonl` 逐条追加。命令 `chat.history.list/get/status/ensure/rename/pin/delete/clear/trash.list/restore/purge/export`；删除先移入 `<chats>/.trash/`（保留 7 天）；执行中的会话禁止删除；落盘在 `agent.chat` 拦截点完成，流式增量不落盘，失败记为带 `error` 的助手消息；API Key 永不入盘。
+- 项目删除：`project.delete.preflight`（逐表计数 + 受管占用 + 外部导出目录 + 阻塞项）与 `project.delete`（要求 `confirmName` 完全匹配、默认先备份、必须在维护锁内、按反向依赖顺序显式级联）。外部导出目录**永不删除**。刻意不删 `video_sources`/`screening_features`（按内容寻址，跨项目复用）。
+- 导出默认落点（阶段 5.1–5.3 已实现）：`export.create` 的 `outputDir` 可缺省，由桌面主进程注入 `<datasetsRoot>\<项目名>-<时间戳>` 并授权；流程定义中启用的 `export` 步骤缺省时同样注入，模板里显式写的路径仍逐一授权。渲染层只从 `storage.paths.get` 读取该目录用于提示，不自行拼接判断。
+- 受管原图根（阶段 5.4–5.6 已实现，接口已冻结）：引擎启动 JSON 新增可选 `materialsRoot`，缺省保持 `<数据目录>/originals`；自定义值必须是绝对路径且不等于、不包含数据目录，否则启动即 `materials_root_invalid`，**不静默回退**。桌面在 `createBackend` 传入解析后的 `uploads` 目录，因此导入复制（`asset.import` 的 copy 模式）、素材重定位复制、流程导入暂存都落在该目录，`OverlayRenderer.protectTarget` 与 `ExportHistory.protectDestination` 同样把它当作受保护目录；`ProjectDeletion` 只删除数据库确认属于该项目、且位于数据目录或受管原图根之内的文件。
+- 受管原图根的生效时机：该值只在引擎启动时读取。`storage.paths.save` 后若上传目录实际变化，主进程在引擎空闲（`system.canUpdate.ready`）时自动重启引擎使新落点立即生效，并返回 `materialsRoot:'active'`；有在途任务时返回 `materialsRoot:'pending-restart'`，界面必须如实说明「将在引擎重启后生效」，不得显示为已生效。
+- 备份与恢复：归档条目沿用内容派生的相对名（`originals/imported-<hash>.<ext>`），恢复按绑定重写把外部受管原图收进新数据目录的 `originals/`，恢复目录自包含；三类新数据目录（`datasets/`、`uploads/`、`chats/`）**尚未纳入 `backup.create`**（计划 §5 风险 2 的建议项），界面与文档不得声称已被备份覆盖。
+- 界面现状：阶段 3（Codex 式侧栏、对话主页、取消项目中心）与阶段 4 的界面部分（项目删除三步弹窗、会话删除/置顶/重命名入口）已在工作区实现并通过源码态八页 UI 检查（含项目删除弹窗断言），不属于缺口；仍有待补的是三类新数据目录纳入备份清单，以及需要外部环境的验收项（干净 Windows、真实用户机器升级演练、代码签名）。
+
+## 数据集版本管理模块（本轮新增，阶段 10）
+
+- 定位：数据集版本是「原始数据集 → 版本 → 产物」链路的中间层。素材标注版本（`versions`）、导出版本（`exports` + 清单）、训练快照（`training_datasets`）与评测集版本继续保持各自语义，导出与训练快照降级为版本的消费结果，通过可空 `datasetVersionId` 关联；旧数据保持可查、可复现。
+- 不可变约束（实现时不得放宽）：版本进入 `ready` 后内容、清单与划分归属不可变更，任何调整必须产生新版本号；生成过程只读原始素材与标注；副本逐文件校验哈希；划分以来源组为最小单位，分组约束优先级高于比例与分层；增强仅作用于训练集（阶段 D）；同源 + 同配方 + 同种子必须得到同一内容哈希。
+- 存储与命令：schema 由 9 升至 10，只新增 `dataset_versions`（项目内递增 `number`，`UNIQUE(project_id,version)`）、`dataset_version_items`（被排除项也入库并带 `reasonCode`）、`dataset_version_builds`（分阶段真实计数进度）与可空字段，不改既有表结构。目录为数据根下 `datasets/versions/<version_id>/`，先写 `.autolabel-partial-` 临时目录再原子发布，失败整体删除。
+- 清单：`manifest.json` 使用 `schemaVersion 3`、`kind='dataset-version'`，与导出清单同源；**不得包含绝对路径、用户目录与凭据**（I9）。读取侧对缺字段的历史清单回退既有约定。
+- 阶段 A 只支持最简配方：`sourceKind='project'`、`annotationScope` 为 `labeled`/`confirmed`、无筛选与转换、按默认 70/20/10 以来源组为单位划分（`rule='ratio-source-group-v1'`）。`upload`/`export` 来源、过滤与采样、几何裁剪与平铺、增强、自定义划分分别属于后续阶段，未实现前不得在界面声称可用。
+- 桌面与 Agent：`dataset.version.*` 写操作**不进入** `agent/tools.ts` 白名单，只能由用户在界面显式触发；所有命令的参数结构写入 `desktop/validation.ts`，不引入新的路径授权（版本副本全部位于受管目录）。
+- 删除为软删除，副本保留，彻底清理交由「本地数据存储」生命周期处理；阶段 F 之前没有消费端引用版本。
 
 ## 桌面更新接口
 

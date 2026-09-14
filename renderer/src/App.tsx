@@ -1,26 +1,27 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { FolderClosed, Scan, Workflow as WorkflowIcon, ListTodo, Library, Box, Settings as SettingsIcon, PanelLeftClose, PanelLeftOpen, CircleHelp, ChevronRight, Monitor, X, Minus, Square, Check, AlertCircle, Keyboard, LoaderCircle, Search, ArrowRight } from 'lucide-react';
-import { Context, type Page, type ChatSession } from './context';
+import { PanelLeftClose, PanelLeftOpen, CircleHelp, ChevronRight, X, Minus, Square, Check, AlertCircle, Keyboard, LoaderCircle, Search, ArrowRight } from 'lucide-react';
+import { Context, navLabel, navRegistry, type Page, type ChatSession } from './context';
 import { getBridge, isDemo, request, errorMessage } from './bridge';
 import type { Project, Asset, Preferences, Provider, EngineEvent, EngineStatus } from './types';
 import { defaultPreferences } from './types';
+import type { ChatHistoryList, ChatSessionSummary } from '../../shared/chat';
 import { IconButton, Modal } from './ui';
-import { Projects } from './Projects';
+import { Sidebar } from './Sidebar';
+import { ProjectDeletionDialog } from './ProjectDeletion';
+import ChatHome from './ChatHome';
 const Workbench = lazy(() => import('./Workbench'));
 const Workflow = lazy(() => import('./Workflow'));
 const Tasks = lazy(() => import('./Tasks'));
 const Resources = lazy(() => import('./Resources'));
 const Models = lazy(() => import('./Models'));
+const Training = lazy(() => import('./Training'));
 const Settings = lazy(() => import('./Settings'));
-const nav = [
-  ['projects', '项目中心', FolderClosed], ['workbench', '标注工作台', Scan], ['workflow', '流程编辑器', WorkflowIcon],
-  ['tasks', '任务中心', ListTodo], ['resources', '资源库', Library], ['models', '模型中心', Box], ['settings', '设置', SettingsIcon],
-] as const;
 export default function App() {
-  const [page, setPage] = useState<Page>(() => nav.some(n => n[0] === location.hash.slice(1)) ? location.hash.slice(1) as Page : 'projects');
+  const [page, setPage] = useState<Page>(() => { const hash = location.hash.slice(1); return navRegistry.some(entry => entry.key === hash) ? hash as Page : 'chat'; });
   const [mediaTaskId, setMediaTaskId] = useState('');
   const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState<Project | null>(null);
+  const [deletion, setDeletion] = useState<Project | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
   const assetPageSize = 100;
   const [assetOffset, setAssetOffset] = useState(0);
@@ -33,6 +34,8 @@ export default function App() {
   const [prefs, setPrefs] = useState<Preferences>(defaultPreferences);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [chats, setChats] = useState<Record<string, ChatSession>>({});
+  const [chatSessions, setChatSessions] = useState<ChatSessionSummary[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState('');
   const [engine, setEngine] = useState<EngineStatus>({ state: 'starting' });
   const [reconnecting, setReconnecting] = useState(false);
   const [events, setEvents] = useState<EngineEvent[]>([]);
@@ -54,6 +57,12 @@ export default function App() {
   const notify = useCallback((message: string, error = false) => { clearTimeout(toastTimer.current); setToast({ id: Date.now(), message, error }); toastTimer.current = setTimeout(() => setToast(null), error ? 9000 : 4500); }, []);
   const refreshProjects = useCallback(async () => { const list = await request<Project[]>('project.list'); setProjects(list); setProject(current => current ? list.find(p => p.id === current.id) ?? current : current); }, []);
   const refreshProviders = useCallback(async () => { setProviders(await request<Provider[]>('provider.list')); }, []);
+  const refreshChatSessions = useCallback(async (projectId?: string) => {
+    const result = await request<ChatHistoryList>('chat.history.list', projectId ? { projectId } : {});
+    setChatSessions(result.sessions);
+  }, []);
+  const openJumper = useCallback(() => { setCommandQuery(''); setCommandSelection(0); setCommandPalette(true); }, []);
+  const openHelp = useCallback(() => setHelp(true), []);
   const refreshAssets = useCallback(async () => {
     const { projectId, offset } = assetLocation.current;
     if (!projectId || transitioning.current) return;
@@ -101,6 +110,23 @@ export default function App() {
       clearTimeout(toastTimer.current); setToast(null); setProject(opened); setAssets(data.items); setPage('workbench'); history.replaceState(null, '', '#workbench');
     } finally { transitioning.current = false; setAssetsLoading(false); }
   }, []);
+  const newChatSession = useCallback(async () => {
+    const id = crypto.randomUUID();
+    setActiveSessionId(id);
+    await navigate('chat');
+    try {
+      await request('chat.history.ensure', { sessionId: id, ...(project ? { projectId: project.id, projectName: project.name } : {}), title: '新对话' });
+      await refreshChatSessions();
+    } catch (e) { notify(errorMessage(e), true); }
+  }, [navigate, project, refreshChatSessions, notify]);
+  const requestDeleteProject = useCallback((target: Project) => setDeletion(target), []);
+  /** 删除完成后清理状态：被删除的项目不再保持打开，工作台回到对话主页；对话历史仍保留。 */
+  const projectDeleted = useCallback(async (projectId: string) => {
+    await refreshProjects().catch(() => undefined);
+    setProject(current => current?.id === projectId ? null : current);
+    await refreshChatSessions().catch(() => undefined);
+    await navigate('chat');
+  }, [refreshProjects, refreshChatSessions, navigate]);
   const savePrefs = useCallback(async (next: Preferences) => { await request('settings.save', { settings: next }); setPrefs(next); }, []);
   useEffect(() => {
     let disposed = false; const unsubscribe: Array<() => void> = [];
@@ -110,24 +136,27 @@ export default function App() {
         const bridge = await getBridge();
         if (disposed) return;
         let statusRevision = 0;
-        unsubscribe.push(bridge.onEngineStatus(status => { statusRevision++; setEngine(status); if (status.state === 'ready') { void refreshProjects().catch(e => notify(errorMessage(e), true)); void refreshProviders().catch(() => {}); } }));
+        unsubscribe.push(bridge.onEngineStatus(status => { statusRevision++; setEngine(status); if (status.state === 'ready') { void refreshProjects().catch(e => notify(errorMessage(e), true)); void refreshProviders().catch(() => {}); void refreshChatSessions().catch(() => {}); } }));
         unsubscribe.push(bridge.onEvent(event => { if (seen.has(event.sequence)) return; seen.add(event.sequence); if (seen.size > 2000) seen.delete(seen.values().next().value!); setEvents(list => [...list, event].slice(-200)); }));
         const initialRevision = statusRevision;
-        const initial = await Promise.allSettled([bridge.engineStatus(), request<Project[]>('project.list'), request<Preferences>('settings.get'), request<Provider[]>('provider.list'), request<EngineEvent[]>('event.list', { after: 0 })]);
+        const initial = await Promise.allSettled([bridge.engineStatus(), request<Project[]>('project.list'), request<Preferences>('settings.get'), request<Provider[]>('provider.list'), request<EngineEvent[]>('event.list', { after: 0 }), request<ChatHistoryList>('chat.history.list')]);
         if (disposed) return;
-        const [status, list, settings, ps, historyEvents] = initial;
+        const [status, list, settings, ps, historyEvents, history] = initial;
         // 初始化请求可能早于握手完成，不能覆盖订阅已收到的更新状态。
         if (status.status === 'fulfilled' && statusRevision === initialRevision) setEngine(status.value);
         if (list.status === 'fulfilled') setProjects(list.value); else notify(errorMessage(list.reason), true);
         if (settings.status === 'fulfilled') setPrefs({ ...defaultPreferences, ...settings.value });
         if (ps.status === 'fulfilled') setProviders(ps.value);
         if (historyEvents.status === 'fulfilled' && Array.isArray(historyEvents.value)) setEvents(current => [...new Map([...historyEvents.value, ...current].map(e => [e.sequence, e])).values()].sort((a,b) => a.sequence - b.sequence).slice(-200));
+        // 启动即恢复持久化会话列表，替换纯内存 chats；失败只提示，不阻塞界面。
+        if (history.status === 'fulfilled') { setChatSessions(history.value.sessions); setActiveSessionId(current => current || history.value.sessions[0]?.id || ''); }
+        else notify(errorMessage(history.reason), true);
       } catch (e) { if (!disposed) notify(errorMessage(e), true); }
       finally { if (!disposed) setLoading(false); }
     }
     void load();
     return () => { disposed = true; unsubscribe.forEach(fn => fn()); };
-  }, [notify, refreshProjects, refreshProviders]);
+  }, [notify, refreshProjects, refreshProviders, refreshChatSessions]);
   useEffect(() => {
     const media = matchMedia('(prefers-color-scheme: dark)');
     const apply = () => { document.documentElement.dataset.theme = prefs.theme === 'system' ? (media.matches ? 'dark' : 'light') : prefs.theme; document.documentElement.dataset.reducedMotion = String(prefs.reducedMotion); };
@@ -142,14 +171,14 @@ export default function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
-  const commandItems = nav.filter(([, label]) => !commandQuery.trim() || label.includes(commandQuery.trim()));
+  const commandItems = navRegistry.filter(entry => !commandQuery.trim() || entry.label.includes(commandQuery.trim()));
   useEffect(() => {
     if (!commandPalette) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); setCommandPalette(false); return; }
       if (event.key === 'ArrowDown' && commandItems.length) { event.preventDefault(); setCommandSelection(index => (index + 1) % commandItems.length); return; }
       if (event.key === 'ArrowUp' && commandItems.length) { event.preventDefault(); setCommandSelection(index => (index - 1 + commandItems.length) % commandItems.length); return; }
-      if (event.key === 'Enter' && commandItems.length) { event.preventDefault(); const [key] = commandItems[commandSelection] ?? commandItems[0]; setCommandPalette(false); void navigate(key); }
+      if (event.key === 'Enter' && commandItems.length) { event.preventDefault(); const entry = commandItems[commandSelection] ?? commandItems[0]; setCommandPalette(false); void navigate(entry.key); }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -162,24 +191,22 @@ export default function App() {
     catch (e) { notify(errorMessage(e), true); }
     finally { setReconnecting(false); }
   }
-  return <Context.Provider value={{ page, navigate, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats }}>
+  return <Context.Provider value={{ page, navigate, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, newChatSession, openJumper, openHelp, requestDeleteProject }}>
     <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
-      <aside className="sidebar"><div className="brand"><Scan size={23} strokeWidth={1.8} /><span>自动标注小助手</span></div>
-        <nav aria-label="主导航">{nav.map(([key, label, Icon]) => <button key={key} className={`nav-item ${page === key ? 'selected' : ''}`} aria-current={page === key ? 'page' : undefined} title={label} onClick={() => void navigate(key)}><Icon size={18} strokeWidth={1.65} /><span>{label}</span></button>)}</nav>
-        <div className="sidebar-bottom"><div className="workspace-label"><Monitor size={17} /><span>{isDemo ? '本地演示' : '本地工作空间'}</span></div><div className="connection"><span className={`status-dot ${engine.state}`} /><span>{isDemo ? '浏览器存储 · 非桌面引擎' : engine.state === 'ready' ? '引擎已连接' : engine.state === 'starting' ? '引擎启动中' : '引擎连接中断'}</span></div></div>
-      </aside>
-      <section className="app-main"><header className="topbar" onDoubleClick={e => { if (!isDemo && !(e.target as HTMLElement).closest('button,input,select,textarea')) void getBridge().then(b => b.windowAction('maximize')); }}><div className="breadcrumb"><IconButton label={collapsed ? '展开侧栏' : '收起侧栏'} onClick={() => setCollapsed(v => !v)}>{collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</IconButton><span>{nav.find(n => n[0] === page)?.[1]}</span>{project && page !== 'projects' && <><ChevronRight size={13} /><span className="muted truncate">{project.name}</span></>}</div><div className="topbar-actions">{isDemo && <span className="demo-indicator">演示模式</span>}{!isDemo && <span className={`engine-chip ${engine.state}`} role={engine.state === 'error' ? 'alert' : 'status'} title={engine.message || '本地引擎状态'}><span className="status-dot" />{engine.state === 'ready' ? '引擎已连接' : engine.state === 'starting' ? '引擎启动中' : engine.state === 'disconnected' ? '引擎已中断' : engine.state === 'stopped' ? '引擎已停止' : '引擎异常'}</span>}<button className="command-trigger" onClick={() => { setCommandQuery(''); setCommandSelection(0); setCommandPalette(true); }}><Search size={14} /><span>快速跳转</span><kbd>Ctrl K</kbd></button><IconButton label="快捷键与帮助" onClick={() => setHelp(true)}><CircleHelp size={17} /></IconButton>{!isDemo && <div className="window-actions">{(['minimize', 'maximize', 'close'] as const).map((action, index) => <button key={action} aria-label={['最小化窗口', '最大化窗口', '关闭窗口'][index]} onClick={() => void getBridge().then(b => b.windowAction(action)).catch(e => notify(errorMessage(e), true))}>{index === 0 ? <Minus size={13} /> : index === 1 ? <Square size={11} /> : <X size={14} />}</button>)}</div>}</div></header>
+      <Sidebar />
+      {deletion && <ProjectDeletionDialog project={deletion} onClose={() => setDeletion(null)} onDeleted={projectId => void projectDeleted(projectId)} />}
+      <section className="app-main"><header className="topbar" onDoubleClick={e => { if (!isDemo && !(e.target as HTMLElement).closest('button,input,select,textarea')) void getBridge().then(b => b.windowAction('maximize')); }}><div className="breadcrumb"><IconButton label={collapsed ? '展开侧栏' : '收起侧栏'} onClick={() => setCollapsed(v => !v)}>{collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</IconButton><span>{navLabel(page)}</span>{project && page !== 'chat' && <><ChevronRight size={13} /><span className="muted truncate">{project.name}</span></>}</div><div className="topbar-actions">{isDemo && <span className="demo-indicator">演示模式</span>}{!isDemo && <span className={`engine-chip ${engine.state}`} role={engine.state === 'error' ? 'alert' : 'status'} title={engine.message || '本地引擎状态'}><span className="status-dot" />{engine.state === 'ready' ? '引擎已连接' : engine.state === 'starting' ? '引擎启动中' : engine.state === 'disconnected' ? '引擎已中断' : engine.state === 'stopped' ? '引擎已停止' : '引擎异常'}</span>}<button className="command-trigger" onClick={openJumper}><Search size={14} /><span>快速跳转</span><kbd>Ctrl K</kbd></button><IconButton label="快捷键与帮助" onClick={openHelp}><CircleHelp size={17} /></IconButton>{!isDemo && <div className="window-actions">{(['minimize', 'maximize', 'close'] as const).map((action, index) => <button key={action} aria-label={['最小化窗口', '最大化窗口', '关闭窗口'][index]} onClick={() => void getBridge().then(b => b.windowAction(action)).catch(e => notify(errorMessage(e), true))}>{index === 0 ? <Minus size={13} /> : index === 1 ? <Square size={11} /> : <X size={14} />}</button>)}</div>}</div></header>
         {!isDemo && engine.state !== 'ready' && <div className="connection-banner" role={engine.state === 'error' ? 'alert' : 'status'} aria-live="polite" aria-busy={reconnecting}><AlertCircle size={14} />{reconnecting ? '正在重新连接本地引擎…' : engine.message || '本地引擎尚未就绪，数据操作暂不可用。'}<button disabled={reconnecting} onClick={() => void reconnect()}>{reconnecting ? '连接中…' : '重新连接'}</button></div>}
         <main className={`page page-${page}`} key={page} aria-busy={loading || assetsLoading}>
           {loading ? <div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作空间…</div> : <Suspense fallback={<div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作区…</div>}>
-            {page === 'projects' ? <Projects /> : page === 'workbench' ? <Workbench /> : page === 'workflow' ? <Workflow /> : page === 'tasks' ? <Tasks /> : page === 'resources' ? <Resources /> : page === 'models' ? <Models /> : <Settings />}
+            {page === 'chat' ? <ChatHome /> : page === 'workbench' ? <Workbench /> : page === 'workflow' ? <Workflow /> : page === 'tasks' ? <Tasks /> : page === 'resources' ? <Resources /> : page === 'models' ? <Models /> : page === 'training' ? <Training /> : <Settings />}
           </Suspense>}
         </main>
       </section>
     </div>
     {toast && <div key={toast.id} className={`toast ${toast.error ? 'error' : ''}`} role={toast.error ? 'alert' : 'status'}>{toast.error ? <AlertCircle size={17} /> : <Check size={17} />}<span>{toast.message}</span><IconButton label="关闭提示" onClick={() => setToast(null)}><X size={14} /></IconButton></div>}
-    {help && <Modal title="快捷键与帮助" onClose={() => setHelp(false)}><div className="help-content"><Keyboard size={26} /><p>在工作台用工具绘制对象，在右侧调整坐标与类别。保存保留人工修改，确认后进入下一张图片。</p><dl className="shortcuts">{[['V / H', '选择 / 平移'], ['B / O / S / P / C', '检测框 / 旋转框 / 多边形 / 关键点 / 分类'], ['Ctrl + S', '保存标注'], ['Ctrl + Z / Ctrl + Shift + Z', '撤销 / 重做'], ['Enter', '完成多边形'], ['Escape', '取消当前绘制'], ['Delete', '删除选中对象'], ['Ctrl + Enter', '确认并下一张'], ['Ctrl + K', '打开快速跳转']].map(([key,label]) => <div key={key}><dt>{label}</dt><dd><kbd>{key}</kbd></dd></div>)}</dl><p className="muted">{isDemo ? '当前为隔离的浏览器演示。图片与标注保存在本浏览器；API 调用、真实任务及 YOLO 导出需要桌面引擎。' : '图片坐标以引擎提供的基准图为准。模型候选与人工确认分别记录。'}</p></div></Modal>}
-    {commandPalette && <Modal title="快速跳转" onClose={() => setCommandPalette(false)}><div className="command-palette"><label className="command-search"><Search size={16} /><input autoFocus value={commandQuery} onChange={event => { setCommandQuery(event.target.value); setCommandSelection(0); }} placeholder="搜索页面…" /></label><div className="command-list">{commandItems.map(([key, label, Icon], index) => <button key={key} className={index === commandSelection ? 'selected' : ''} aria-selected={index === commandSelection} onMouseEnter={() => setCommandSelection(index)} onClick={() => { setCommandPalette(false); void navigate(key); }}><span className="command-icon"><Icon size={16} /></span><span>{label}</span><ArrowRight size={14} /></button>)}{!commandItems.length && <p className="quiet-empty">没有匹配的页面。</p>}</div><p className="command-hint"><kbd>↑↓</kbd> 选择 · <kbd>Enter</kbd> 打开 · <kbd>Esc</kbd> 关闭</p></div></Modal>}
+    {help && <Modal title="快捷键与帮助" onClose={() => setHelp(false)}><div className="help-content"><Keyboard size={26} /><p>在工作台用工具绘制对象，在右侧调整坐标与类别。保存保留人工修改，确认后进入下一张图片。</p><dl className="shortcuts">{[['V / H', '选择 / 平移'], ['B / O / S / P / C', '检测框 / 旋转框 / 多边形 / 关键点 / 分类'], ['Ctrl + S', '保存标注'], ['Ctrl + Z / Ctrl + Shift + Z', '撤销 / 重做'], ['Enter', '完成多边形'], ['Escape', '取消当前绘制'], ['Delete', '删除选中对象'], ['Ctrl + Enter', '确认并下一张'], ['Ctrl + K', '打开快速跳转'], ['Ctrl + 1…9', '切换到前九个对话']].map(([key,label]) => <div key={key}><dt>{label}</dt><dd><kbd>{key}</kbd></dd></div>)}</dl><p className="muted">{isDemo ? '当前为隔离的浏览器演示。图片与标注保存在本浏览器；API 调用、真实任务及 YOLO 导出需要桌面引擎。' : '图片坐标以引擎提供的基准图为准。模型候选与人工确认分别记录。'}</p></div></Modal>}
+    {commandPalette && <Modal title="快速跳转" onClose={() => setCommandPalette(false)}><div className="command-palette"><label className="command-search"><Search size={16} /><input autoFocus value={commandQuery} onChange={event => { setCommandQuery(event.target.value); setCommandSelection(0); }} placeholder="搜索页面…" /></label><div className="command-list">{commandItems.map((entry, index) => <button key={entry.key} className={index === commandSelection ? 'selected' : ''} aria-selected={index === commandSelection} onMouseEnter={() => setCommandSelection(index)} onClick={() => { setCommandPalette(false); void navigate(entry.key); }}><span className="command-icon"><entry.icon size={16} /></span><span>{entry.label}</span><ArrowRight size={14} /></button>)}{!commandItems.length && <p className="quiet-empty">没有匹配的页面。</p>}</div><p className="command-hint"><kbd>↑↓</kbd> 选择 · <kbd>Enter</kbd> 打开 · <kbd>Esc</kbd> 关闭</p></div></Modal>}
     {busyChat && <div className="global-chat-status" role="status"><LoaderCircle size={14} className="spin" /><span>助手执行中 · {busyChat.runningScope}</span><ButtonCancel id={busyChat.id} notify={notify} /></div>}
   </Context.Provider>;
 }

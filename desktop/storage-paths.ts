@@ -166,6 +166,8 @@ function validateSet(kinds: Record<StoragePathKind, string>, dataDirectory: stri
   for (const kind of PATH_KINDS) {
     const target = path.resolve(kinds[kind]).toLowerCase();
     if (target === base || target.startsWith(base + path.sep)) throw new DesktopError('STORAGE_PATH_INSIDE_DATA', `${PATH_LABELS[kind]}不能位于当前数据目录内`);
+    // 反向同样拒绝：受管原图需要能安全删除自身文件，不能把数据目录包含在它下面。
+    if (base.startsWith(target + path.sep)) throw new DesktopError('STORAGE_PATH_CONTAINS_DATA', `${PATH_LABELS[kind]}不能包含当前数据目录`);
   }
 }
 

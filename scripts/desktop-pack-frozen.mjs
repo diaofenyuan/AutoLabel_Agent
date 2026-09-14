@@ -10,6 +10,7 @@ const selected = name => { const index = args.indexOf(name); if (index < 0 || !a
 const desktop = selected('--desktop'); const renderer = selected('--renderer'); const engine = selected('--engine'); const output = selected('--output');
 const inference = selected('--inference');
 if (!fs.statSync(path.join(inference, 'worker.py')).isFile()) throw new Error('冻结推理输入缺少 worker.py');
+if (!fs.statSync(path.join(inference, 'train_worker.py')).isFile()) throw new Error('冻结训练输入缺少 train_worker.py');
 const checkIndex = args.indexOf('--check'); const check = checkIndex < 0 ? 'release5' : args[checkIndex + 1];
 if (!['release5', 'release6a', 'release6b', 'release7a', 'release7b'].includes(check)) throw new Error('未知安装包检查模式');
 const media = check === 'release7b' || args.includes('--media') ? selected('--media') : undefined;
@@ -39,6 +40,7 @@ fs.mkdirSync(path.join(app, 'build')); fs.copyFileSync(path.join(buildResources,
 fs.mkdirSync(path.join(resources, 'engine')); fs.copyFileSync(engine, path.join(resources, 'engine', 'autolabel-engine.jar'));
 fs.cpSync(path.join(baseline, 'runtime'), path.join(resources, 'runtime'), { recursive: true });
 fs.mkdirSync(path.join(resources, 'inference')); fs.copyFileSync(path.join(inference, 'worker.py'), path.join(resources, 'inference', 'worker.py'));
+fs.copyFileSync(path.join(inference, 'train_worker.py'), path.join(resources, 'inference', 'train_worker.py'));
 if (media) {
   fs.mkdirSync(path.join(resources, 'media-tools'));
   for (const filename of ['ffmpeg.exe', 'ffprobe.exe', 'versions.json']) fs.copyFileSync(path.join(media, filename), path.join(resources, 'media-tools', filename));

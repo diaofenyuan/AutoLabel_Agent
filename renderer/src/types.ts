@@ -19,12 +19,14 @@ export interface Preferences {
   closeBehavior: 'ask' | 'tray' | 'quit';
   concurrency: number; maxRequests: number | null; timeout: number; retries: number;
   chatProviderId: string; chatModel: string; annotationProviderId: string; annotationModel: string;
+  /** 训练默认值：设备与数据加载进程数只作为新建训练的初值，并发上限由引擎在启动时读取。 */
+  trainingDevice: string; trainingWorkers: number; trainingConcurrency: number;
   [key: string]: unknown;
 }
 export const defaultPreferences: Preferences = {
   theme: 'light', reducedMotion: false, canvasBackground: '#eef0f3', closeBehavior: 'ask', concurrency: 4,
   maxRequests: null, timeout: 120, retries: 2, chatProviderId: '', chatModel: '',
-  annotationProviderId: '', annotationModel: '',
+  annotationProviderId: '', annotationModel: '', trainingDevice: 'gpu-auto', trainingWorkers: 8, trainingConcurrency: 1,
 };
 export const taskNames = { detect: '检测框', obb: '旋转框', segment: '多边形', pose: '关键点', classify: '图片分类' };
 export const statusNames: Record<string, string> = {

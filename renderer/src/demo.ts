@@ -1,4 +1,5 @@
 import type { DesktopBridge, Annotation, Asset, Project } from '../../shared/protocol';
+import type { ChatSessionSummary } from '../../shared/chat';
 import type { Provider, Resource } from './types';
 import { defaultPreferences } from './types';
 
@@ -70,6 +71,8 @@ async function writeData(data: DemoData) {
 }
 let queue = Promise.resolve();
 const files = new Map<string, File>();
+/** 演示模式的对话记录只留在当前浏览器内存，不落盘；桌面版本才写入 chats 目录。 */
+const demoChatSessions: ChatSessionSummary[] = [];
 function chooseImages(): Promise<string[]> {
   return new Promise(resolve => {
     const input = document.createElement('input');
@@ -131,6 +134,27 @@ async function dispatch(command: string, p: Record<string, unknown>): Promise<un
       else { asset.annotations = p.annotations as Annotation[]; delete asset.draft; asset.version++; asset.status = p.confirm ? 'confirmed' : 'modified'; result = asset; }
       break;
     }
+    case 'chat.history.list': return { sessions: [...demoChatSessions].sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt)), total: demoChatSessions.length };
+    case 'chat.history.get': { const found = demoChatSessions.find(item => item.id === p.sessionId); if (!found) throw new Error('对话不存在或已删除。'); return { ...found, messages: [] }; }
+    case 'chat.history.status': return { root: '浏览器演示（仅内存）', sessions: demoChatSessions.length, messages: demoChatSessions.reduce((sum, item) => sum + item.messageCount, 0), bytes: 0, trash: { entries: 0, bytes: 0, retentionDays: 7 } };
+    case 'chat.history.trash.list': return { entries: [], retentionDays: 7 };
+    case 'chat.history.ensure': {
+      const sessionId = String(p.sessionId);
+      let session = demoChatSessions.find(item => item.id === sessionId);
+      if (!session) {
+        session = { id: sessionId, title: String(p.title ?? '新对话') || '新对话', titleSource: 'auto', pinned: false, pinOrder: 0,
+          ...(typeof p.projectId === 'string' && p.projectId ? { projectId: p.projectId } : {}), providerId: '', model: '',
+          createdAt: now(), updatedAt: now(), lastMessageAt: now(), messageCount: 0, status: 'active' };
+        demoChatSessions.push(session);
+      }
+      return session;
+    }
+    case 'chat.history.rename': { const session = demoChatSessions.find(item => item.id === p.sessionId); if (!session) throw new Error('对话不存在或已删除。'); session.title = String(p.title); session.titleSource = 'user'; session.updatedAt = now(); return session; }
+    case 'chat.history.pin': { const session = demoChatSessions.find(item => item.id === p.sessionId); if (!session) throw new Error('对话不存在或已删除。'); session.pinned = p.pinned === true; session.pinOrder = session.pinned ? Math.max(0, ...demoChatSessions.map(item => item.pinOrder)) + 1 : 0; return session; }
+    case 'chat.history.delete': { const ids = new Set(p.sessionIds as string[]); const removed = demoChatSessions.filter(item => ids.has(item.id)).length; for (let i = demoChatSessions.length - 1; i >= 0; i--) if (ids.has(demoChatSessions[i].id)) demoChatSessions.splice(i, 1); return { removed }; }
+    case 'chat.history.clear': { const removed = demoChatSessions.length; demoChatSessions.length = 0; return { removed }; }
+    case 'chat.history.restore': case 'chat.history.purge': return { removed: 0, restored: 0 };
+    case 'chat.history.export': throw new Error('浏览器演示不支持导出对话记录，请在桌面版本中使用。');
     case 'provider.list': return data.providers;
     case 'provider.save': {
       const provider: Provider = { id: String(p.id || id()), name: String(p.name), baseUrl: String(p.baseUrl), protocol: String(p.protocol), model: String(p.model ?? ''), hasCredential: false };

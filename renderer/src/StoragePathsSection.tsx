@@ -85,16 +85,19 @@ export default function StoragePathsSection({ onBusyChange }: { onBusyChange: (b
         payload[`${kind}Root`] = value || null;
       }
       if (!Object.keys(payload).length) throw new Error('没有需要保存的改动。');
-      setState(await request<StoragePathsState>('storage.paths.save', payload));
-      setProbes({});
-      notify('存储位置已保存，之后的新数据将写入新目录。');
+      await applySave(payload, '存储位置已保存，之后的新数据将写入新目录。');
     });
+  }
+  // 受管原图目录由引擎启动时读取：忙时不能重启，必须如实说明新目录尚未生效。
+  async function applySave(payload: Record<string, string | null>, done: string) {
+    const result = await request<StoragePathsState & { materialsRoot?: 'active' | 'pending-restart' }>('storage.paths.save', payload);
+    setState(result); setProbes({});
+    notify(result.materialsRoot === 'pending-restart' ? `${done}；上传训练集的新目录将在引擎重启后生效，其余落点已立即生效。` : done);
   }
   async function reset() {
     await run(async () => {
-      setState(await request<StoragePathsState>('storage.paths.save', { storageRoot: null, datasetsRoot: null, uploadsRoot: null, chatsRoot: null }));
-      setProbes({}); setRootDraft(''); setDrafts({});
-      notify('已恢复为默认存储位置。');
+      await applySave({ storageRoot: null, datasetsRoot: null, uploadsRoot: null, chatsRoot: null }, '已恢复为默认存储位置。');
+      setRootDraft(''); setDrafts({});
     });
   }
   if (isDemo) return <section className="settings-section"><h2>存储位置</h2><Notice>浏览器演示不使用本地存储目录，请在桌面版本中配置。</Notice></section>;
@@ -116,8 +119,7 @@ export default function StoragePathsSection({ onBusyChange }: { onBusyChange: (b
         <Button disabled={busy} onClick={() => void run(async () => { await open(entry.path); })}><FolderOpen size={13} />打开</Button>
         <Button disabled={busy} onClick={() => void choose(key, path => setDrafts(current => ({ ...current, [key]: path })))}>更改目录</Button>
         {entry.custom && <Button disabled={busy} onClick={() => void run(async () => {
-          setState(await request<StoragePathsState>('storage.paths.save', { [`${key}Root`]: null }));
-          notify(`「${entry.label}」已恢复为跟随存储根目录。`);
+          await applySave({ [`${key}Root`]: null }, `「${entry.label}」已恢复为跟随存储根目录。`);
         })}><Undo2 size={13} />恢复默认</Button>}
       </div>
       {drafts[key] !== undefined && drafts[key] !== '' && <>

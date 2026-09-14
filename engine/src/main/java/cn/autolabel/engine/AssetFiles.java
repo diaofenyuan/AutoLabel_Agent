@@ -32,7 +32,7 @@ final class AssetFiles {
             }
             Path destination=source;
             if(Json.str(metadata,"importMode","").equals("copy")){
-                destination=store.root.resolve("originals").resolve(aid+(Json.str(metadata,"originalFormat","").equals("jpeg")?".jpg":".png"));Files.createDirectories(destination.getParent());
+                destination=store.materialsRoot.resolve(aid+(Json.str(metadata,"originalFormat","").equals("jpeg")?".jpg":".png"));Files.createDirectories(destination.getParent());
                 if(!destination.equals(source)){if(Files.exists(destination)&&!Media.hash(destination).equals(Json.str(metadata,"sourceHash","")))throw new ApiError(409,"managed_source_changed","受管源文件已有不同内容，未覆盖。" );if(!Files.exists(destination))Files.copy(source,destination);}
             }
             if(!Media.hash(destination).equals(Json.str(metadata,"sourceHash","")))throw new ApiError(409,"relocate_content_changed","候选文件在扫描或复制期间发生变化，未更改素材关联。");

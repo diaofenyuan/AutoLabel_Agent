@@ -177,6 +177,28 @@ const exportFormatFields = { labelFormat: z.enum(['yolo', 'coco', 'voc', 'csv'])
   layout: exportLayout.optional(), includeDataYaml: z.boolean().optional(), cocoFileName: z.string().max(400).optional(),
   csvBom: z.boolean().optional(), csvColumns: z.array(z.string().min(1).max(32)).max(32).optional() };
 const exportFormatSpec = z.strictObject(exportFormatFields);
+const trainingName = z.string().trim().min(1).max(200);
+const datasetName = z.string().trim().min(1).max(200);
+const trainingPage = { offset: z.number().int().min(0).max(2147483647).optional(), limit: z.number().int().min(1).max(100).optional() };
+const trainingDevice = z.string().regex(/^(gpu-auto|cpu|0|[1-9][0-9]{0,2})$/);
+const trainingParameters = z.strictObject({
+  epochs: z.number().int().min(1).max(10000).optional(),
+  learningRate: finite.min(1e-6).max(1).optional(),
+  batch: z.union([z.literal('auto'), z.number().int().min(1).max(1024)]).optional(),
+  imgsz: z.number().int().min(32).max(4096).refine(value => value % 32 === 0, '输入尺寸必须是 32 的倍数').optional(),
+  device: trainingDevice.optional(),
+  baseModel: z.strictObject({ modelId: id, modelVersion: localModelVersion.optional() }).nullable().optional(),
+  optimizer: z.enum(['auto', 'SGD', 'Adam', 'AdamW']).optional(),
+  momentum: finite.min(0).max(1).optional(),
+  weightDecay: finite.min(0).max(1).optional(),
+  warmupEpochs: z.number().int().min(0).max(100).optional(),
+  patience: z.number().int().min(1).max(10000).optional(),
+  workers: z.number().int().min(0).max(32).optional(),
+  seed: z.number().int().min(0).max(2147483647).optional(),
+  closeMosaic: z.number().int().min(0).max(10000).optional(),
+  valPeriod: z.number().int().min(1).max(1000).optional(),
+  cosLr: z.boolean().optional(), augment: z.boolean().optional(), resume: z.boolean().optional(),
+});
 const message = z.strictObject({ role: z.enum(['system', 'user', 'assistant', 'tool']), content: text, tool_call_id: id.optional(),
   tool_calls: z.array(z.strictObject({ id, type: z.literal('function'), function: z.strictObject({ name, arguments: text }) })).max(64).optional() });
 const schemas: Record<string, z.ZodType> = {
@@ -185,6 +207,10 @@ const schemas: Record<string, z.ZodType> = {
   'project.update': z.strictObject({ projectId: id, name: name.optional(), description: text.optional(), classes: classes.optional(), settings: record.optional() }),
   'project.open': z.strictObject({ projectId: id }),
   'project.example': empty,
+  // 项目删除必须输入完整项目名确认；备份目录缺省时使用存储根下的受管备份目录。
+  'project.delete.preflight': z.strictObject({ projectId: id }),
+  'project.delete': z.strictObject({ projectId: id, confirmName: z.string().min(1).max(256),
+    removeManagedFiles: z.boolean().optional(), createBackup: z.boolean().optional(), backupDir: z.string().min(1).max(32767).optional() }),
   'media.runtime.get': empty,
   'media.runtime.configure': z.strictObject({ ffmpegPath: mediaPath.nullable(), ffprobePath: mediaPath.nullable() }),
   'media.video.inspect': z.strictObject({ sourcePath: mediaPath, streamIndex: mediaStream.optional() }),
@@ -248,7 +274,8 @@ const schemas: Record<string, z.ZodType> = {
   'annotation.render': z.strictObject({ assetId: id, version: count.optional(), outputPath: z.string().min(1).max(32767),
     format: z.enum(['png', 'jpeg']).optional(), showLabels: z.boolean().optional(), showKeypoints: z.boolean().optional(), showGeometry: z.boolean().optional() }),
   'export.preflight': z.strictObject(exportFields),
-  'export.create': z.strictObject({ ...exportFields, outputDir: z.string().min(1).max(32767), trainRatio: finite.gt(0).lt(1).optional(),
+  // outputDir 可缺省：主进程会注入受管「划分好的训练集」目录下的「项目名-时间戳」子目录并授权。
+  'export.create': z.strictObject({ ...exportFields, outputDir: z.string().min(1).max(32767).optional(), trainRatio: finite.gt(0).lt(1).optional(),
     onlyConfirmed: z.boolean().optional(), format: exportFormatSpec.optional() }),
   'export.list': z.strictObject({ projectId: id }),
   'export.format.list': z.strictObject({ taskType: taskType.optional() }),
@@ -259,6 +286,43 @@ const schemas: Record<string, z.ZodType> = {
   'export.format.delete': z.strictObject({ formatId: id, baseVersion: resourceVersion.optional() }),
   'export.reproduce': z.strictObject({ exportId: id, outputDir: z.string().min(1).max(32767) }),
   'export.compare': z.strictObject({ exportId: id, otherExportId: id }),
+  // 训练参数边界与引擎 TrainingParameters 一一对应；这里只做结构与区间前置校验，语义由引擎复核。
+  'training.runtime.get': empty,
+  'training.dataset.list': z.strictObject({ projectId: id.optional(), ...trainingPage }),
+  'training.dataset.create': z.strictObject({ projectId: id.optional(), source: z.enum(['upload', 'export']),
+    trainDir: z.string().min(1).max(32767).optional(), valDir: z.string().min(1).max(32767).optional(),
+    yamlDir: z.string().min(1).max(32767).optional(), taskType: taskType.optional(),
+    classNames: z.array(trainingName).min(1).max(10000).optional(),
+    keypointNames: z.array(trainingName).min(1).max(64).optional(), exportId: id.optional() })
+    .refine(value => value.source === 'upload' ? !!value.trainDir && !!value.valDir : !!value.exportId && !value.trainDir && !value.valDir,
+      '数据来源与所选目录不一致'),
+  'training.dataset.get': z.strictObject({ datasetId: id }),
+  'training.job.preflight': z.strictObject({ datasetId: id, parameters: trainingParameters.optional() }),
+  // 提交与删除都必须显式确认，避免误触把小时级任务或产物直接落盘/删除。
+  'training.job.create': z.strictObject({ datasetId: id, parameters: trainingParameters.optional(), confirm: z.literal(true) }),
+  'training.job.list': z.strictObject({ projectId: id.optional(),
+    status: z.enum(['queued', 'preparing', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted']).optional(), ...trainingPage }),
+  'training.job.get': z.strictObject({ jobId: id }),
+  'training.job.metrics': z.strictObject({ jobId: id, offset: z.number().int().min(0).max(2147483647).optional(),
+    limit: z.number().int().min(1).max(2000).optional() }),
+  'training.job.log': z.strictObject({ jobId: id, maxBytes: z.number().int().min(1).max(262144).optional() }),
+  'training.job.cancel': z.strictObject({ jobId: id, graceful: z.boolean().optional() }),
+  'training.job.retry': z.strictObject({ jobId: id, parameters: trainingParameters.optional() }),
+  'training.job.delete': z.strictObject({ jobId: id, confirm: z.literal(true) }),
+  // 登记为本地模型由桌面主进程先解析受管产物路径并授权，再走既有登记入口；渲染层拿不到产物绝对路径。
+  'training.job.registerModel': z.strictObject({ jobId: id, checkpoint: z.enum(['best', 'last']), name }),
+  // 数据集版本：写操作不进 Agent 工具白名单，只能由用户在界面显式触发。
+  'dataset.version.preflight': z.strictObject({ projectId: id, annotationScope: z.enum(['labeled', 'confirmed']).optional() }),
+  'dataset.version.create': z.strictObject({ projectId: id, name: datasetName.optional(),
+    annotationScope: z.enum(['labeled', 'confirmed']).optional(), seed: z.string().min(1).max(256).optional() }),
+  'dataset.version.get': z.strictObject({ versionId: id }),
+  'dataset.version.list': z.strictObject({ projectId: id.optional(), ...trainingPage }),
+  'dataset.version.items': z.strictObject({ versionId: id,
+    outcome: z.enum(['included', 'filtered_out']).optional(), ...trainingPage, limit: z.number().int().min(1).max(500).optional() }),
+  'dataset.version.cancel': z.strictObject({ versionId: id }),
+  'dataset.version.delete': z.strictObject({ versionId: id, confirm: z.literal(true) }),
+  'dataset.version.compare': z.strictObject({ versionId: id, otherVersionId: id }),
+  'dataset.version.verify': z.strictObject({ versionId: id }),
   'evaluationSet.create': z.strictObject({ projectId: id, name, assetIds: evaluationAssetIds }),
   'evaluationSet.list': z.strictObject({ projectId: id }),
   'evaluationSet.get': z.strictObject({ setId: id, versionId: id.optional() }),
@@ -309,7 +373,9 @@ const schemas: Record<string, z.ZodType> = {
   'local.runtime.get': empty,
   'local.runtime.probe': empty,
   'local.model.get': z.strictObject({ modelId: id, modelVersion: localModelVersion.optional() }),
-  'local.model.register': z.strictObject({ id: id.optional(), baseVersion: localModelVersion.optional(), name, taskType, modelPath: z.string().min(1).max(32767) }),
+  // classNames 可选：登记后训练预检可离线核对类别一致性，缺省时改由训练启动阶段向 worker 核对。
+  'local.model.register': z.strictObject({ id: id.optional(), baseVersion: localModelVersion.optional(), name, taskType,
+    modelPath: z.string().min(1).max(32767), classNames: z.array(trainingName).min(1).max(10000).optional() }),
   'local.model.list': z.strictObject({ taskType: taskType.optional(), ...evaluationPage }),
   'local.model.load': z.strictObject({ modelId: id, modelVersion: localModelVersion.optional(), device: localDevice.optional(), timeoutMs: localTimeout.optional() }),
   'local.run.create': z.strictObject({ projectId: id, assetIds: flowAssetIds.optional(), ...localFields, failurePolicy: z.enum(['continue', 'pause']).optional() }),
@@ -359,8 +425,33 @@ const schemas: Record<string, z.ZodType> = {
   'storage.cleanup': empty,
   'storage.activate': z.strictObject({ preparationId: id }),
   'storage.migrate': z.strictObject({ targetParent: z.string().min(1).max(32767) }),
+  // 三类业务数据的落点走专用命令，不经过 settings.save 的路径守卫。
+  'storage.paths.get': empty,
+  'storage.paths.save': z.strictObject({
+    storageRoot: z.string().max(32767).nullable().optional(),
+    datasetsRoot: z.string().max(32767).nullable().optional(),
+    uploadsRoot: z.string().max(32767).nullable().optional(),
+    chatsRoot: z.string().max(32767).nullable().optional(),
+  }).refine(value => Object.values(value).some(item => item !== undefined), '没有需要保存的路径设置'),
+  'storage.paths.probe': z.strictObject({ path: z.string().min(1).max(32767) }),
+  'storage.paths.migration': empty,
+  'storage.paths.migrate': empty,
   'update.status': empty, 'update.check': empty, 'update.download': empty, 'update.cancel': empty, 'update.install': empty,
   'chat.cancel': z.strictObject({ sessionId: id }),
+  // 对话记录由桌面主进程管理；Agent 工具白名单不包含其中任何命令。
+  'chat.history.list': z.strictObject({ projectId: id.optional() }),
+  'chat.history.get': z.strictObject({ sessionId: id }),
+  'chat.history.status': empty,
+  'chat.history.ensure': z.strictObject({ sessionId: id, projectId: id.optional(), title: z.string().max(4000).optional(),
+    projectName: z.string().max(200).optional(), providerId: id.optional(), model: name.optional() }),
+  'chat.history.rename': z.strictObject({ sessionId: id, title: z.string().min(1).max(120) }),
+  'chat.history.pin': z.strictObject({ sessionId: id, pinned: z.boolean() }),
+  'chat.history.delete': z.strictObject({ sessionIds: z.array(id).min(1).max(500) }),
+  'chat.history.clear': z.strictObject({ before: z.string().max(64).optional() }),
+  'chat.history.trash.list': empty,
+  'chat.history.restore': z.strictObject({ trashIds: z.array(id).min(1).max(500) }),
+  'chat.history.purge': z.strictObject({ all: z.boolean().optional() }),
+  'chat.history.export': z.strictObject({ targetPath: z.string().min(1).max(32767), sessionIds: z.array(id).min(1).max(500).optional() }),
   'chat.send': z.strictObject({ projectId: id.optional(), providerId: id, model: name,
     messages: z.array(message).min(1).max(200), tools: z.array(record).max(64).optional(), stream: z.boolean().optional(), sessionId: id.optional(), maxRequests: count.min(1).optional(), runId: id.optional(), budgetScopeId: id.optional(),
   }),
