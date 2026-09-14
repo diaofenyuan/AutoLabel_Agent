@@ -13,6 +13,7 @@ final class Runs implements AutoCloseable {
     private final ScheduledExecutorService dispatcher=Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("queue-dispatcher").factory());
     private final Object dispatchGate=new Object();
     private volatile boolean closed,suspended,storagePaused,dataMaintenancePaused;
+    private volatile long suspendedAt;
     private int roundRobin;
     volatile Runnable flowTick=()->{};
     Runs(Store store,Projects projects,Providers providers){this.store=store;this.projects=projects;this.providers=providers;reuse=new CandidateReuse(store);
@@ -214,7 +215,35 @@ final class Runs implements AutoCloseable {
     void settle(String id){store.tx(c->{JsonObject run=Store.document(c,"runs",id);if(!Json.str(run,"status","").equals("running"))return null;JsonObject stats=Json.object(view(c,id,false),"statistics");long pending=0;for(String key:List.of("queued","preparing","sending","waiting","parsing","validating","saving","retry_wait"))pending+=Json.number(stats,key,0);
         if(pending==0){if(Json.bool(run,"inputResults",false)&&!RunResults.aggregated(c,id))return null;String status=Json.number(stats,"unknown",0)>0?"needs_attention":(Json.number(stats,"failed",0)>0||Store.one(c,"SELECT r.id FROM run_asset_results r WHERE r.run_id=? AND r.status='needs_attention' AND r.rowid=(SELECT MAX(x.rowid) FROM run_asset_results x WHERE x.run_id=r.run_id AND x.asset_id=r.asset_id) LIMIT 1",id)!=null)?"completed_with_errors":"completed";run.addProperty("status",status);run.addProperty("completedAt",Json.now());Store.update(c,"UPDATE runs SET status=?,data=? WHERE id=?",status,run,id);Store.event(c,"run."+status,id,null,null,Json.obj("statistics",stats));}return null;});}
     JsonArray attempts(JsonObject p){String id=Json.required(p,"runId");return store.read(c->Store.docs(c,"SELECT data FROM attempts WHERE run_id=? ORDER BY rowid DESC LIMIT 200",id));}
-    JsonObject suspend(boolean value){suspended=value;store.tx(c->{Store.event(c,value?"engine.suspended":"engine.resumed",null,null,null,Json.obj("suspended",value));return null;});return Json.obj("suspended",suspended,"unknownRequestsWillNotRetry",true);}
+    /**
+     * 休眠只停止新的分派，不撤销在途请求；唤醒后核对持久化状态并保持用户暂停/预算不足/结果未知原状。
+     * 唤醒不自动重发任何结果未知的调用，休眠时长与处理耗时分开记录。
+     */
+    JsonObject suspend(boolean value){
+        if(value)suspendedAt=System.currentTimeMillis();
+        suspended=value;
+        JsonObject report=store.tx(c->{JsonObject detail=value?suspendSnapshot(c):resumeSnapshot(c);Store.event(c,value?"engine.suspended":"engine.resumed",null,null,null,detail.deepCopy());return detail;});
+        if(!value)suspendedAt=0;
+        return report;
+    }
+    private JsonObject suspendSnapshot(Connection c)throws Exception{
+        return Json.obj("suspended",true,"stoppedAt",Json.now(),"stopsNewDispatch",true,
+            "subsystems",Json.arr("api_runs","local_runs","media_jobs","track_generations"),
+            "inFlightRequests",inFlightCount(c),"unknownResultsNotRetried",true,
+            "note","休眠只暂停新的分派。在途请求结果按持久化状态处理，唤醒后不会自动重发结果未知的调用。");
+    }
+    private JsonObject resumeSnapshot(Connection c)throws Exception{
+        long elapsed=suspendedAt<=0?0:Math.max(0,System.currentTimeMillis()-suspendedAt);
+        return Json.obj("suspended",false,"resumedAt",Json.now(),"suspendedMs",elapsed,
+            "checks",Json.obj("database","ok","eventSequence",Store.cursor(c),"inFlightRequests",inFlightCount(c),
+                "unknownResults",count(c,"samples","status='unknown'"),"pausedRuns",count(c,"runs","status='paused'"),
+                "interruptedTrackGenerations",count(c,"track_generations","status='interrupted'"),
+                "interruptedMediaJobs",count(c,"media_jobs","status='interrupted'")),
+            "autoResumedPausedRuns",false,"autoResentUnknownRequests",false,
+            "note","唤醒只恢复分派。用户暂停、预算不足和结果未知的任务保持原状态，等待用户处理。");
+    }
+    private long inFlightCount(Connection c)throws Exception{return count(c,"samples","status IN ('preparing','sending','waiting','parsing','validating','saving')");}
+    private long count(Connection c,String table,String condition)throws Exception{return Json.number(Store.one(c,"SELECT COUNT(*) AS n FROM "+table+" WHERE "+condition),"n",0);}
     void dataMaintenance(boolean value){synchronized(dispatchGate){dataMaintenancePaused=value;}}
     JsonObject diagnostics(){return Json.obj("globalConcurrency",globalLimit,"activeWorkers",requests.getActiveCount(),"queuedInMemory",requests.getQueue().size(),"queueCapacity",globalLimit,"suspended",suspended,"dataMaintenancePaused",dataMaintenancePaused,"storagePaused",storagePaused||store.writeFailed,"providerGroups",providers.limits());}
     @Override public void close(){closed=true;dispatcher.shutdownNow();requests.shutdownNow();try{requests.awaitTermination(5,TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}}

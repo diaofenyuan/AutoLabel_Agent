@@ -169,6 +169,23 @@ export interface TrackLocalSequenceCandidate extends TrackLocalSequenceResult {
   request: Record<string, unknown>; result: Record<string, unknown>;
   sourceVideoHash?: string; templateHash?: string; modelHash?: string; workerHash?: string;
   confirmation?: { status: 'manual_review_required'; confirmedAt: string; timelineVersion: number; formalContributionCreated: false; nextAction: string };
+  /** 用户显式确认后由引擎建立的生成任务摘要；不改变候选本身的人工确认状态。 */
+  promotion?: TrackLocalSequencePromotionSummary;
+}
+export interface TrackLocalSequencePromotionSummary {
+  generationId: string; promotedAt: string; timelineVersion: number;
+  trackCount: number; frameCount: number; candidateAnnotationCount: number;
+  skippedTrackCount: number; skippedFrameCount: number;
+  formalContributionPending: boolean; requiresManualReview: boolean;
+}
+/** 本地跟踪候选提升为正式轨迹生成的结果；产物仍是待复核候选贡献，不是人工确认标注。 */
+export interface TrackLocalSequencePromotion {
+  candidateId: string; timelineId: string; generationId: string; status: TrackGenerationStatus;
+  trackCount: number; frameCount: number; candidateAnnotationCount: number;
+  skippedTrackCount: number; skippedFrameCount: number;
+  tracks: Array<{ trackId: string; sourceTrackId: string; classId: string }>;
+  issues: TrackIssue[]; candidateOnly: true; humanConfirmed: false;
+  requiresManualReview: true; formalContributionCreated: false; nextAction: string;
 }
 export interface TrackLocalSequenceConfirmation {
   candidateId: string; timelineId: string; status: 'manual_review_required'; candidateOnly: true; humanConfirmed: false;
@@ -219,4 +236,5 @@ export interface TrackCommandMap {
   'track.local.sequence.get': { request: { candidateId: string }; response: TrackLocalSequenceCandidate };
   'track.local.sequence.list': { request: TrackPageRequest & { timelineId: string }; response: TrackPage<TrackLocalSequenceCandidate> };
   'track.local.sequence.confirm': { request: { candidateId: string; timelineId: string; timelineVersion: number; confirm: true }; response: TrackLocalSequenceConfirmation };
+  'track.local.sequence.promote': { request: { candidateId: string; timelineId: string; timelineVersion: number; confirm: true }; response: TrackLocalSequencePromotion };
 }

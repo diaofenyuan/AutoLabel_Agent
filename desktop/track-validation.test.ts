@@ -33,10 +33,11 @@ const valid: { [C in keyof TrackCommandMap]: TrackCommandMap[C]['request'] } = {
   'track.local.sequence.get': { candidateId: 'candidate' },
   'track.local.sequence.list': { timelineId: 'timeline', limit: 100 },
   'track.local.sequence.confirm': { candidateId: 'candidate', timelineId: 'timeline', timelineVersion: 1, confirm: true },
+  'track.local.sequence.promote': { candidateId: 'candidate', timelineId: 'timeline', timelineVersion: 1, confirm: true },
 };
 
-test('轨迹命令闭合到 26 项公共契约，仅开放指定 Agent 命令并拒绝文件路径', () => {
-  assert.equal(Object.keys(valid).length, 26);
+test('轨迹命令闭合到 27 项公共契约，仅开放指定 Agent 命令并拒绝文件路径', () => {
+  assert.equal(Object.keys(valid).length, 27);
   const agentAllowed = new Set<string>(['track.timeline.list', 'track.timeline.get', 'track.timeline.frames', 'track.list', 'track.get', 'track.keyframe.list',
     'track.generation.list', 'track.generation.get', 'track.generation.results', 'track.generate.preview', 'track.generate', 'track.generation.cancel',
     'track.local.sequence.get', 'track.local.sequence.list'] satisfies Array<keyof TrackCommandMap>);

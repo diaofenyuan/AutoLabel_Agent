@@ -305,7 +305,14 @@ export class EngineManager extends EventEmitter {
   async resume(): Promise<void> {
     this.suspended = false;
     if (!this.child) return;
-    try { await this.fetchJson('/health'); await this.request('system.resume', {}, 10000); }
+    try {
+      await this.fetchJson('/health');
+      // 只展示引擎核对结果，不在这里假定事件流已恢复；连接状态仍由 SSE 循环决定。
+      const report = await this.request('system.resume', {}, 10000) as { suspendedMs?: number; checks?: { unknownResults?: number; pausedRuns?: number; interruptedTrackGenerations?: number; interruptedMediaJobs?: number } };
+      const checks = report?.checks ?? {};
+      this.log(`唤醒核对完成：未知结果 ${checks.unknownResults ?? 0}，暂停运行 ${checks.pausedRuns ?? 0}，中断轨迹生成 ${checks.interruptedTrackGenerations ?? 0}，中断媒体任务 ${checks.interruptedMediaJobs ?? 0}；未自动重发任何请求`);
+      this.setStatus({ ...this.status, message: (checks.unknownResults ?? 0) > 0 ? '唤醒后仍有结果未知的调用，请确认是否重试；任务原状态已保留' : '唤醒后已核对任务状态，未自动重发请求' });
+    }
     catch { this.log('唤醒后引擎或任务状态需检查；未自动重发任何请求'); }
   }
   async stop(): Promise<void> {

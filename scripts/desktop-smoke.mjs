@@ -51,6 +51,10 @@ if (manualOnly || updateUiOnly || runControlOnly || mediaOnly) {
     external: ['electron'], outfile: path.join(root, 'desktop/dist/manual.test.cjs'), logLevel: 'warning' });
   args.push('--desktop-manual-check');
 }
+// 受限或显卡不可用环境（Chromium GPU 进程无法启动）可显式追加开关：
+// AUTOLABEL_EXTRA_LAUNCH_ARGS="--no-sandbox --in-process-gpu --disable-gpu"
+const extraLaunchArgs = (process.env.AUTOLABEL_EXTRA_LAUNCH_ARGS || '').split(/\s+/).filter(Boolean);
+args.push(...extraLaunchArgs);
 const run = async runArgs => {
 const child = spawn(executable, runArgs, { cwd: root, env, windowsHide: true, stdio: 'inherit' });
 return new Promise((resolve, reject) => {

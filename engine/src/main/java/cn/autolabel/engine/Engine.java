@@ -25,6 +25,7 @@ final class Engine implements AutoCloseable {
         case "track.local.sequence.get"->localTrackingCandidateGet(p);
         case "track.local.sequence.list"->localTrackingCandidateList(p);
         case "track.local.sequence.confirm"->confirmLocalTrackingCandidate(p);
+        case "track.local.sequence.promote"->promoteLocalTrackingCandidate(p);
         case "media.runtime.get"->{FlowPlans.keys(p);yield mediaJobs.runtime();}case "media.runtime.configure"->mediaJobs.configure(p);
         case "media.video.inspect"->mediaJobs.inspect(p);case "media.video.create"->mediaJobs.createVideo(p);case "media.video.import"->mediaJobs.importVideo(p);case "media.video.frames"->mediaJobs.frames(p);
         case "media.job.get"->{FlowPlans.keys(p,"jobId");yield mediaJobs.get(Json.required(p,"jobId"));}case "media.job.list"->mediaJobs.list(p);case "media.job.cancel"->mediaJobs.cancel(p);case "media.job.retry"->mediaJobs.retry(p);
@@ -152,6 +153,74 @@ final class Engine implements AutoCloseable {
     }
     private static JsonObject confirmationResult(JsonObject candidate,JsonObject confirmation){
         return Json.obj("candidateId",candidate.get("candidateId"),"timelineId",candidate.get("timelineId"),"status",Json.required(confirmation,"status"),"candidateOnly",true,"humanConfirmed",false,"requiresManualReview",true,"formalContributionCreated",false,"confirmedAt",confirmation.get("confirmedAt"),"timelineVersion",confirmation.get("timelineVersion"),"confirmation",confirmation.deepCopy(),"nextAction",Json.required(confirmation,"nextAction"));
+    }
+    /**
+     * 把用户已确认的本地 Detect 跟踪候选提升为正式轨迹与生成任务。
+     * 逐帧只采用 worker 真实关联到的检测，不用插值补框；产物仍是待复核候选贡献，人工修订前不会导出。
+     */
+    private JsonObject promoteLocalTrackingCandidate(JsonObject p){
+        FlowPlans.keys(p,"candidateId","timelineId","timelineVersion","confirm");
+        if(!Json.bool(p,"confirm",false))throw new ApiError(400,"tracking_confirmation_required","必须明确确认后才能把本地跟踪结果写入正式轨迹生成。");
+        String candidateId=Json.required(p,"candidateId"),timelineId=Json.required(p,"timelineId");
+        int timelineVersion=(int)Costs.integer(p,"timelineVersion",1,Integer.MAX_VALUE);
+        return store.tx(c->{
+            JsonObject row=Store.one(c,"SELECT data FROM local_tracking_candidates WHERE id=?",candidateId);
+            if(row==null)throw new ApiError(404,"not_found","自动跟踪候选不存在。");
+            JsonObject candidate=Json.parse(Json.required(row,"data"));
+            if(!timelineId.equals(Json.str(candidate,"timelineId","")))throw new ApiError(409,"tracking_candidate_scope_conflict","候选不属于当前时间轴。");
+            JsonObject timeline=Store.document(c,"track_timelines",timelineId);
+            if(Json.number(timeline,"version",0)!=timelineVersion)throw new ApiError(409,"track_version_conflict","时间轴已变化，请刷新后重新核对候选。");
+            TrackTimelines.currentTemplate(c,timeline);
+            if(!Json.bool(candidate,"candidateOnly",false)||Json.bool(candidate,"humanConfirmed",true))throw new ApiError(409,"tracking_candidate_invalid","该记录不是可提交的本地候选。");
+            if(candidate.has("promotion"))throw new ApiError(409,"tracking_candidate_promoted","该候选已经提交过正式轨迹生成，请直接查看对应生成记录。");
+            JsonObject raw=Json.object(candidate,"result"),template=Json.object(timeline,"template");
+            Set<String> templateClasses=new LinkedHashSet<>();for(JsonElement value:Json.array(template,"classes"))templateClasses.add(Json.required(value.getAsJsonObject(),"id"));
+            Map<String,JsonObject> byFrameId=new LinkedHashMap<>();for(JsonObject frame:TrackTimelines.frames(c,timelineId))byFrameId.put(Json.required(frame,"frameId"),frame);
+            JsonArray issues=new JsonArray(),promotedTracks=new JsonArray();List<JsonObject> outputs=new ArrayList<>();Map<String,String> trackIds=new LinkedHashMap<>();int skippedTracks=0;
+            long activeTracks=Json.number(Store.one(c,"SELECT COUNT(*) AS n FROM tracks WHERE timeline_id=? AND status='active'",timelineId),"n",0);
+            // 1) 每条 worker 轨迹建立真实轨迹记录；关键帧留空，逐帧结果由生成任务实际产出，避免把预测位置冒充人工关键帧。
+            for(JsonElement value:Json.array(raw,"tracks")){
+                JsonObject source=value.getAsJsonObject();String sourceTrackId=Json.str(source,"trackId",""),classId=Json.str(source,"classId","");
+                if(sourceTrackId.isEmpty()||!templateClasses.contains(classId)){skippedTracks++;issues.add(Json.obj("code","tracking_class_unmapped","severity","error","message","该跟踪轨迹的类别不在冻结模板中，未建立正式轨迹。","sourceTrackId",sourceTrackId,"classId",classId));continue;}
+                if(activeTracks+outputs.size()>=1000){skippedTracks++;issues.add(Json.obj("code","track_limit","severity","error","message","时间轴活动轨迹已达上限，其余跟踪轨迹未建立。","sourceTrackId",sourceTrackId));continue;}
+                JsonObject track=Tracks.record(timeline,classId,"本地跟踪 "+(outputs.size()+1),"local:"+sourceTrackId);
+                Tracks.insert(c,track);outputs.add(track);trackIds.put(sourceTrackId,Json.required(track,"id"));
+                promotedTracks.add(Json.obj("trackId",track.get("id"),"sourceTrackId",sourceTrackId,"classId",classId));
+            }
+            if(outputs.isEmpty())throw new ApiError(409,"tracking_promotion_empty","该候选没有任何可映射到当前模板的跟踪轨迹，未创建生成任务。");
+            // 2) 逐帧把真实关联检测转换为候选贡献输入；未关联对象只记录问题，不伪造轨迹归属。
+            JsonArray frozenFrames=new JsonArray(),frameIds=new JsonArray(),skipped=new JsonArray();Map<String,JsonArray> candidates=new LinkedHashMap<>();
+            for(JsonObject track:outputs)candidates.put(Json.required(track,"id"),new JsonArray());
+            int annotationCount=0,skippedFrames=0;
+            for(JsonElement value:Json.array(raw,"frames")){
+                JsonObject source=value.getAsJsonObject();String frameId=Json.str(source,"inputId","");JsonObject timelineFrame=byFrameId.get(frameId);
+                if(timelineFrame==null){skippedFrames++;issues.add(Json.obj("code","tracking_frame_not_in_timeline","severity","error","message","该跟踪帧不在当前时间轴中，已跳过。","frameId",frameId));continue;}
+                Map<String,JsonObject> byAnnotation=new HashMap<>();for(JsonElement item:Json.array(Json.object(source,"prediction"),"annotations")){JsonObject annotation=item.getAsJsonObject();byAnnotation.put(Json.str(annotation,"id",""),annotation);}
+                JsonObject asset=TrackTimelines.current(c,timelineFrame),state=TrackTimelines.state(c,timelineFrame);boolean frameReview=Json.bool(source,"requiresTrackingReview",false);
+                for(JsonElement item:Json.array(source,"associations")){
+                    JsonObject association=item.getAsJsonObject();String logical=Json.str(association,"logicalTrackId",""),trackId=trackIds.get(logical),annotationId=Json.str(association,"annotationId","");
+                    JsonObject annotation=annotationId.isEmpty()?null:byAnnotation.get(annotationId);
+                    if(trackId==null||annotation==null)continue;
+                    JsonObject entry=Json.obj("frameId",frameId,"annotations",Json.arr(annotation.deepCopy()),"source",Json.obj("intervalId","local_tracking:"+logical,"keyframeIds",new JsonArray()),"valid",true,"requiresReview",frameReview,"reviewIssues",new JsonArray());
+                    try{Annotations.validate(Json.array(entry,"annotations"),asset,template);}
+                    catch(ApiError failure){entry.addProperty("valid",false);entry.addProperty("requiresReview",true);Json.array(entry,"reviewIssues").add(Json.obj("code",failure.code,"severity","error","message",failure.getMessage(),"frameId",frameId));issues.add(Json.obj("code",failure.code,"severity","error","message",failure.getMessage(),"frameId",frameId,"trackId",trackId));}
+                    candidates.get(trackId).add(entry);annotationCount++;
+                }
+                JsonObject frozen=timelineFrame.deepCopy();frozen.add("expected",state);frozen.add("baseAnnotations",TrackGenerations.baseAnnotations(asset,TrackGenerations.heads(c,Json.required(timelineFrame,"assetId"))));
+                frozenFrames.add(frozen);frameIds.add(timelineFrame.get("frameId"));
+            }
+            // 3) 构造冻结计划并入队；沿用既有版本校验、排队和逐帧提交路径。
+            JsonArray reports=new JsonArray(),outputCopies=new JsonArray(),involved=new JsonArray();
+            for(JsonObject track:outputs){reports.add(Json.obj("trackId",track.get("id"),"candidates",candidates.get(Json.required(track,"id")),"intervals",new JsonArray(),"skipped",new JsonArray()));outputCopies.add(track.deepCopy());involved.add(Json.obj("id",track.get("id"),"version",track.get("version")));}
+            JsonObject plan=Json.obj("timeline",timeline.deepCopy(),"owner",outputs.get(0).deepCopy(),"outputs",outputCopies,"retired",new JsonArray(),"involved",involved,"frames",frozenFrames,"frameIds",frameIds,"reports",reports,"intervals",new JsonArray(),"skipped",skipped,"issues",issues,"parameters",TrackInterpolation.options(null),"scope","affected");
+            plan.addProperty("planHash",TrackTimelines.hash(plan));
+            JsonObject job=trackGenerations.enqueueExternal(c,plan,null);
+            String now=Json.now();candidate.add("promotion",Json.obj("generationId",job.get("id"),"promotedAt",now,"timelineVersion",timelineVersion,"trackCount",outputs.size(),"frameCount",frozenFrames.size(),"candidateAnnotationCount",annotationCount,"skippedTrackCount",skippedTracks,"skippedFrameCount",skippedFrames,"formalContributionPending",true,"requiresManualReview",true));
+            candidate.addProperty("updatedAt",now);
+            Store.update(c,"UPDATE local_tracking_candidates SET updated_at=?,data=? WHERE id=?",now,candidate,candidateId);
+            Store.event(c,"track.local.candidate_promoted",null,null,null,Json.obj("candidateId",candidateId,"timelineId",timelineId,"generationId",job.get("id"),"trackCount",outputs.size(),"frameCount",frozenFrames.size(),"candidateAnnotationCount",annotationCount));
+            return Json.obj("candidateId",candidateId,"timelineId",timelineId,"generationId",job.get("id"),"status",job.get("status"),"trackCount",outputs.size(),"frameCount",frozenFrames.size(),"candidateAnnotationCount",annotationCount,"skippedTrackCount",skippedTracks,"skippedFrameCount",skippedFrames,"tracks",promotedTracks,"issues",issues,"candidateOnly",true,"humanConfirmed",false,"requiresManualReview",true,"formalContributionCreated",false,"nextAction","生成任务已入队。请在任务中心或轨迹候选历史查看逐帧候选贡献；保存人工修订前不会导出为正式标注。");
+        });
     }
     static boolean trackingReviewRequired(JsonObject raw){return Json.bool(raw,"requiresTrackingReview",false);}
     JsonObject settings(){return store.read(c->{JsonObject r=Store.one(c,"SELECT data FROM settings WHERE id='global'");return r==null?Json.obj("theme","light","globalConcurrency",8,"closeBehavior","ask"):Json.parse(r.get("data").getAsString());});}

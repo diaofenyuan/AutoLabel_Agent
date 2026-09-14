@@ -22,6 +22,9 @@ const installerChecks = [
   ['保存取消快捷方式选择', /"DesktopShortcut" 0/],
   ['创建快捷方式时写入选择', /CreateShortCut "\$newDesktopLink"/],
   ['保存创建快捷方式选择', /"DesktopShortcut" 1/],
+  ['静默部署可显式取消桌面快捷方式', /\$R9 "\/NoDesktopShortcut"/],
+  ['静默部署可显式创建桌面快捷方式', /\$R9 "\/DesktopShortcut"/],
+  ['取消分支在静默安装同样生效', /!macro customInit[\s\S]*?StrCpy \$AutoLabelShortcutChoice 0[\s\S]*?!macroend/],
 ];
 const builderChecks = [
   ['允许选择安装目录', /allowToChangeInstallationDirectory:\s*true/],
