@@ -37,6 +37,8 @@ for (const [label, pattern] of [...installerChecks, ...builderChecks]) {
   const source = installerChecks.some(([item]) => item === label) ? installerText : builderText;
   if (!pattern.test(source)) throw new Error(`安装器契约不满足：${label}`);
 }
+// 卸载会清空整个安装目录，默认放在那里的数据必须先迁出，否则用户会因卸载丢数据。
+if (!/customUnInstall[\s\S]*AutoLabelData/.test(installerText)) throw new Error('安装器契约不满足：卸载保留安装目录内的业务数据');
 
 for (const file of [packageFile, unpackedExe]) requireFile(file);
 const result = {
@@ -47,5 +49,6 @@ const result = {
   cancelShortcutBranch: true,
   installDirectoryPage: true,
   preservesUserData: true,
+  preservesManagedData: true,
 };
 console.log(`安装器契约通过：${JSON.stringify(result)}`);

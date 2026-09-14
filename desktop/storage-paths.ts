@@ -77,6 +77,15 @@ async function probeWithFallback(primary: string, fallback: string, label: strin
 
 export interface ResolvedPaths extends StoragePathsState { entries: StoragePathEntry[] }
 
+/** 只判断三类目录是否已有内容，不做深度统计，用于识别保留下来的旧数据。 */
+async function hasManagedData(root: string): Promise<boolean> {
+  for (const kind of PATH_KINDS) {
+    try { if ((await readdir(path.join(root, kind))).length) return true; }
+    catch { /* 目录不存在或不可读时继续检查下一类。 */ }
+  }
+  return false;
+}
+
 /**
  * 解析三类数据的实际生效路径并创建目录。
  * 自定义路径校验失败或运行中变得不可写时回退到受管位置，并把原因带回界面，不静默降级。
@@ -90,9 +99,15 @@ export async function resolveStoragePaths(preferences: DesktopPreferences, insta
     return typeof value === 'string' && value.trim() ? path.resolve(value) : undefined;
   };
   const savedRoot = savedValue('root');
-  const rootDecision = savedRoot
-    ? await probeWithFallback(savedRoot, fallbackRoot, '存储根目录', 'custom')
-    : await probeWithFallback(defaultRoot, fallbackRoot, '存储根目录', 'default');
+  let rootDecision: Probed;
+  if (savedRoot) rootDecision = await probeWithFallback(savedRoot, fallbackRoot, '存储根目录', 'custom');
+  else {
+    // 卸载会把 <安装目录>\AutoLabelData 迁到用户目录保留；默认根为空而保留目录有数据时沿用，
+    // 避免重装后默认位置空着、用户以为数据丢失。
+    const restored = !(await hasManagedData(defaultRoot)) && await hasManagedData(fallbackRoot);
+    rootDecision = await probeWithFallback(restored ? fallbackRoot : defaultRoot, fallbackRoot, '存储根目录', restored ? 'fallback' : 'default');
+    if (restored && !rootDecision.reason) rootDecision = { ...rootDecision, source: 'fallback', reason: '检测到上次卸载时保留的数据目录，已沿用该位置' };
+  }
   const entries: StoragePathEntry[] = [];
   for (const kind of PATH_KINDS) {
     const label = PATH_LABELS[kind];
@@ -206,10 +221,8 @@ export class StoragePathSettings {
   save(update: StoragePathUpdate): Promise<StoragePathsState> {
     return this.serial(async () => {
       const before = await resolveStoragePaths(this.preferences, this.installDirectory(), this.dataDirectory());
-      if (this.preferences.value[PREVIOUS_PATHS_KEY] === undefined) {
-        // 首次保存前记录当前生效位置，使「迁移已有数据」可以找到旧目录。
-        await this.preferences.update({ [PREVIOUS_PATHS_KEY]: { root: before.root, entries: before.entries.map(entry => ({ kind: entry.kind, path: entry.path })) } });
-      }
+      // 每次保存前记录当前生效位置，「迁移已有数据」才能把上一次目录的内容复制过来。
+      await this.preferences.update({ [PREVIOUS_PATHS_KEY]: { root: before.root, entries: before.entries.map(entry => ({ kind: entry.kind, path: entry.path })) } });
       const patch: Record<string, unknown> = {};
       const savedValue = (slot: PathSlot) => {
         const value = this.preferences.value[PATH_SETTING_KEYS[slot]];
@@ -241,29 +254,29 @@ export class StoragePathSettings {
   }
 
   /** 列出可迁移项：上一次生效且与当前不同的目录，且源目录真实存在。 */
-  migration(): Promise<StoragePathMigrationPlan> {
-    return this.serial(async () => {
-      const previous = this.preferences.value[PREVIOUS_PATHS_KEY] as { entries?: Array<{ kind: StoragePathKind; path: string }> } | undefined;
-      const current = await resolveStoragePaths(this.preferences, this.installDirectory(), this.dataDirectory());
-      const candidates: StoragePathCandidate[] = [];
-      for (const entry of current.entries) {
-        const source = previous?.entries?.find(item => item.kind === entry.kind)?.path;
-        if (!source || samePath(source, entry.path)) continue;
-        let info; try { info = await stat(source); } catch { continue; }
-        if (!info.isDirectory()) continue;
-        const size = await measure(source);
-        if (!size.files) continue;
-        candidates.push({ kind: entry.kind, label: entry.label, from: source, to: entry.path, files: size.files, bytes: size.bytes });
-      }
-      return { candidates };
-    });
+  private async migrationCandidates(): Promise<StoragePathMigrationPlan> {
+    const previous = this.preferences.value[PREVIOUS_PATHS_KEY] as { entries?: Array<{ kind: StoragePathKind; path: string }> } | undefined;
+    const current = await resolveStoragePaths(this.preferences, this.installDirectory(), this.dataDirectory());
+    const candidates: StoragePathCandidate[] = [];
+    for (const entry of current.entries) {
+      const source = previous?.entries?.find(item => item.kind === entry.kind)?.path;
+      if (!source || samePath(source, entry.path)) continue;
+      let info; try { info = await stat(source); } catch { continue; }
+      if (!info.isDirectory()) continue;
+      const size = await measure(source);
+      if (!size.files) continue;
+      candidates.push({ kind: entry.kind, label: entry.label, from: source, to: entry.path, files: size.files, bytes: size.bytes });
+    }
+    return { candidates };
   }
+  migration(): Promise<StoragePathMigrationPlan> { return this.serial(() => this.migrationCandidates()); }
 
   /** 迁移只复制、不删除源目录；逐文件核对大小，某个目录失败时回滚该目录本次已复制的文件。 */
   migrate(): Promise<StoragePathMigrationResult> {
     return this.serial(async () => {
-      const plan = await this.migration();
+      const plan = await this.migrationCandidates();
       const result: StoragePathMigrationResult = { copiedFiles: 0, copiedBytes: 0, skipped: 0, failures: [], sourcesRetained: true };
+      const completed: Array<{ kind: StoragePathKind; path: string }> = [];
       for (const candidate of plan.candidates) {
         const copied: Array<{ path: string; bytes: number }> = [];
         const rollback = async () => {
@@ -292,7 +305,15 @@ export class StoragePathSettings {
         } catch (error) {
           await rollback();
           result.failures.push({ kind: candidate.kind, path: candidate.from, message: error instanceof DesktopError ? error.message : '迁移未完成，已保留源目录' });
+          continue;
         }
+        completed.push({ kind: candidate.kind, path: candidate.to });
+      }
+      // 复制完成的目录不再重复提示迁移；失败的目录保持原样，便于修好问题后重试。
+      if (completed.length) {
+        const previous = this.preferences.value[PREVIOUS_PATHS_KEY] as { root?: string; entries?: Array<{ kind: StoragePathKind; path: string }> } | undefined;
+        const entries = (previous?.entries ?? []).map(item => completed.find(done => done.kind === item.kind) ?? item);
+        await this.preferences.update({ [PREVIOUS_PATHS_KEY]: { ...(previous ?? {}), entries } });
       }
       return result;
     });
