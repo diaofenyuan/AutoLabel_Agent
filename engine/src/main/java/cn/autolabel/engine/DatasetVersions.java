@@ -892,7 +892,9 @@ final class DatasetVersions implements AutoCloseable {
         });
     }
 
-    private Path versionsDirectory(){return store.root.resolve("datasets").resolve("versions").normalize();}
+    /** 版本目录根：导出、训练与评测等消费端统一按此口径解析，避免各自拼接路径。 */
+    static Path versionsRoot(Store store){return store.root.resolve("datasets").resolve("versions").normalize();}
+    private Path versionsDirectory(){return versionsRoot(store);}
     /** 版本目录：只有 ready 版本才存在对应内容，消费端引用前必须校验状态。 */
     Path version(String id)throws Exception{
         Path base=versionsDirectory(),directory=base.resolve(id).normalize();

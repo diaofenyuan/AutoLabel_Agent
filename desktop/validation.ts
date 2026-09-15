@@ -359,7 +359,7 @@ const schemas: Record<string, z.ZodType> = {
   'dataset.version.delete': z.strictObject({ versionId: id, confirm: z.literal(true) }),
   'dataset.version.compare': z.strictObject({ versionId: id, otherVersionId: id }),
   'dataset.version.verify': z.strictObject({ versionId: id }),
-  'evaluationSet.create': z.strictObject({ projectId: id, name, assetIds: evaluationAssetIds }),
+  'evaluationSet.create': z.strictObject({ projectId: id, name, assetIds: evaluationAssetIds.optional(), datasetVersionId: id.optional(), split: z.enum(['train', 'val', 'test']).optional() }),
   'evaluationSet.list': z.strictObject({ projectId: id }),
   'evaluationSet.get': z.strictObject({ setId: id, versionId: id.optional() }),
   'evaluationSet.saveTruth': z.strictObject({ setId: id, assetId: id, annotations, baseTruthVersion: count,

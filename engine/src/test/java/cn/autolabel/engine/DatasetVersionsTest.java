@@ -21,6 +21,7 @@ final class DatasetVersionsTest {
         augment(root.resolve("augment"));
         splitting(root.resolve("splitting"));
         consumption(root.resolve("consumption"));
+        versionEvaluation(root.resolve("evaluation"));
         backup(root.resolve("backup"));
     }
 
@@ -553,6 +554,46 @@ final class DatasetVersionsTest {
             JsonObject diagnostics=EngineTest.command(e,"diagnostics.get");
             check(diagnostics.has("datasetVersions"),"诊断包含数据集版本摘要");
             check(!diagnostics.toString().contains(root.toString()),"诊断不含本机绝对路径");
+        }
+    }
+
+    // ===== 评测集引用版本划分（F-3） =====
+
+    private static void versionEvaluation(Path root)throws Exception{
+        try(Engine e=new Engine(root.resolve("data"))){
+            JsonObject project=EngineTest.command(e,"project.create",Json.obj("name","版本评测","taskType","detect",
+                "classes",Json.arr(Json.obj("id","item","name","物品","color","#3b82f6"))));
+            String pid=Json.required(project,"id");
+            JsonArray ids=EngineTest.importSamples(e,pid,10);
+            for(JsonElement id:ids)annotateAt(e,id.getAsString(),"item",200,180,200,120);
+            JsonObject version=await(e,EngineTest.command(e,"dataset.version.create",Json.obj("projectId",pid,"seed","eval-seed")));
+            String versionId=Json.required(version,"id");
+            List<String> testAssets=new ArrayList<>();
+            for(JsonElement element:items(e,versionId)){
+                JsonObject item=element.getAsJsonObject();
+                if(Json.str(item,"split","").equals("test")&&Json.str(item,"outcome","").equals("included"))testAssets.add(Json.required(item,"assetId"));
+            }
+            check(!testAssets.isEmpty(),"版本包含非空测试划分，可作为评测集来源");
+
+            JsonObject set=EngineTest.command(e,"evaluationSet.create",Json.obj("projectId",pid,"name","版本测试集","datasetVersionId",versionId,"split","test"));
+            check(Json.required(Json.object(set,"source"),"kind").equals("dataset-version"),"评测集记录数据集版本来源");
+            check(Json.array(set,"assets").size()==testAssets.size(),"评测集取用版本的测试划分");
+            JsonObject asset=Json.array(set,"assets").get(0).getAsJsonObject();
+            check(Json.required(asset,"datasetVersionId").equals(versionId)&&asset.has("versionPath"),"评测集资产指向版本副本");
+
+            String setId=Json.required(set,"id");int revision=1;
+            for(JsonElement id:Json.array(set,"assetIds"))revision=Json.integer(EngineTest.command(e,"evaluationSet.saveTruth",Json.obj("setId",setId,
+                "assetId",id.getAsString(),"baseTruthVersion",0,"source","manual","annotations",Json.arr(EngineTest.label("detect")))),"setRevision",0);
+            JsonObject published=EngineTest.command(e,"evaluationSet.publish",Json.obj("setId",setId,"baseSetRevision",revision));
+            check(Json.integer(published,"sampleCount",0)==testAssets.size(),"版本来源评测集发布样本数与测试划分一致");
+            // 发布副本必须与版本副本逐字节一致，否则评测口径会与数据集版本漂移。
+            String image=Json.required(Json.array(published,"assets").get(0).getAsJsonObject(),"image");
+            Path publishedFile=e.store.root.resolve("evaluation-sets").resolve(Json.required(published,"id")).resolve(image);
+            Path versionFile=DatasetVersions.versionsRoot(e.store).resolve(versionId).resolve(Json.required(asset,"versionPath"));
+            check(Files.isRegularFile(publishedFile)&&Media.hash(publishedFile).equals(Media.hash(versionFile)),"评测图片与版本副本内容一致");
+
+            rejects("not_found",()->EngineTest.command(e,"evaluationSet.create",Json.obj("projectId",pid,"name","缺失版本","datasetVersionId","不存在的版本","split","test")));
+            rejects("invalid_argument",()->EngineTest.command(e,"evaluationSet.create",Json.obj("projectId",pid,"name","冲突来源","datasetVersionId",versionId,"split","test","assetIds",Json.arr(testAssets.get(0)))));
         }
     }
 

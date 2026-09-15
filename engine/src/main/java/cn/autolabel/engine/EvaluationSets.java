@@ -9,10 +9,53 @@ final class EvaluationSets {
     final Store store;final Projects projects;
     EvaluationSets(Store store,Projects projects){this.store=store;this.projects=projects;}
     static void task(JsonObject project){if(!Annotations.TYPES.contains(Json.str(project,"taskType","")))throw new ApiError(422,"evaluation_task_unsupported","当前质量评测不支持该任务类型。");}
-    JsonObject create(JsonObject p){String pid=Json.required(p,"projectId"),name=Json.required(p,"name");List<JsonObject> selected=new AssetFiles(store,projects).select(p);if(!p.has("assetIds")||selected.isEmpty()||Json.array(p,"assetIds").size()!=selected.size())throw new ApiError(400,"asset_selection_empty","评测集必须明确选择无重复的素材。");if(selected.size()>1000)throw new ApiError(413,"evaluation_sample_limit","第一段评测单集最多 1000 张素材。");
-        JsonObject project=projects.get(pid);task(project);String id=Json.id();JsonArray assets=new JsonArray(),ids=new JsonArray();for(JsonObject a:selected){assets.add(input(a));ids.add(a.get("id"));}
+    JsonObject create(JsonObject p)throws Exception{
+        String pid=Json.required(p,"projectId"),name=Json.required(p,"name");JsonObject project=projects.get(pid);task(project);
+        JsonArray assets=new JsonArray(),ids=new JsonArray();JsonObject source=null;
+        if(p.has("datasetVersionId")){
+            // 版本来源：评测集取版本的指定划分（默认测试集），副本按版本的受管副本登记，内容与版本逐字节一致。
+            if(p.has("assetIds"))throw new ApiError(400,"invalid_argument","引用数据集版本时不能同时手工指定素材。");
+            String versionId=Json.required(p,"datasetVersionId"),split=Json.str(p,"split","test");
+            if(!Set.of("train","val","test").contains(split))throw new ApiError(422,"evaluation_split_invalid","评测集来源划分只能是 train、val 或 test。");
+            store.read(c->{
+                JsonObject version=Store.one(c,"SELECT project_id,status,data FROM dataset_versions WHERE id=?",versionId);
+                if(version==null)throw new ApiError(404,"not_found","数据集版本不存在。");
+                if(!pid.equals(Json.required(version,"project_id")))throw new ApiError(400,"evaluation_set_mismatch","数据集版本不属于该项目。");
+                if(!Json.str(version,"status","").equals("ready"))throw new ApiError(409,"dataset_version_not_ready","只有就绪的数据集版本可以被评测集引用。");
+                JsonObject record=Json.parse(version.get("data").getAsString());
+                if(!Json.str(record,"taskType","").equals(Json.str(project,"taskType","")))throw new ApiError(422,"evaluation_task_mismatch","数据集版本的任务类型与项目不一致。");
+                // 只取原图项：增强变体（variant）不属于评测范围，取用会让同一素材重复计分。
+                for(JsonObject item:Store.rows(c,"SELECT data FROM dataset_version_items WHERE version_id=? AND outcome='included' AND split=? ORDER BY position",versionId,split)){
+                    JsonObject entry=Json.parse(item.get("data").getAsString());String assetId=Json.required(entry,"assetId");
+                    JsonObject asset=input(projects.asset(assetId));
+                    // 尺寸与哈希以版本副本为准：经过预处理或裁剪后与原始素材并不相同。
+                    asset.addProperty("contentHash",Json.required(entry,"contentHash"));
+                    asset.addProperty("width",Json.integer(entry,"width",Json.integer(asset,"width",0)));
+                    asset.addProperty("height",Json.integer(entry,"height",Json.integer(asset,"height",0)));
+                    asset.addProperty("datasetVersionId",versionId);asset.addProperty("versionPath",Json.required(entry,"image"));
+                    if(entry.has("label"))asset.addProperty("versionLabel",Json.required(entry,"label"));
+                    assets.add(asset);ids.add(assetId);
+                }
+                return null;
+            });
+            if(assets.isEmpty())throw new ApiError(422,"evaluation_set_empty","该数据集版本的 "+split+" 划分为空，无法作为评测集来源。");
+            source=Json.obj("kind","dataset-version","versionId",versionId,"split",split);
+        }else{
+            List<JsonObject> selected=new AssetFiles(store,projects).select(p);if(!p.has("assetIds")||selected.isEmpty()||Json.array(p,"assetIds").size()!=selected.size())throw new ApiError(400,"asset_selection_empty","评测集必须明确选择无重复的素材。");
+            for(JsonObject a:selected){assets.add(input(a));ids.add(a.get("id"));}
+        }
+        if(assets.size()>1000)throw new ApiError(413,"evaluation_sample_limit","第一段评测单集最多 1000 张素材。");
+        String id=Json.id();
         JsonObject result=Json.obj("id",id,"projectId",pid,"name",name,"taskType",project.get("taskType"),"revision",1,"assetIds",ids,"assets",assets,"template",project,"truthCount",0,"publishedVersions",new JsonArray(),"createdAt",Json.now(),"updatedAt",Json.now());
+        if(source!=null)result.add("source",source);
         return store.tx(c->{Store.update(c,"INSERT INTO evaluation_sets(id,project_id,data) VALUES(?,?,?)",id,pid,result);Store.event(c,"evaluation_set.created",null,null,null,Json.obj("setId",id,"projectId",pid,"sampleCount",assets.size()));return result;});
+    }
+    /** 版本来源的图片路径：按版本目录口径解析并校验不越界，缺失时明确报错而不是退回原始素材。 */
+    private Path versionSource(JsonObject asset){
+        String versionPath=Json.str(asset,"versionPath","");if(versionPath.isEmpty())return projects.path(Json.required(asset,"assetId"));
+        Path root=DatasetVersions.versionsRoot(store),directory=root.resolve(Json.required(asset,"datasetVersionId")).normalize(),file=directory.resolve(versionPath).normalize();
+        if(!directory.startsWith(root)||!file.startsWith(directory))throw new ApiError(500,"evaluation_input_invalid","数据集版本副本路径无效。");
+        return file;
     }
     static JsonObject input(JsonObject a){JsonObject m=Json.object(a,"metadata");return Json.obj("assetId",a.get("id"),"name",a.get("name"),"width",a.get("width"),"height",a.get("height"),"contentHash",a.get("contentHash"),"sourceHash",m.get("sourceHash"),"sourceGroup",group(a),"normalization",Json.obj("version",m.get("normalizationVersion"),"sourceToBaseline",m.get("sourceToBaseline"),"alphaBackground",m.get("alphaBackground"),"inputVersion",m.get("inputVersion")));}
     static String group(JsonObject a){JsonObject m=Json.object(a,"metadata");if(m.has("evaluationSourceGroup"))return Json.required(m,"evaluationSourceGroup");for(String k:List.of("sourceVideoId","groupId","rootAssetId","parentAssetId")){String value=Json.str(m,k,"");if(!value.isEmpty())return (k.equals("rootAssetId")||k.equals("parentAssetId")?"asset-root":k)+":"+value;}return "asset-root:"+Json.str(a,"id",Json.str(a,"assetId","unknown"));}
@@ -30,7 +73,7 @@ final class EvaluationSets {
         store.requireSpace(0);String sid=Json.required(p,"setId");if(!p.has("baseSetRevision"))throw new ApiError(400,"invalid_argument","发布必须指定 baseSetRevision。");
         JsonObject snapshot=store.read(c->{JsonObject set=Store.document(c,"evaluation_sets",sid);if(Json.integer(set,"revision",0)!=Json.integer(p,"baseSetRevision",-1))throw new ApiError(409,"evaluation_set_conflict","评测集真值已变化，请重新检查后发布。");JsonArray assets=Json.array(set,"assets").deepCopy();for(JsonElement e:assets){JsonObject a=e.getAsJsonObject();JsonObject row=Store.one(c,"SELECT data FROM truth_versions WHERE set_id=? AND asset_id=? ORDER BY version DESC LIMIT 1",sid,Json.required(a,"assetId"));if(row==null)throw new ApiError(422,"evaluation_truth_incomplete","每张素材都需要显式保存独立人工真值，包括无目标图片。");a.add("truth",Json.parse(row.get("data").getAsString()));}set.add("assets",assets);return set;});
         String id=Json.id();Path parent=store.root.resolve("evaluation-sets"),temporary=parent.resolve(".partial-"+id),destination=parent.resolve(id);Files.createDirectories(temporary.resolve("images"));int objects=0;Map<String,Integer> coverage=new LinkedHashMap<>();
-        for(JsonElement e:Json.array(snapshot,"assets")){JsonObject a=e.getAsJsonObject();String aid=Json.required(a,"assetId");Path source=projects.path(aid);if(!Files.isRegularFile(source)||!Media.hash(source).equals(Json.required(a,"contentHash")))throw new ApiError(409,"evaluation_input_mismatch","素材内容与评测集创建时不一致，发布已停止。");String relative="images/"+aid+".png";Files.copy(source,temporary.resolve(relative));if(!Media.hash(temporary.resolve(relative)).equals(Json.required(a,"contentHash")))throw new ApiError(500,"evaluation_copy_failed","评测图片副本校验失败。");a.addProperty("image",relative);for(JsonElement annotation:Json.array(Json.object(a,"truth"),"annotations")){objects++;coverage.merge(Json.required(annotation.getAsJsonObject(),"classId"),1,Integer::sum);}}
+        for(JsonElement e:Json.array(snapshot,"assets")){JsonObject a=e.getAsJsonObject();String aid=Json.required(a,"assetId");Path source=versionSource(a);if(!Files.isRegularFile(source)||!Media.hash(source).equals(Json.required(a,"contentHash")))throw new ApiError(409,"evaluation_input_mismatch","素材内容与评测集创建时不一致，发布已停止。");String versionPath=Json.str(a,"versionPath",""),name=versionPath.isEmpty()?aid+".png":versionPath.substring(versionPath.lastIndexOf('/')+1);String relative="images/"+name;Files.copy(source,temporary.resolve(relative));if(!Media.hash(temporary.resolve(relative)).equals(Json.required(a,"contentHash")))throw new ApiError(500,"evaluation_copy_failed","评测图片副本校验失败。");a.addProperty("image",relative);for(JsonElement annotation:Json.array(Json.object(a,"truth"),"annotations")){objects++;coverage.merge(Json.required(annotation.getAsJsonObject(),"classId"),1,Integer::sum);}}
         int objectCount=objects;
         return store.tx(c->{JsonObject current=Store.document(c,"evaluation_sets",sid);if(Json.integer(current,"revision",0)!=Json.integer(p,"baseSetRevision",-1))throw new ApiError(409,"evaluation_set_conflict","复制图片期间真值发生变化，本次没有发布。");int version=Store.one(c,"SELECT COALESCE(MAX(version),0)+1 AS n FROM evaluation_set_versions WHERE set_id=?",sid).get("n").getAsInt();
             JsonObject result=Json.obj("id",id,"setId",sid,"projectId",snapshot.get("projectId"),"name",snapshot.get("name"),"version",version,"setRevision",snapshot.get("revision"),"sampleCount",Json.array(snapshot,"assets").size(),"truthObjectCount",objectCount,"coverage",coverage,"taskType",snapshot.get("taskType"),"template",snapshot.get("template"),"assets",snapshot.get("assets"),"createdAt",Json.now());
