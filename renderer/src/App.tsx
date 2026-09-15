@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { PanelLeftClose, PanelLeftOpen, CircleHelp, ChevronRight, X, Minus, Square, Check, AlertCircle, Keyboard, LoaderCircle, Search, ArrowRight } from 'lucide-react';
-import { Context, navLabel, navRegistry, type Page, type ChatSession } from './context';
+import { Context, navLabel, navRegistry, type Page, type ChatSession, type SettingsSection } from './context';
 import { getBridge, isDemo, request, errorMessage } from './bridge';
 import type { Project, Asset, Preferences, Provider, EngineEvent, EngineStatus } from './types';
 import { defaultPreferences } from './types';
@@ -96,10 +96,12 @@ export default function App() {
       return result.items;
     } finally { transitioning.current = false; setAssetsLoading(false); }
   }, []);
-  const navigate = useCallback(async (next: Page) => {
+  // 设置页每次进入都会重挂载，落点区块只能由这里记住；`section` 由调用方按需指定，未指定即回到默认区块。
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('appearance');
+  const navigate = useCallback(async (next: Page, section?: SettingsSection) => {
     if (transitioning.current) return;
     transitioning.current = true; setAssetsLoading(true);
-    try { await guard.current?.(); clearTimeout(toastTimer.current); setToast(null); setPage(next); history.replaceState(null, '', `#${next}`); }
+    try { await guard.current?.(); clearTimeout(toastTimer.current); setToast(null); setPage(next); setSettingsSection(section ?? 'appearance'); history.replaceState(null, '', `#${next}`); }
     catch (e) { notify(`草稿未保存，已保留当前页面。${errorMessage(e)}`, true); }
     finally { transitioning.current = false; setAssetsLoading(false); }
   }, [notify]);
@@ -198,7 +200,7 @@ export default function App() {
     catch (e) { notify(errorMessage(e), true); }
     finally { setReconnecting(false); }
   }
-  return <Context.Provider value={{ page, navigate, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, workbenchView, setWorkbenchView, activeAssetId, setActiveAssetId, mediaJob, setMediaJob, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, newChatSession, openJumper, openHelp, requestDeleteProject }}>
+  return <Context.Provider value={{ page, navigate, settingsSection, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, workbenchView, setWorkbenchView, activeAssetId, setActiveAssetId, mediaJob, setMediaJob, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, newChatSession, openJumper, openHelp, requestDeleteProject }}>
     <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <Sidebar />
       {deletion && <ProjectDeletionDialog project={deletion} onClose={() => setDeletion(null)} onDeleted={projectId => void projectDeleted(projectId)} />}

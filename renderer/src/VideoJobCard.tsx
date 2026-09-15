@@ -29,7 +29,7 @@ export default function VideoJobCard({ jobId, temporarySource, onImported, onOpe
   onOpenTasks: () => void;
   onDismiss: () => void;
 }) {
-  const { project } = useApp();
+  const { project, navigate } = useApp();
   const [currentId, setCurrentId] = useState(jobId);
   const [job, setJob] = useState<MediaJob | null>(null);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
@@ -124,7 +124,7 @@ export default function VideoJobCard({ jobId, temporarySource, onImported, onOpe
     <div className="video-job-head"><strong>{mediaJobName(job)}</strong>{committed && <CheckCircle2 size={14} className="video-job-check" />}<IconButton label="收起抽帧任务卡" onClick={onDismiss}><X size={14} /></IconButton></div>
     <MediaProgressView job={job} />
     {importing && <p className="muted tiny"><LoaderCircle className="spin" size={13} /> 正在把抽出的帧导入项目…</p>}
-    {!committed && (job.status === 'failed' || job.status === 'interrupted') && <MediaError busy={busy} handlers={{ retry: () => void control('media.job.retry') }} error={job.error ? `[${job.error.code}] ${job.error.message}` : '抽帧任务未完成'} />}
+    {!committed && (job.status === 'failed' || job.status === 'interrupted') && <MediaError busy={busy} handlers={{ retry: () => void control('media.job.retry'), openMediaRuntime: () => void navigate('settings', 'media') }} error={job.error ? `[${job.error.code}] ${job.error.message}` : '抽帧任务未完成'} />}
     {committed && timelineNote && <p className="muted tiny">{timelineNote}</p>}
     <div className="actions">
       {committed

@@ -115,12 +115,12 @@ const ENTRIES: Record<string, MediaErrorEntry> = {
   },
   video_environment_missing: {
     title: '还没有配置 FFmpeg',
-    detail: '抽帧依赖本机的 FFmpeg 与 ffprobe。请到「设置 · 媒体运行时」完成配置后重试。',
+    detail: '抽帧依赖本机的 FFmpeg 与 ffprobe。请到「设置 · 视频工具」完成配置后重试。',
     actions: ['openMediaRuntime', 'retry']
   },
   media_runtime_missing: {
     title: '还没有配置 FFmpeg',
-    detail: '抽帧与素材筛选都要用到本机的 FFmpeg 与 ffprobe。请到「设置 · 媒体运行时」完成配置后重试。',
+    detail: '抽帧与素材筛选都要用到本机的 FFmpeg 与 ffprobe。请到「设置 · 视频工具」完成配置后重试。',
     actions: ['openMediaRuntime', 'retry']
   },
   video_frame_limit: {

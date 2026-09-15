@@ -29,7 +29,7 @@ function transcodeCommand(sourcePath: string, targetPath: string) {
 }
 
 export default function VideoImport({ projectId, onClose, onCreated }: { projectId: string; onClose: () => void; onCreated: (job: MediaJob, temporarySource?: string) => void }) {
-  const { notify, project } = useApp();
+  const { notify, project, navigate } = useApp();
   const [sourcePath, setSourcePath] = useState(''), [inspection, setInspection] = useState<VideoInspection | null>(null), [error, setError] = useState('');
   const [inspecting, setInspecting] = useState(false), [busy, setBusy] = useState(false);
   const [transcodePath, setTranscodePath] = useState(''), [transcoding, setTranscoding] = useState(false), [elapsed, setElapsed] = useState(0);
@@ -211,6 +211,8 @@ export default function VideoImport({ projectId, onClose, onCreated }: { project
   const errorHandlers: MediaErrorActionHandlers = {
     reselect: () => void choose(),
     retry: () => void inspect(sourcePath),
+    // 未配置 FFmpeg 时给出直达设置页的出口，用户不必自己猜「媒体运行时」在设置的哪一层。
+    openMediaRuntime: () => void navigate('settings', 'media'),
     ...(suggested !== null ? { reduceDensity: applySuggestion } : {}),
     ...(sourcePath ? { copyCommand: () => void copyTranscodeCommand(), transcode: () => void transcode() } : {})
   };
