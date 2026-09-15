@@ -21,9 +21,9 @@ export async function checkDesktopConnection(window: BrowserWindow, output: stri
   };
   window.show();
   stage('conn:shown');
-  await waitFor(`!!document.querySelector('.connection .status-dot.ready') && !document.querySelector('.connection-banner')`);
+  await waitFor(`!!document.querySelector('.sidebar-status .status-dot.ready') && !document.querySelector('.connection-banner')`);
   stage('conn:ready');
-  const before = await window.webContents.executeJavaScript(`({ready:!!document.querySelector('.connection .status-dot.ready'),banner:!!document.querySelector('.connection-banner')})`);
+  const before = await window.webContents.executeJavaScript(`({ready:!!document.querySelector('.sidebar-status .status-dot.ready'),banner:!!document.querySelector('.connection-banner')})`);
   stage('conn:before-captured');
   await control.stop();
   stage('conn:stopped');
@@ -33,8 +33,8 @@ export async function checkDesktopConnection(window: BrowserWindow, output: stri
   await window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
   await writeFile(output.replace(/\.json$/i, '-disconnected.png'), (await window.webContents.capturePage()).toPNG());
   await window.webContents.executeJavaScript(`document.querySelector('.connection-banner button').click()`);
-  await waitFor(`!!document.querySelector('.connection .status-dot.ready') && !document.querySelector('.connection-banner')`);
-  const restored = await window.webContents.executeJavaScript(`({ready:!!document.querySelector('.connection .status-dot.ready'),banner:!!document.querySelector('.connection-banner')})`);
+  await waitFor(`!!document.querySelector('.sidebar-status .status-dot.ready') && !document.querySelector('.connection-banner')`);
+  const restored = await window.webContents.executeJavaScript(`({ready:!!document.querySelector('.sidebar-status .status-dot.ready'),banner:!!document.querySelector('.connection-banner')})`);
   await writeFile(output.replace(/\.json$/i, '.png'), (await window.webContents.capturePage()).toPNG());
   await writeFile(output, JSON.stringify({ before, disconnected, restored, engineRestarted: true }, null, 2));
 }
@@ -59,7 +59,7 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   })()`);
   window.show();
   await waitFor(`!!document.querySelector('.getting-started button') && !document.querySelector('.skeleton-list')`);
-  await waitFor(`!!document.querySelector('.connection .status-dot.ready') && !document.querySelector('.connection-banner')`);
+  await waitFor(`!!document.querySelector('.sidebar-status .status-dot.ready') && !document.querySelector('.connection-banner')`);
   for (let i = 0; i < pages.length; i++) {
     if (i === 0) {
       const palette = await window.webContents.executeJavaScript(`(async()=>{
@@ -298,7 +298,7 @@ export async function checkTrainingUi(window: BrowserWindow, output: string, hoo
   };
   const run = async (): Promise<void> => {
   window.show();
-  await waitFor(`!!document.querySelector('.connection .status-dot.ready') && !document.querySelector('.connection-banner')`);
+  await waitFor(`!!document.querySelector('.sidebar-status .status-dot.ready') && !document.querySelector('.connection-banner')`);
 
   await visit('模型训练', '.training-page');
   const empty = await window.webContents.executeJavaScript(`({
