@@ -16,6 +16,17 @@ import java.util.Iterator;
 final class Media {
     static final String NORMALIZATION_VERSION="srgb-exif-alpha-v2";
     static final long MAX_FILE=128L*1024*1024, MAX_PIXELS=40_000_000;
+    /**
+     * 抽帧参数的取值边界。
+     *
+     * 专供配方保存使用：抽帧本身的实时校验仍在 VideoFrames.prepare 内（那里要结合真实视频的
+     * 时长、几何与工具版本），但两处的数值范围必须一致 —— 抽帧边界收紧后配方若仍按旧范围接受
+     * 输入，用户会以为套用就绪、直到创建任务才失败。改动 prepare 的范围时请同步这里。
+     */
+    static final int MAX_FRAMES_DEFAULT=10000, MAX_FRAMES_LIMIT=100000, MAX_DIMENSION=20000, MAX_RANGES=32;
+    static final long MIN_EVERY_N=1, MAX_EVERY_N=1000000;
+    static final double MIN_INTERVAL_SECONDS=0.001, MAX_INTERVAL_SECONDS=604800, MIN_TARGET_FPS=0.001, MAX_TARGET_FPS=240;
+    static final int MIN_JPEG_QUALITY=2, MAX_JPEG_QUALITY=31;
     record Normalized(Path path,int width,int height,String hash,JsonObject metadata){}
     private final Store store;
     Media(Store store){this.store=store;ImageIO.setUseCache(false);}

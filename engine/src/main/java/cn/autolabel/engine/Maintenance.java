@@ -15,7 +15,7 @@ final class Maintenance {
     Maintenance(Engine engine){this.engine=engine;}
     synchronized boolean enter(String command){
         if(Set.of("track.timeline.list","track.timeline.get","track.timeline.frames","track.list","track.get","track.keyframe.list","track.generate.preview","track.generation.get","track.generation.list","track.generation.results").contains(command))return false;
-        if(READ_ONLY.contains(command)||Set.of("flow.capabilities","flow.preflight","flow.get","flow.list","flow.artifact","local.runtime.get","local.model.get","local.model.list","local.model.resolve","run.result.get","flow.input.image","media.runtime.get","media.job.get","media.job.list","media.video.frames","media.screening.result").contains(command))return false;
+        if(READ_ONLY.contains(command)||Set.of("flow.capabilities","flow.preflight","flow.get","flow.list","flow.artifact","local.runtime.get","local.model.get","local.model.list","local.model.resolve","run.result.get","flow.input.image","media.runtime.get","media.job.get","media.job.list","media.video.frames","media.screening.result","media.recipe.list").contains(command))return false;
         if(mode!=null)throw new ApiError(423,mode.equals("data")?"engine_data_maintenance_locked":"engine_update_locked",mode.equals("data")?"引擎正在维护数据，暂不接受新的写入或模型调用。":"引擎正在准备安装更新，暂不接受新的写入或模型调用。");
         activeCommands++;return true;
     }

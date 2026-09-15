@@ -7,7 +7,7 @@ import java.util.*;
 import java.util.concurrent.*;
 
 final class Store implements AutoCloseable {
-    static final int SCHEMA_VERSION=10;
+    static final int SCHEMA_VERSION=11;
     interface Work<T> { T run(Connection c) throws Exception; }
     final Path root;
     // 受管原图根默认在数据目录内；桌面可把它指到存储根下的 uploads 目录，使导入复制的训练集可单独配置。
@@ -134,6 +134,8 @@ final class Store implements AutoCloseable {
             s.execute("CREATE INDEX IF NOT EXISTS dataset_version_items_outcome ON dataset_version_items(version_id,outcome)");
             s.execute("CREATE TABLE IF NOT EXISTS dataset_version_builds(id TEXT PRIMARY KEY,version_id TEXT NOT NULL REFERENCES dataset_versions(id),status TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,data TEXT NOT NULL)");
             s.execute("CREATE INDEX IF NOT EXISTS dataset_version_builds_version ON dataset_version_builds(version_id,created_at DESC)");
+            // 抽帧配方：全局记录（不属于任何项目），跟着数据目录与备份一起走；名称在同类配方内唯一。
+            s.execute("CREATE TABLE IF NOT EXISTS media_recipes(id TEXT PRIMARY KEY,kind TEXT NOT NULL,name TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(kind,name))");
             s.execute("PRAGMA user_version="+SCHEMA_VERSION); writer.commit(); writer.setAutoCommit(true);
         } catch(Exception e) {try{if(!writer.getAutoCommit())writer.rollback();}finally{writer.close();writes.shutdownNow();}if(e instanceof ApiError a)throw a;throw new ApiError(500,"database_migration_failed","数据库升级失败，未提交迁移；请保留原数据目录及迁移备份并查看诊断。");}
     }
@@ -168,9 +170,12 @@ final class Store implements AutoCloseable {
     private void backupBeforeMigration(int version)throws Exception{
         try{Path directory=root.resolve("backups");Files.createDirectories(directory);Path backup=directory.resolve("schema-v"+version+"-"+Json.id()+".db");
             // VACUUM INTO 读取包含 WAL 的一致快照，成功并通过完整性检查后才允许开始结构迁移。
-            try(PreparedStatement p=writer.prepareStatement("VACUUM INTO ?")){p.setString(1,backup.toString());p.execute();}
+            // 必须另开连接执行：调用方此刻仍握着读取版本与设置 journal_mode 的语句，而 VACUUM INTO 会以
+            // "cannot VACUUM - SQL statements in progress" 拒绝同一连接上的请求 —— 那会让任何一次
+            // schema 升级在已有数据目录上直接失败。
+            try(Connection source=connect();PreparedStatement p=source.prepareStatement("VACUUM INTO ?")){p.setString(1,backup.toString());p.execute();}
             try(Connection check=DriverManager.getConnection("jdbc:sqlite:"+backup);Statement s=check.createStatement();ResultSet result=s.executeQuery("PRAGMA integrity_check")){if(!result.next()||!"ok".equals(result.getString(1)))throw new SQLException("backup integrity failure");}
-        }catch(Exception e){throw new ApiError(500,"migration_backup_failed","升级前一致性备份未完成，已停止升级；请检查磁盘空间与备份目录权限。");}
+        }catch(Exception e){throw new ApiError(500,"migration_backup_failed","升级前一致性备份未完成，已停止升级；请检查磁盘空间与备份目录权限。原因："+(e.getMessage()==null?e.getClass().getSimpleName():e.getMessage()));}
     }
     Connection connect() throws SQLException {
         Connection c=DriverManager.getConnection(url);
