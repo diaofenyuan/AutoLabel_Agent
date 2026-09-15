@@ -204,8 +204,8 @@
 /* Codex 式侧栏：顶部 / 主入口 / 置顶 / 项目 / 最近 / 底部。会话与项目行只在悬浮或选中时显示操作按钮。 */
 .sidebar-top{position:relative;display:flex;align-items:center;gap:6px;height:64px;min-height:64px;padding:0 10px 0 13px;border-bottom:1px solid var(--border);-webkit-app-region:drag}
 .sidebar-top .icon-button{-webkit-app-region:no-drag}
-.sidebar-workspace{display:flex;align-items:center;gap:9px;flex:1;min-width:0;height:38px;padding:0 8px;border-radius:8px;font-size:13px;font-weight:600;white-space:nowrap;-webkit-app-region:no-drag}
-.sidebar-workspace:hover{background:var(--hover)}
+/* 顶部标识不再承担菜单：整行交给窗口拖拽，避免出现「点不动」的伪交互区域。 */
+.sidebar-workspace{display:flex;align-items:center;gap:9px;flex:1;min-width:0;height:38px;padding:0 8px;font-size:13px;font-weight:600;white-space:nowrap}
 .sidebar-workspace span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .sidebar-scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-bottom:8px}
 .sidebar-scroll nav{padding:8px}
@@ -233,10 +233,14 @@
 .sidebar-menu button{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:7px;text-align:left;font-size:12px;color:var(--text)}
 .sidebar-menu button:hover:not(:disabled){background:var(--hover)}
 .sidebar-menu button:disabled{opacity:.5}
-.sidebar-help-button{display:flex;align-items:center;gap:10px;width:100%;height:34px;padding:0 11px;margin-top:8px;border-radius:7px;color:var(--muted);font-size:12px}
-.sidebar-help-button:hover{background:var(--hover);color:var(--text)}
+/* 底部只留一条状态行 + 设置入口；引擎状态在顶栏已有 chip，这里不再重复两行文案。 */
+.sidebar-status{display:flex;align-items:center;gap:7px;padding:0 11px;font-size:11px;color:var(--muted);white-space:nowrap;margin-bottom:6px}
+.sidebar-status>.truncate{min-width:0}
+/* 会话行尾的快捷键提示与悬浮操作占同一位置：静止显示快捷键，悬浮/选中时让位给操作按钮。 */
+.sidebar-shortcut{position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:10px;padding:1px 5px;color:var(--soft);background:var(--surface);border:1px solid var(--border);border-radius:4px;pointer-events:none}
+.sidebar-session:hover .sidebar-shortcut,.sidebar-session:focus-within .sidebar-shortcut,.sidebar-session.selected .sidebar-shortcut{opacity:0}
 .sidebar-bottom .nav-item{margin:4px 0 0}
-.sidebar-collapsed .sidebar-workspace span,.sidebar-collapsed .sidebar-workspace svg:last-child,.sidebar-collapsed .sidebar-help-button span{display:none}
+.sidebar-collapsed .sidebar-workspace span{display:none}
 .sidebar-collapsed .sidebar-group{display:none}
 .chat-home{display:flex;flex-direction:column}
 .chat-home-head{max-width:1540px;margin:0 auto;width:100%}
