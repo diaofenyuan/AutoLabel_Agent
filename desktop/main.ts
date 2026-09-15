@@ -12,12 +12,13 @@ import { DialogFixtures } from './dialog-fixtures';
 import { CredentialVault } from './vault';
 import { LocalExecutionSettings } from './local-execution';
 import { MediaExecutionSettings } from './media-execution';
+import { VideoTranscoder } from './transcode';
 import { DataStorage, DesktopPreferences, initializeStorageLocation, scopedVaultPath, type StorageLocation } from './storage';
 import { StoragePathSettings, resolveStoragePaths, storagePathsState, validateTrainingRoot, type ResolvedPaths } from './storage-paths';
 import { ChatStore } from './chat-store';
 import type { StoragePathsState } from '../shared/storage';
 import { PathGrants, authorizeCommandPaths, mediaTargetFromUrl, isTrustedUrl, normalizeMedia, publicInputResult, redact } from './security';
-import { DesktopError, validateCommand, assertAgentCommand, fileSelectionSchema, saveFileSchema, windowActionSchema } from './validation';
+import { DesktopError, validateCommand, assertAgentCommand, fileSelectionSchema, saveFileSchema, windowActionSchema, transcodeSourceSchema, transcodeOutputSchema } from './validation';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'autolabel-app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
@@ -45,6 +46,8 @@ const localExecution = new LocalExecutionSettings(preferenceStore, grants);
 const mediaExecution = new MediaExecutionSettings(preferenceStore, grants, path.join(app.isPackaged ? process.resourcesPath : path.join(root, 'build'), 'media-tools'));
 let vault: CredentialVault;
 let engine: EngineManager;
+// 转码副本只落在系统临时目录：它是「到达抽帧」的一次性中间物，不属于任何项目或数据目录。
+const transcoder = new VideoTranscoder(() => mediaExecution.paths(), path.join(app.getPath('temp'), 'autolabel-transcode'), message => engine?.log(message));
 type ActiveStorage = StorageLocation & { engine: EngineManager; vault: CredentialVault };
 let storage: DataStorage<ActiveStorage> | undefined;
 const agent = new AgentManager(path.join(__dirname, 'agent.cjs'), (command, payload) => request(command, payload, true));
@@ -57,6 +60,8 @@ let rendererDirty = false;
 let closeBehavior: 'ask' | 'tray' | 'quit' = 'ask';
 let preferences: Record<string, unknown> = {};
 let installingUpdate = false;
+/** 上次成功重启引擎的时间戳，用于抑制连点导致的反复杀启 JVM。 */
+let engineRestartedAt = 0;
 let credentialSaves = 0;
 let credentialPending: Promise<unknown> = Promise.resolve();
 const providerCredentialMutations = new Set<string>();
@@ -236,6 +241,7 @@ async function prepareDefaultBackupDirectory(): Promise<string> {
 /**
  * 项目删除：先按选项完成备份，再在同一套维护锁内执行级联删除。
  * 备份失败即中止，避免留下「已删除但无备份」的状态。
+ * project.delete 是维护锁内的破坏性动作，必须回传本次锁的 operationId，否则引擎以未声明归属拒绝。
  */
 async function deleteProject(payload: Record<string, unknown>): Promise<unknown> {
   const projectId = payload.projectId as string;
@@ -244,7 +250,8 @@ async function deleteProject(payload: Record<string, unknown>): Promise<unknown>
       ? await grants.require(payload.backupDir, ['directory']) : await prepareDefaultBackupDirectory();
     await storage!.createBackup(backupDir);
   }
-  const result = await storage!.withMaintenance(() => engine.request('project.delete', payload)) as Record<string, unknown>;
+  const result = await storage!.withMaintenance(operationId =>
+    engine.request('project.delete', { ...payload, operationId })) as Record<string, unknown>;
   // 历史对话保留，只标记来源项目已删除。
   await chatStore.markProjectDeleted(projectId).catch(error => engine.log(`对话记录标记未更新：${error instanceof DesktopError ? error.code : 'CHAT_MARK_FAILED'}`));
   return result;
@@ -327,12 +334,16 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
     const saved = await storagePathSettings.save(payload);
     await refreshStoragePaths();
     const current = storagePaths?.entries.find(entry => entry.kind === 'uploads')?.path;
-    if (previous && current && !sameStoragePath(previous, current) && engine.status.state === 'ready') {
+    if (previous && current && !sameStoragePath(previous, current)) {
       // 受管原图目录由引擎启动参数决定：空闲时立即重启让新落点生效，忙时明确标记待生效而不打断任务。
-      try {
-        const gate = await engine.request('system.canUpdate') as { ready?: boolean };
-        if (gate?.ready) { await engine.restart(); return { ...saved, materialsRoot: 'active' as const }; }
-      } catch { /* 引擎不可用时保留待生效标记，由界面如实提示。 */ }
+      // 引擎不可用（error/disconnected）时同样必须回报 pending-restart —— 直接返回 saved 会让
+      // 界面把「改动根本没被引擎采用」显示成「已生效」，属于静默谎报成功。
+      if (engine.status.state === 'ready') {
+        try {
+          const gate = await engine.request('system.canUpdate') as { ready?: boolean };
+          if (gate?.ready) { await engine.restart(); return { ...saved, materialsRoot: 'active' as const }; }
+        } catch { /* 引擎不可用时保留待生效标记，由界面如实提示。 */ }
+      }
       return { ...saved, materialsRoot: 'pending-restart' as const };
     }
     return saved;
@@ -502,8 +513,11 @@ function registerIpc(): void {
   handle('autolabel:request', (_event, command, payload) => request(command, payload));
   handle('autolabel:engine-status', () => engine.status);
   handle('autolabel:restart-engine', async () => {
+    // 连点会反复杀启 JVM 并反复占用数据目录，加最小间隔；重复请求直接返回当前状态。
+    if (Date.now() - engineRestartedAt < 5000) return engine.status;
     if (installingUpdate || storage?.busy || credentialSaves || localExecution.busy || mediaExecution.busy) throw new DesktopError('STORAGE_BUSY', '更新、配置保存或数据维护正在进行');
     const result = await engine.restart();
+    engineRestartedAt = Date.now();
     if (result.state === 'ready') { localExecution.uncertain = false; mediaExecution.uncertain = false; preferences = await preferenceStore.update({ dataEstablished: true }); }
     return result;
   });
@@ -550,6 +564,18 @@ function registerIpc(): void {
       filters: extension ? [{ name: `${extension.toUpperCase()} 文件`, extensions: [extension] }] : undefined });
     // 新输出文件尚不存在，只授权已确认的父目录和精确文件名。
     return result.canceled || !result.filePath ? null : grants.addOutput(result.filePath);
+  });
+  handle('autolabel:transcode-video', async (_event, options) => {
+    const parsed = transcodeSourceSchema.safeParse(options);
+    if (!parsed.success) throw new DesktopError('INVALID_PAYLOAD', '转码请求无效');
+    if (storage?.busy || installingUpdate || shutdownStarted) throw new DesktopError('STORAGE_BUSY', '数据目录或更新正在处理，请稍后重试');
+    // 副本要按「视频来源」重新授权，后续 media.video.inspect / create 才能通过同一套路径校验。
+    return { path: await grants.add(await transcoder.run(parsed.data.sourcePath, grants), 'video') };
+  });
+  handle('autolabel:discard-transcode', async (_event, options) => {
+    const parsed = transcodeOutputSchema.safeParse(options);
+    if (!parsed.success) throw new DesktopError('INVALID_PAYLOAD', '转码请求无效');
+    await transcoder.discard(parsed.data.path);
   });
   handle('autolabel:open-path', async (_event, value) => {
     // 受管存储目录由应用自己确定，允许直接打开；其余路径仍必须先经文件选择器授权。
@@ -624,6 +650,9 @@ async function createWindow(): Promise<void> {
       nodeIntegrationInWorker: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false, spellcheck: false },
   });
   window.once('ready-to-show', () => window?.show());
+  // 软件渲染环境（本机 GPU 进程不可用）下首帧可能始终不提交，ready-to-show 不触发，
+  // 兜底在页面加载完成后显示窗口，避免启动后只有托盘图标、窗口不可见。
+  window.webContents.once('did-finish-load', () => { if (window && !window.isVisible()) window.show(); });
   window.webContents.on('did-start-loading', () => { rendererDirty = false; });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, url) => { if (!isTrustedUrl(url, devOrigin)) event.preventDefault(); });
@@ -792,11 +821,21 @@ else {
     if (shutdownStarted) return;
     shutdownStarted = true;
     agent.stop();
-    void (storage?.whenIdle(10000) ?? Promise.resolve()).then(() => credentialPending).then(() => localExecution.whenIdle()).then(() => mediaExecution.whenIdle()).then(() => updates.shutdown()).then(() => engine?.stop()).finally(() => { quitting = true; tray?.destroy(); app.quit(); });
+    transcoder.stop();
+    // 排队任务最多等 10 秒收敛，但引擎停止必须无条件执行：
+    // 一旦某个 whenIdle 悬挂或拒绝就跳过 engine.stop()，会留下占用 autolabel.db 的 Java 孤儿进程，
+    // 用户下次打开软件时数据目录被占用，表现为「引擎起不来」。
+    const drain = (storage?.whenIdle(10000) ?? Promise.resolve()).then(() => credentialPending)
+      .then(() => localExecution.whenIdle()).then(() => mediaExecution.whenIdle()).then(() => updates.shutdown());
+    void Promise.race([drain.catch(() => undefined), new Promise(resolve => setTimeout(resolve, 10000))])
+      .then(() => engine?.stop().catch(() => undefined))
+      .finally(() => { quitting = true; tray?.destroy(); app.quit(); });
   });
   app.on('window-all-closed', () => { if (!quitting && !tray) app.quit(); });
   void app.whenReady().then(async () => {
     await mkdir(userData, { recursive: true });
+    // 上次会话留下的转码副本已经失去授权、也无法再被任何任务引用，开机即清。
+    void transcoder.sweep();
     preferences = await preferenceStore.load();
     const initial = createBackend(await initializeStorageLocation(userData, preferenceStore));
     preferences = preferenceStore.value; setActiveStorage(initial);
@@ -826,11 +865,15 @@ else {
       callback({ cancel: !allowed });
     });
     registerIpc(); await registerProtocols();
-    const started = await engine.start();
-    if (started.state === 'ready') preferences = await preferenceStore.update({ dataEstablished: true });
+    // 先出窗口再启动引擎：Java 冷启动最坏要等满 30 秒握手超时，串行等待会让用户以为「双击没反应」。
+    // engine.start() 在第一个 await 之前就同步把状态置为 starting，窗口订阅后即可显示「引擎启动中」。
+    const engineStarted = engine.start();
     await createWindow();
+    void engineStarted.then(async started => { if (started.state === 'ready') preferences = await preferenceStore.update({ dataEstablished: true }); });
+    // 休眠/唤醒不得因为存储忙而丢事件：suspend 期间跳过可以，resume 必须送达，
+    // 否则引擎会一直停在「已休眠」状态、事件流永久空转，界面只能靠手动重连恢复。
     powerMonitor.on('suspend', () => { if (!storage?.busy) void engine.suspend(); });
-    powerMonitor.on('resume', () => { if (!storage?.busy) void engine.resume(); });
+    powerMonitor.on('resume', () => { void engine.resume(); });
     if (process.argv.includes('--desktop-smoke')) await smoke();
   }).catch(error => {
     if (process.argv.includes('--desktop-smoke')) { console.error(redact(error)); app.exit(1); return; }

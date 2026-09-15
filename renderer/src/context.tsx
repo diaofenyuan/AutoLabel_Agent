@@ -32,6 +32,20 @@ export interface AppState {
   assetOffset: number; assetTotal: number; assetPageSize: number; assetsLoading: boolean;
   loadAssetPage: (offset: number) => Promise<Asset[]>;
   selectedAssetIds: string[]; setSelectedAssetIds: React.Dispatch<React.SetStateAction<string[]>>;
+  /**
+   * 工作台的视图与当前素材提升到应用层：切页会卸载工作台，这两项若留在页面内，
+   * 从任务中心回来就会丢失，用户只能重新找刚才那张图。
+   */
+  workbenchView: 'images' | 'video';
+  setWorkbenchView: React.Dispatch<React.SetStateAction<'images' | 'video'>>;
+  activeAssetId: string | null;
+  setActiveAssetId: React.Dispatch<React.SetStateAction<string | null>>;
+  /**
+   * 正在跟踪的抽帧任务。放在应用层而不是工作台内部：抽帧常常要等几十秒，
+   * 用户中途去任务中心看一眼再回来，卡片与自动导入都不该丢。
+   */
+  mediaJob: { id: string; temporarySource?: string } | null;
+  setMediaJob: React.Dispatch<React.SetStateAction<{ id: string; temporarySource?: string } | null>>;
   setAssets: React.Dispatch<React.SetStateAction<Asset[]>>;
   setProject: React.Dispatch<React.SetStateAction<Project | null>>;
   openProject: (project: Project) => Promise<void>;

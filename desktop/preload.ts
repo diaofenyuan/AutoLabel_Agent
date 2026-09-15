@@ -25,6 +25,8 @@ const bridge: DesktopBridge = Object.freeze({
   onEngineStatus: (listener: (status: EngineStatus) => void) => subscribe('autolabel:status', listener),
   onAgentEvent: (listener: (event: AgentEvent) => void) => subscribe('autolabel:agent-event', listener),
   chooseFiles: (options: FileSelection) => invoke<string[]>('autolabel:choose-files', options),
+  transcodeVideo: (options: { sourcePath: string }) => invoke<{ path: string }>('autolabel:transcode-video', options),
+  discardTranscode: (options: { path: string }) => invoke<void>('autolabel:discard-transcode', options),
   saveFile: (options: { title: string; defaultPath?: string; extension?: string }) => invoke<string | null>('autolabel:save-file', options),
   openPath: (value: string) => invoke<void>('autolabel:open-path', value),
   restartEngine: () => invoke<EngineStatus>('autolabel:restart-engine'),

@@ -221,6 +221,8 @@ export const demoBridge: DesktopBridge = {
   restartEngine: async () => ({ state: 'disconnected', message: '请在桌面应用中启动本地引擎。' }),
   setWindowDirty: async () => {},
   chooseFiles: options => options.kind === 'images' ? chooseImages() : Promise.reject(new Error('目录、视频与模型文件请选择桌面版本。')),
+  transcodeVideo: async () => { throw new Error('转码需要桌面版本调用本机 FFmpeg。'); },
+  discardTranscode: async () => {},
   saveFile: async () => null,
   openPath: async () => { throw new Error('浏览器不能打开本地目录。'); },
   windowAction: async () => {},

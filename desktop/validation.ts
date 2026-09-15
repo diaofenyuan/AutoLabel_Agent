@@ -553,3 +553,6 @@ export function validateCommand(command: unknown, payload: unknown = {}): { comm
 export const fileSelectionSchema = z.strictObject({ kind: z.enum(['images', 'video', 'model', 'python', 'ffmpeg', 'ffprobe', 'directory', 'backup', 'labels']), multiple: z.boolean().optional() });
 export const saveFileSchema = z.strictObject({ title: name, defaultPath: z.string().max(32767).optional(), extension: z.string().regex(/^[a-zA-Z0-9]{1,10}$/).optional() });
 export const windowActionSchema = z.enum(['minimize', 'maximize', 'close']);
+// 转码兜底的输入与输出路径：结构极简单，但仍走同一套校验，避免 IPC 入口出现未校验参数。
+export const transcodeSourceSchema = z.strictObject({ sourcePath: mediaPath });
+export const transcodeOutputSchema = z.strictObject({ path: mediaPath });

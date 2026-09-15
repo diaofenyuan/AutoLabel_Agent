@@ -1,12 +1,14 @@
 import type { MediaJob, MediaJobStage, MediaJobStatus } from '../../shared/media';
+import { MediaErrorPanel, type MediaErrorActionHandlers } from './mediaErrorMap';
+
+export { mediaErrorInfo, parseEngineError } from './mediaErrorMap';
 
 export const mediaStatuses: Record<MediaJobStatus, string> = { queued: '排队中', running: '处理中', cancelling: '正在取消', cancelled: '已取消', completed: '已完成', failed: '失败', interrupted: '执行中断' };
 export const mediaStages: Record<MediaJobStage, string> = { queued: '等待处理', inspecting: '检查视频', extracting: '抽取视频帧', validating: '校验抽帧结果', ready: '抽帧就绪，待导入', importing: '正在导入素材', screening: '分析素材', done: '处理结束' };
 export function mediaJobName(job: MediaJob) { return job.kind === 'video_extract' ? job.sourceName ?? '视频抽帧' : '素材筛选分析'; }
-export function MediaError({ error }: { error: string }) {
-  if (!error) return null;
-  const message = /media_busy/.test(error) ? '媒体处理正在忙，请等待当前任务结束后重试。' : /source.*changed|hash.*mismatch/.test(error) ? '源视频内容已变化，请重新选择并检查视频。' : /command_not_implemented|unknown_command/.test(error) ? '当前引擎尚不支持媒体处理，请更新并重启桌面应用。' : '操作未完成，请查看原因后重试。';
-  return <div className="inline-error media-error"><p>{message}</p><details><summary>诊断详情</summary><p>{error}</p></details></div>;
+/** 错误文案与替代动作集中在 mediaErrorMap；此处保留原有调用签名，缺省不渲染动作按钮。 */
+export function MediaError({ error, handlers, busy }: { error: string; handlers?: MediaErrorActionHandlers; busy?: boolean }) {
+  return <MediaErrorPanel error={error} handlers={handlers} busy={busy} />;
 }
 export function MediaProgressView({ job }: { job: MediaJob }) {
   const p = job.progress;

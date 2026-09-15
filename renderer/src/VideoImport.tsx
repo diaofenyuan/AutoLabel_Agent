@@ -1,21 +1,114 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Plus, Trash2 } from 'lucide-react';
 import type { MediaJob, VideoCreateRequest, VideoExtractionParameters, VideoInspection, VideoTimeRange } from '../../shared/media';
 import { getBridge, request, errorMessage, isDemo } from './bridge';
+import { useApp } from './context';
 import { Button, Field, IconButton, Modal, Notice } from './ui';
 import { MediaError } from './mediaUi';
+import type { MediaErrorActionHandlers } from './mediaErrorMap';
 
-export default function VideoImport({ projectId, onClose, onCreated }: { projectId: string; onClose: () => void; onCreated: (job: MediaJob) => void }) {
-  const [sourcePath, setSourcePath] = useState(''), [inspection, setInspection] = useState<VideoInspection | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const [mode, setMode] = useState<VideoExtractionParameters['mode']>('interval'), [sampling, setSampling] = useState('1');
+/** 引擎单次抽帧上限，与 VideoFrames.java 的 maxFrames 默认值一致；超过就整单失败，所以在 UI 侧提前拦截。 */
+const MAX_FRAMES = 10000;
+type Density = 'dense' | 'standard' | 'sparse' | 'custom';
+const DENSITY_SECONDS: Record<Exclude<Density, 'custom'>, number> = { dense: 0.5, standard: 1, sparse: 2 };
+const DENSITY_LABELS: Record<Density, string> = { dense: '每 0.5 秒一帧', standard: '每 1 秒一帧（默认）', sparse: '每 2 秒一帧', custom: '自定义…' };
+
+/** 源帧率可能是 "30000/1001" 这样的分数；估帧数时才需要，解析不出来就如实返回未知。 */
+function parseRate(reported: string | null | undefined): number | null {
+  if (!reported) return null;
+  const [numerator, denominator] = reported.split('/').map(Number);
+  if (!Number.isFinite(numerator)) return null;
+  const divisor = denominator === undefined ? 1 : denominator;
+  if (!Number.isFinite(divisor) || divisor === 0) return null;
+  return numerator / divisor;
+}
+
+function durationLabel(duration: number | null) { return duration === null ? '时长未知' : `${duration.toFixed(2)} 秒`; }
+
+/** 转码兜底用：把几何与色彩恒定的副本交给引擎，绕开「不猜测」的严格校验；命令同时可复制到终端执行。 */
+function transcodeCommand(sourcePath: string, targetPath: string) {
+  return `ffmpeg -y -i "${sourcePath}" -map 0:v:0 -c:v libx264 -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1" -an -sn "${targetPath}"`;
+}
+
+export default function VideoImport({ projectId, onClose, onCreated }: { projectId: string; onClose: () => void; onCreated: (job: MediaJob, temporarySource?: string) => void }) {
+  const { notify } = useApp();
+  const [sourcePath, setSourcePath] = useState(''), [inspection, setInspection] = useState<VideoInspection | null>(null), [error, setError] = useState('');
+  const [inspecting, setInspecting] = useState(false), [busy, setBusy] = useState(false);
+  const [transcodePath, setTranscodePath] = useState(''), [transcoding, setTranscoding] = useState(false), [elapsed, setElapsed] = useState(0);
+  const [density, setDensity] = useState<Density>('standard'), [customMode, setCustomMode] = useState<'interval' | 'every_n' | 'fps'>('interval'), [customValue, setCustomValue] = useState('1');
+  const [advanced, setAdvanced] = useState(false), [command, setCommand] = useState('');
   const [whole, setWhole] = useState(true), [ranges, setRanges] = useState<VideoTimeRange[]>([{ start: 0, end: 1 }]);
   const [resize, setResize] = useState(false), [width, setWidth] = useState('640'), [height, setHeight] = useState('640'), [fit, setFit] = useState<'contain' | 'stretch'>('contain');
   const [format, setFormat] = useState<'png' | 'jpg'>('png'), [quality, setQuality] = useState('3');
-  useEffect(() => { setError(''); }, [mode, sampling, whole, ranges, resize, width, height, fit, format, quality]);
+  const duration = inspection?.durationSeconds ?? null;
+  const durationUnknown = inspection !== null && duration === null;
+  useEffect(() => { setError(''); }, [density, customMode, customValue, whole, ranges, resize, width, height, fit, format, quality]);
+  /** 转码副本只在弹窗存活期间有效：换源或放弃时立即删除，只有真正创建了抽帧任务的那份留给任务卡回收。 */
+  async function discardTemporary(path: string) {
+    try { await (await getBridge()).discardTranscode({ path }); }
+    catch { /* 清理失败不影响继续标注，应用启动时还会统一清扫临时目录。 */ }
+  }
+  const created = useRef(false), pending = useRef('');
+  pending.current = transcodePath;
+  useEffect(() => () => { if (!created.current && pending.current) void discardTemporary(pending.current); }, []);
+  useEffect(() => {
+    if (!transcoding) return;
+    const started = Date.now(); setElapsed(0);
+    const timer = setInterval(() => setElapsed(Math.round((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [transcoding]);
   async function choose() {
-    setBusy(true); setError('');
-    try { const paths = await (await getBridge()).chooseFiles({ kind: 'video' }); if (!paths[0]) return; setSourcePath(paths[0]); setInspection(null); const info = await request<VideoInspection>('media.video.inspect', { sourcePath: paths[0] }); setInspection(info); setWhole(info.durationSeconds !== null); setRanges([{ start: 0, end: info.durationSeconds ?? 0 }]); }
-    catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
+    setInspecting(true); setError('');
+    try {
+      const paths = await (await getBridge()).chooseFiles({ kind: 'video' });
+      if (!paths[0]) return;
+      // 只有确实选中了新文件才丢弃旧副本：用户取消选择器时，当前来源必须保持可用。
+      const previous = transcodePath;
+      setTranscodePath(''); pending.current = '';
+      if (previous) void discardTemporary(previous);
+      setSourcePath(paths[0]); setInspection(null);
+      await inspect(paths[0]);
+    } catch (e) { setError(errorMessage(e)); } finally { setInspecting(false); }
+  }
+  /** 选择与检查合成一步：用户选完文件即自动探测，不再有「尚未完成检查」的中间态。 */
+  async function inspect(path: string) {
+    if (!path) return;
+    setInspecting(true); setError('');
+    try {
+      const info = await request<VideoInspection>('media.video.inspect', { sourcePath: path });
+      setInspection(info);
+      setWhole(info.durationSeconds !== null);
+      setRanges([{ start: 0, end: info.durationSeconds ?? 0 }]);
+      // 时长未知时引擎必须拿到明确范围，直接展开高级区，不让用户自己去翻。
+      setAdvanced(info.durationSeconds === null);
+    } catch (e) { setInspection(null); setError(errorMessage(e)); } finally { setInspecting(false); }
+  }
+  const mode = density === 'custom' ? customMode : 'interval';
+  const sampling = density === 'custom' ? customValue : String(DENSITY_SECONDS[density]);
+  /** 估算帧数取区间上界，宁可高估也不放过超限。 */
+  function estimateFrames(): number | null {
+    if (duration === null) return null;
+    const value = Number(sampling);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    if (mode === 'interval') return Math.ceil(duration / value);
+    if (mode === 'fps') return Math.ceil(duration * value);
+    const fps = parseRate(inspection?.reportedFrameRate);
+    return fps === null ? null : Math.ceil(duration * fps / value);
+  }
+  /** 超限时给出一个必定跑得完的间隔秒数，把「失败」变成「点一下就好」。 */
+  function suggestedSeconds(): number | null {
+    if (duration === null || duration <= 0) return null;
+    const estimatedFrames = estimateFrames();
+    if (estimatedFrames === null || estimatedFrames <= MAX_FRAMES) return null;
+    return Math.max(1, Math.ceil(duration / MAX_FRAMES));
+  }
+  const estimated = estimateFrames(), suggested = suggestedSeconds();
+  function applySuggestion() {
+    if (suggested === null) return;
+    if (suggested <= DENSITY_SECONDS.dense) setDensity('dense');
+    else if (suggested <= DENSITY_SECONDS.standard) setDensity('standard');
+    else if (suggested <= DENSITY_SECONDS.sparse) setDensity('sparse');
+    else { setDensity('custom'); setCustomMode('interval'); setCustomValue(String(suggested)); }
   }
   function parameters(): VideoExtractionParameters {
     if (!inspection) throw new Error('请先选择并成功检查视频。');
@@ -27,11 +120,67 @@ export default function VideoImport({ projectId, onClose, onCreated }: { project
     const jpegQuality = Number(quality); if (format === 'jpg' && (!Number.isInteger(jpegQuality) || jpegQuality < 2 || jpegQuality > 31)) throw new Error('JPEG 质量参数需为 2～31 的整数。');
     return { ranges: selectedRanges, streamIndex: inspection.streamIndex, ...(resize ? { outputSize: size } : {}), format, ...(format === 'jpg' ? { jpegQuality } : {}), ...(mode === 'interval' ? { mode, intervalSeconds: value } : mode === 'every_n' ? { mode, everyNFrames: value } : { mode, targetFps: value }) };
   }
-  async function create() { setBusy(true); setError(''); try { const payload: VideoCreateRequest = { projectId, sourcePath, expectedSourceHash: inspection!.sourceHash, parameters: parameters() }; const job = await request<MediaJob>('media.video.create', { ...payload }); onCreated(job); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); } }
-  return <Modal title="从视频抽取素材" onClose={() => { if (!busy) onClose(); }}><div className="form-stack video-import"><Button busy={busy} disabled={isDemo} onClick={() => void choose()}><FolderOpen size={14}/>选择并检查视频</Button>{inspection ? <div className="video-inspection"><strong>{inspection.sourceName}</strong><p>{inspection.width} × {inspection.height} · {inspection.durationSeconds === null ? '时长未知' : `${inspection.durationSeconds.toFixed(2)} 秒`}</p><p className="muted tiny">报告帧率：{inspection.reportedFrameRate ?? '未知'} · 报告帧数：{inspection.reportedFrameCount ?? '未知'}</p></div> : <p className="muted tiny">{sourcePath ? '该视频尚未完成检查。' : '选择本机视频，抽帧任务在后台执行。'}</p>}
-    {inspection?.geometryNotice && <Notice>{inspection.geometryNotice}</Notice>}
-    <div className="field-grid"><Field label="采样方式"><select aria-label="视频采样方式" disabled={busy} value={mode} onChange={e => { setMode(e.target.value as typeof mode); setSampling('1'); }}><option value="interval">每隔指定秒数</option><option value="every_n">每 N 个源帧</option><option value="fps">按目标帧率</option></select></Field><Field label={mode === 'interval' ? '间隔（秒）' : mode === 'every_n' ? '源帧间隔 N' : '目标帧率（帧/秒）'}><input aria-label="视频采样值" type="number" min={mode === 'every_n' ? 1 : 0.001} step={mode === 'every_n' ? 1 : 'any'} disabled={busy} value={sampling} onChange={e => setSampling(e.target.value)}/></Field></div>
-    <details className="video-ranges" open={inspection?.durationSeconds === null ? true : undefined}><summary>时间范围 · {whole && inspection?.durationSeconds !== null ? '整段视频' : `${ranges.length} 个时间段`}</summary>{inspection?.durationSeconds === null && <Notice>视频时长未知，请明确填写抽帧时间范围。</Notice>}<label className="checkbox-row"><input type="checkbox" disabled={busy || !inspection || inspection.durationSeconds === null} checked={whole} onChange={e => setWhole(e.target.checked)}/>使用整段已知时长</label>{!whole && <><p className="muted tiny">单位为秒，相对首个实际源帧；包含起点，不包含终点。相邻时间段允许接续。</p>{ranges.map((range, i) => <div className="video-range-row" key={i}><Field label={`第 ${i + 1} 段起点`}><input aria-label={`视频时间段 ${i + 1} 起点`} type="number" min={0} step="any" disabled={busy} value={range.start} onChange={e => setRanges(list => list.map((r, index) => index === i ? { ...r, start: Number(e.target.value) } : r))}/></Field><Field label="终点"><input aria-label={`视频时间段 ${i + 1} 终点`} type="number" min={0} step="any" disabled={busy} value={range.end} onChange={e => setRanges(list => list.map((r, index) => index === i ? { ...r, end: Number(e.target.value) } : r))}/></Field><IconButton label={`移除时间段 ${i + 1}`} disabled={busy || ranges.length === 1} onClick={() => setRanges(list => list.filter((_, index) => i !== index))}><Trash2 size={14}/></IconButton></div>)}<Button disabled={busy || ranges.length >= 32} onClick={() => setRanges(list => [...list, { start: list.at(-1)?.end ?? 0, end: (list.at(-1)?.end ?? 0) + 1 }])}><Plus size={13}/>添加时间段</Button></>}</details>
-    <details className="video-output-options"><summary>输出尺寸与格式</summary><label className="checkbox-row"><input type="checkbox" disabled={busy} checked={resize} onChange={e => setResize(e.target.checked)}/>指定输出尺寸</label>{resize && <><div className="field-grid"><Field label="宽度（像素）"><input aria-label="视频输出宽度" type="number" min={1} disabled={busy} value={width} onChange={e => setWidth(e.target.value)}/></Field><Field label="高度（像素）"><input aria-label="视频输出高度" type="number" min={1} disabled={busy} value={height} onChange={e => setHeight(e.target.value)}/></Field></div><Field label="适配方式"><select aria-label="视频尺寸适配" disabled={busy} value={fit} onChange={e => setFit(e.target.value as typeof fit)}><option value="contain">等比缩放并留边</option><option value="stretch">拉伸到指定尺寸</option></select></Field></>}<Field label="输出格式"><select aria-label="视频输出格式" disabled={busy} value={format} onChange={e => setFormat(e.target.value as typeof format)}><option value="png">PNG</option><option value="jpg">JPEG</option></select></Field>{format === 'jpg' && <Field label="JPEG 质量参数（2 高，31 低）"><input aria-label="视频JPEG质量" type="number" min={2} max={31} disabled={busy} value={quality} onChange={e => setQuality(e.target.value)}/></Field>}</details>
-    <p className="muted tiny">抽帧完成后可预览帧记录，再明确导入项目素材。每 N 帧按全局源帧序号选择，按秒与目标帧率均从首个实际源帧建立采样网格。</p><MediaError error={error}/><div className="modal-actions"><Button disabled={busy} onClick={onClose}>取消</Button><Button className="primary" disabled={!inspection || isDemo} busy={busy} onClick={() => void create()}>创建抽帧任务</Button></div></div></Modal>;
+  async function create() { setBusy(true); setError(''); try { const payload: VideoCreateRequest = { projectId, sourcePath, expectedSourceHash: inspection!.sourceHash, parameters: parameters() }; const job = await request<MediaJob>('media.video.create', { ...payload }); created.current = true; onCreated(job, transcodePath || undefined); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); } }
+  /**
+   * 一键转码：把硬阻断变成两步可走通。转码产物交给引擎前先回到同一条检查链路，
+   * 用户仍然看到真实的时长、分辨率与预估帧数，而不是「转完就直接跑」。
+   */
+  async function transcode() {
+    if (!sourcePath) return;
+    setTranscoding(true); setError('');
+    const previous = transcodePath;
+    try {
+      const result = await (await getBridge()).transcodeVideo({ sourcePath });
+      if (previous) void discardTemporary(previous);
+      setTranscodePath(result.path); setSourcePath(result.path);
+      await inspect(result.path);
+    } catch (e) { setError(errorMessage(e)); } finally { setTranscoding(false); }
+  }
+  const text = transcodeCommand(sourcePath, '<输出路径>.mp4');
+  async function copyTranscodeCommand() {
+    try { await navigator.clipboard.writeText(text); notify('已复制转码命令，可在本机终端执行后重新选择转码后的文件。'); }
+    catch { setCommand(text); notify('无法访问剪贴板，命令已显示在弹窗内，可手动复制。'); }
+  }
+  /** 只挂当前确实兑现得了的动作，缺 handler 的动作不会渲染成死按钮。 */
+  const errorHandlers: MediaErrorActionHandlers = {
+    reselect: () => void choose(),
+    retry: () => void inspect(sourcePath),
+    ...(suggested !== null ? { reduceDensity: applySuggestion } : {}),
+    ...(sourcePath ? { copyCommand: () => void copyTranscodeCommand(), transcode: () => void transcode() } : {})
+  };
+  const fileName = sourcePath ? sourcePath.split(/[\\/]/).pop() : '';
+  const blocked = busy || inspecting || transcoding;
+  return <Modal title="从视频抽取素材" onClose={() => { if (!blocked) onClose(); }}><div className="form-stack video-import">
+    {!inspection
+      ? <div className="video-start">
+        <p className="video-start-lead">选择一段本机视频，抽帧后即可开始标注。</p>
+        <Button className="primary" busy={inspecting} disabled={isDemo || transcoding} onClick={() => void choose()}><FolderOpen size={15} />{sourcePath ? '重新选择视频' : '选择视频'}</Button>
+        <p className="muted tiny">默认每 1 秒抽 1 帧，输出 PNG；采样密度与输出尺寸可在选择后调整。</p>
+        {sourcePath && <p className="muted tiny">已选择：{fileName}（尚未通过检查）</p>}
+      </div>
+      : <>
+        <div className="video-inspection"><div className="video-inspection-head"><strong title={sourcePath}>{inspection.sourceName}</strong><button className="text-button" onClick={() => void choose()} disabled={blocked}>重新选择</button></div><p>{inspection.width} × {inspection.height} · {durationLabel(duration)}</p><p className="muted tiny">报告帧率：{inspection.reportedFrameRate ?? '未知'} · 报告帧数：{inspection.reportedFrameCount ?? '未知'}</p>{transcodePath && <p className="muted tiny">来源为本机转码副本（临时文件，导入素材后自动删除）。</p>}</div>
+        {inspection.geometryNotice && <Notice>{inspection.geometryNotice}</Notice>}
+        <div className="field-grid">
+          <Field label="采样密度"><select aria-label="视频采样密度" disabled={busy} value={density} onChange={e => setDensity(e.target.value as Density)}>{(Object.keys(DENSITY_LABELS) as Density[]).map(key => <option key={key} value={key}>{DENSITY_LABELS[key]}</option>)}</select></Field>
+          {density === 'custom' && <Field label="采样方式"><select aria-label="视频采样方式" disabled={busy} value={customMode} onChange={e => { setCustomMode(e.target.value as typeof customMode); setCustomValue(e.target.value === 'every_n' ? '10' : '1'); }}><option value="interval">每隔指定秒数</option><option value="every_n">每 N 个源帧</option><option value="fps">按目标帧率</option></select></Field>}
+        </div>
+        {density === 'custom' && <Field label={customMode === 'interval' ? '间隔（秒）' : customMode === 'every_n' ? '源帧间隔 N' : '目标帧率（帧/秒）'}><input aria-label="视频采样值" type="number" min={customMode === 'every_n' ? 1 : 0.001} step={customMode === 'every_n' ? 1 : 'any'} disabled={busy} value={customValue} onChange={e => setCustomValue(e.target.value)} /></Field>}
+        {estimated !== null && <p className="muted tiny">按当前密度预计抽出约 {estimated} 帧{duration !== null && `，视频时长 ${duration.toFixed(2)} 秒`}。</p>}
+        {suggested !== null && <Notice>按当前密度预计 {estimated} 帧，超过引擎单次上限 {MAX_FRAMES} 帧，整单会失败。建议改为每 {suggested} 秒一帧，或只抽其中一段。<div className="notice-actions"><Button onClick={applySuggestion}>改为每 {suggested} 秒一帧</Button></div></Notice>}
+        <details className="video-advanced" open={advanced || durationUnknown} onToggle={e => setAdvanced((e.target as HTMLDetailsElement).open)}><summary>高级设置 · 时间范围与输出尺寸</summary>
+          <label className="checkbox-row"><input type="checkbox" disabled={busy || duration === null} checked={whole} onChange={e => setWhole(e.target.checked)} />使用整段已知时长</label>
+          {durationUnknown && <Notice>视频时长未知，请明确填写抽帧时间范围。</Notice>}
+          {!whole && <><p className="muted tiny">单位为秒，相对首个实际源帧；包含起点，不包含终点。相邻时间段允许接续。</p>{ranges.map((range, i) => <div className="video-range-row" key={i}><Field label={`第 ${i + 1} 段起点`}><input aria-label={`视频时间段 ${i + 1} 起点`} type="number" min={0} step="any" disabled={busy} value={range.start} onChange={e => setRanges(list => list.map((r, index) => index === i ? { ...r, start: Number(e.target.value) } : r))} /></Field><Field label="终点"><input aria-label={`视频时间段 ${i + 1} 终点`} type="number" min={0} step="any" disabled={busy} value={range.end} onChange={e => setRanges(list => list.map((r, index) => index === i ? { ...r, end: Number(e.target.value) } : r))} /></Field><IconButton label={`移除时间段 ${i + 1}`} disabled={busy || ranges.length === 1} onClick={() => setRanges(list => list.filter((_, index) => i !== index))}><Trash2 size={14} /></IconButton></div>)}<Button disabled={busy || ranges.length >= 32} onClick={() => setRanges(list => [...list, { start: list.at(-1)?.end ?? 0, end: (list.at(-1)?.end ?? 0) + 1 }])}><Plus size={13} />添加时间段</Button></>}
+          <label className="checkbox-row"><input type="checkbox" disabled={busy} checked={resize} onChange={e => setResize(e.target.checked)} />指定输出尺寸</label>
+          {resize && <><div className="field-grid"><Field label="宽度（像素）"><input aria-label="视频输出宽度" type="number" min={1} disabled={busy} value={width} onChange={e => setWidth(e.target.value)} /></Field><Field label="高度（像素）"><input aria-label="视频输出高度" type="number" min={1} disabled={busy} value={height} onChange={e => setHeight(e.target.value)} /></Field></div><Field label="适配方式"><select aria-label="视频尺寸适配" disabled={busy} value={fit} onChange={e => setFit(e.target.value as typeof fit)}><option value="contain">等比缩放并留边</option><option value="stretch">拉伸到指定尺寸</option></select></Field></>}
+          <Field label="输出格式"><select aria-label="视频输出格式" disabled={busy} value={format} onChange={e => setFormat(e.target.value as typeof format)}><option value="png">PNG</option><option value="jpg">JPEG</option></select></Field>
+          {format === 'jpg' && <Field label="JPEG 质量参数（2 高，31 低）"><input aria-label="视频JPEG质量" type="number" min={2} max={31} disabled={busy} value={quality} onChange={e => setQuality(e.target.value)} /></Field>}
+        </details>
+      </>}
+    {transcoding && <Notice>正在用本机 FFmpeg 生成转码副本（已用时 {elapsed} 秒）。转码完成后会自动重新检查这段视频。</Notice>}
+    <MediaError error={error} handlers={errorHandlers} busy={blocked} />
+    {command && <textarea className="transcode-command" aria-label="转码命令" readOnly value={command} />}
+    <div className="modal-actions"><Button disabled={blocked} onClick={onClose}>取消</Button>{inspection && <Button className="primary" disabled={isDemo} busy={busy} onClick={() => void create()}>开始抽帧</Button>}</div>
+  </div></Modal>;
 }

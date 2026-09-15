@@ -10,3 +10,33 @@
 .media-job-detail{animation:drawer-in .2s ease-out both}
 .media-job-detail>.media-progress{padding:14px 16px;border:1px solid color-mix(in srgb,var(--border) 86%,transparent);border-radius:10px;background:linear-gradient(110deg,color-mix(in srgb,var(--surface) 72%,var(--bg)),var(--bg));transition:border-color .18s ease,box-shadow .18s ease}
 .media-job-detail>.media-progress:focus-within{border-color:color-mix(in srgb,var(--accent) 38%,var(--border));box-shadow:0 7px 22px color-mix(in srgb,var(--accent) 6%,transparent)}
+
+/* 视频抽帧弹窗：空状态即入口——未选视频时只暴露一个主按钮，选完只暴露采样密度，其余参数收进高级设置。 */
+.video-start{display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:6px 0 2px}
+.video-start-lead{margin:0;font-size:13px;line-height:1.7}
+.video-inspection-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.video-inspection .text-button{font-size:11px}
+.video-advanced>.checkbox-row{margin:14px 0}
+.video-advanced>.notice{margin:14px 0}
+.video-advanced>.muted{font-size:11px;line-height:1.8}
+.notice-actions{display:flex;gap:8px;margin-top:10px}
+/* 媒体错误：主视觉只给一句人话与可执行动作，原始错误码收进折叠的诊断详情。 */
+.media-error-title{margin:0 0 6px;font-weight:600}
+.media-error-detail{margin:0;font-size:12px;line-height:1.7}
+.media-error-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 10px}
+.media-error-actions .button{height:30px;padding:0 12px;font-size:12px}
+.media-error-diagnostics{margin-top:8px}
+.transcode-command{width:100%;min-height:64px;font-family:ui-monospace,Consolas,monospace;font-size:11px;resize:vertical}
+
+/* 工作台内的抽帧任务卡：抽帧只是到达标注的中间步骤，进度、导入与入口都留在工作台，不再跳页。 */
+.video-job-card{flex:none;margin:0 24px 14px;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface);animation:drawer-in .2s ease-out both}
+.video-job-card.done{border-color:color-mix(in srgb,var(--accent) 32%,var(--border))}
+.video-job-head{display:flex;align-items:center;gap:8px}
+.video-job-head>strong{font-size:12px;font-weight:550;overflow-wrap:anywhere}
+.video-job-head>.icon-button{margin-left:auto}
+.video-job-check{color:var(--accent);flex:none}
+.video-job-card>.media-progress{margin:10px 0 0}
+.video-job-card>.media-progress p{margin:0 0 8px}
+.video-job-card>.muted{display:flex;align-items:center;gap:6px;margin:10px 0 0;font-size:11px}
+.video-job-card>.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.video-job-card>.media-error{margin-top:12px}

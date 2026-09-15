@@ -28,6 +28,11 @@ export default function App() {
   const [assetTotal, setAssetTotal] = useState(0);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  // 工作台视图与当前素材随会话存活：切页会卸载工作台，这两项留在页面里就会丢。
+  const [workbenchView, setWorkbenchView] = useState<'images' | 'video'>('images');
+  const [activeAssetId, setActiveAssetId] = useState<string | null>(null);
+  // 正在跟踪的抽帧任务同样随会话存活，用户中途离开工作台再回来不会丢掉进度卡与自动导入。
+  const [mediaJob, setMediaJob] = useState<{ id: string; temporarySource?: string } | null>(null);
   const assetLocation = useRef({ projectId: '', offset: 0 });
   const assetRevision = useRef(0);
   const transitioning = useRef(false);
@@ -107,6 +112,8 @@ export default function App() {
       const data = await request<{ items: Asset[]; total: number }>('asset.list', { projectId: selected.id, offset: 0, limit: assetPageSize });
       assetLocation.current = { projectId: selected.id, offset: 0 };
       setSelectedAssetIds([]); setAssetOffset(0); setAssetTotal(data.total);
+      // 换项目等同于换上下文：视图与当前素材必须重置，否则会带着上一个项目的选择进来。
+      setWorkbenchView('images'); setActiveAssetId(null); setMediaJob(null);
       clearTimeout(toastTimer.current); setToast(null); setProject(opened); setAssets(data.items); setPage('workbench'); history.replaceState(null, '', '#workbench');
     } finally { transitioning.current = false; setAssetsLoading(false); }
   }, []);
@@ -191,7 +198,7 @@ export default function App() {
     catch (e) { notify(errorMessage(e), true); }
     finally { setReconnecting(false); }
   }
-  return <Context.Provider value={{ page, navigate, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, newChatSession, openJumper, openHelp, requestDeleteProject }}>
+  return <Context.Provider value={{ page, navigate, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, workbenchView, setWorkbenchView, activeAssetId, setActiveAssetId, mediaJob, setMediaJob, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, newChatSession, openJumper, openHelp, requestDeleteProject }}>
     <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <Sidebar />
       {deletion && <ProjectDeletionDialog project={deletion} onClose={() => setDeletion(null)} onDeleted={projectId => void projectDeleted(projectId)} />}

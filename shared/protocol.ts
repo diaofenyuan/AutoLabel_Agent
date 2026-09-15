@@ -53,6 +53,10 @@ export interface DesktopBridge {
   engineStatus(): Promise<EngineStatus>;
   onEngineStatus(listener: (status: EngineStatus) => void): () => void;
   chooseFiles(options: FileSelection): Promise<string[]>;
+  /** 用本机 FFmpeg 生成几何与色彩恒定的临时副本，绕开引擎「不猜测」的严格校验；返回受管临时路径。 */
+  transcodeVideo(options: { sourcePath: string }): Promise<{ path: string }>;
+  /** 删除 transcodeVideo 产出的临时副本；只接受该功能自己创建的路径。 */
+  discardTranscode(options: { path: string }): Promise<void>;
   saveFile(options: { title: string; defaultPath?: string; extension?: string }): Promise<string | null>;
   openPath(path: string): Promise<void>;
   restartEngine(): Promise<EngineStatus>;
