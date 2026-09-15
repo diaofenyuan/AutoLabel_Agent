@@ -6,6 +6,8 @@ desktop/dist/
 engine/build/
 build/
 .qa/
+# 测试/验收临时内容统一放这里，避免污染 build/ 等正常目录
+tmp/
 **/__pycache__/
 *.pyc
 *.tsbuildinfo
