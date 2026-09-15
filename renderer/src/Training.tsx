@@ -11,6 +11,7 @@ import {
 import { getBridge, isDemo, request, errorMessage } from './bridge';
 import { Button, Empty, Field, Modal, Notice } from './ui';
 import { taskNames, type TaskType } from './types';
+import type { DatasetVersion } from './DatasetVersions';
 import { useApp } from './context';
 
 interface ExportRecord {
@@ -144,11 +145,12 @@ function TrainingWizard({ projectId, taskType, onClose, onCreated, onSubmitted }
 }) {
   const { notify, prefs } = useApp();
   const [step, setStep] = useState(1);
-  const [source, setSource] = useState<'upload' | 'export'>('upload');
+  const [source, setSource] = useState<'upload' | 'export' | 'version'>('upload');
   const [trainDir, setTrainDir] = useState(''), [valDir, setValDir] = useState('');
   const [datasetTaskType, setDatasetTaskType] = useState<TaskType>(taskType);
   const [classNames, setClassNames] = useState('');
   const [exports, setExports] = useState<ExportRecord[]>([]), [exportId, setExportId] = useState('');
+  const [versions, setVersions] = useState<DatasetVersion[]>([]), [versionId, setVersionId] = useState('');
   const [exportBusy, setExportBusy] = useState(false);
   const [annotationSelection, setAnnotationSelection] = useState<'protected' | 'candidate'>('protected');
   const [trainRatio, setTrainRatio] = useState(0.8);
@@ -165,6 +167,14 @@ function TrainingWizard({ projectId, taskType, onClose, onCreated, onSubmitted }
     if (source !== 'export' || !projectId) return;
     void request<ExportRecord[]>('export.list', { projectId })
       .then(list => setExports(list.filter(item => item.status === 'completed')))
+      .catch(e => setError(errorMessage(e)));
+  }, [source, projectId]);
+
+  // 只列出 ready 版本：非 ready 版本不可被训练快照消费（I8）。
+  useEffect(() => {
+    if (source !== 'version' || !projectId) return;
+    void request<{ items: DatasetVersion[] }>('dataset.version.list', { projectId })
+      .then(page => setVersions(page.items.filter(item => item.status === 'ready')))
       .catch(e => setError(errorMessage(e)));
   }, [source, projectId]);
 
@@ -203,7 +213,9 @@ function TrainingWizard({ projectId, taskType, onClose, onCreated, onSubmitted }
     try {
       const payload: Record<string, unknown> = source === 'upload'
         ? { source, trainDir, valDir, taskType: datasetTaskType, ...(projectId ? { projectId } : {}), ...(parsedClassNames.length ? { classNames: parsedClassNames } : {}) }
-        : { source, exportId, ...(projectId ? { projectId } : {}) };
+        : source === 'export'
+          ? { source, exportId, ...(projectId ? { projectId } : {}) }
+          : { source, versionId, ...(projectId ? { projectId } : {}) };
       const dataset = await request<TrainingDataset>('training.dataset.create', payload);
       setCreated(dataset);
       onCreated();
@@ -255,6 +267,9 @@ function TrainingWizard({ projectId, taskType, onClose, onCreated, onSubmitted }
             <button className={source === 'export' ? 'selected' : ''} onClick={() => setSource('export')}>
               <Sparkles size={17} /><strong>AI 标注结果</strong><small>引用已完成的导出版本</small>
             </button>
+            <button className={source === 'version' ? 'selected' : ''} onClick={() => setSource('version')}>
+              <Layers size={17} /><strong>数据集版本</strong><small>引用不可变版本，内容可逐项复核</small>
+            </button>
           </div>
           {source === 'upload' && <div className="form-stack">
             <Field label="训练集目录"><div className="actions"><Button disabled={busy} onClick={() => void choose('train')}><FolderOpen size={13} />选择目录</Button></div>
@@ -286,10 +301,21 @@ function TrainingWizard({ projectId, taskType, onClose, onCreated, onSubmitted }
               <FolderOpen size={14} />按当前项目标注生成导出版本</Button>
             <Notice>引用导出版本时会按固定清单逐文件校验哈希后复制，导出的图片不含叠加框线。</Notice>
           </div>}
+          {source === 'version' && <div className="form-stack">
+            {!projectId && <Notice>请先在顶部打开一个项目，再选择数据集版本。</Notice>}
+            <Field label="数据集版本"><select aria-label="数据集版本" disabled={busy || !projectId} value={versionId} onChange={e => setVersionId(e.target.value)}>
+              <option value="">请选择</option>
+              {versions.map(item => <option key={item.id} value={item.id}>
+                v{item.number}{item.name ? ` · ${item.name}` : ''} · {taskNames[item.taskType as TaskType]} · {item.summary?.images ?? '—'} 张
+              </option>)}
+            </select></Field>
+            {!!projectId && !versions.length && <Notice>当前项目还没有就绪的数据集版本，可在项目入口中先生成一个版本。</Notice>}
+            <Notice>版本内容不可变更：训练快照会按版本清单逐文件校验哈希后冻结，需要调整数据请重新生成版本。</Notice>
+          </div>}
           {created && <DatasetReport dataset={created} />}
           <div className="modal-actions">
             <Button disabled={busy} onClick={onClose}>取消</Button>
-            <Button className="primary" disabled={busy || (source === 'upload' ? !directoryReady : !exportId)} busy={busy} onClick={() => void createDataset()}>
+            <Button className="primary" disabled={busy || (source === 'upload' ? !directoryReady : source === 'export' ? !exportId : !versionId)} busy={busy} onClick={() => void createDataset()}>
               创建数据集快照</Button>
             {ready && <Button onClick={() => setStep(2)}>下一步：训练参数</Button>}
           </div>

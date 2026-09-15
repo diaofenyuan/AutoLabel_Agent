@@ -305,9 +305,11 @@ export async function checkTrainingUi(window: BrowserWindow, output: string, hoo
   if (!snapshotHash) throw new Error('训练数据集未生成快照指纹');
   await visit('标注工作台', '.page-workbench');
   await visit('模型训练', '.training-page');
+  // 快照列表由引擎异步返回，先等首张卡片出现再比对，避免把加载时序判成内容缺失。
+  await waitFor(`!!document.querySelector('.training-card')`);
   const card = await window.webContents.executeJavaScript(`(()=>{const node=document.querySelector('.training-card');
     return node?{text:node.innerText,showsSnapshot:node.innerText.includes(${JSON.stringify(snapshotHash.slice(0, 12))})}:null})()`);
-  if (!card?.showsSnapshot) throw new Error('训练页没有显示真实数据集快照');
+  if (!card?.showsSnapshot) throw new Error(`训练页没有显示真实数据集快照（期望 ${snapshotHash.slice(0, 12)}；实际 ${card?.text ?? '无卡片'}）`);
 
   await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.training-page button')].find(b=>b.innerText.trim()==='新建训练')?.click())()`);
   await waitFor(`!!document.querySelector('.training-wizard')`);
@@ -319,9 +321,18 @@ export async function checkTrainingUi(window: BrowserWindow, output: string, hoo
   if (wizard.tabs.length !== 3 || wizard.tabs.some((tab: { label: string }, index: number) => !tab.label.startsWith(`${index + 1}. `))) throw new Error('训练向导步骤标签不完整');
   if (!wizard.tabs[2].disabled) throw new Error('未创建数据集时不应开放确认提交步骤');
   if (wizard.tabs[0].selected !== 'true') throw new Error('训练向导未默认停在数据源步骤');
-  if (wizard.sources.length !== 2 || !wizard.sources.some((text: string) => text.includes('本地已标注数据集')) || !wizard.sources.some((text: string) => text.includes('AI 标注结果'))) throw new Error('训练向导缺少数据来源选项');
+  if (wizard.sources.length !== 3 || !wizard.sources.some((text: string) => text.includes('本地已标注数据集')) || !wizard.sources.some((text: string) => text.includes('AI 标注结果')) || !wizard.sources.some((text: string) => text.includes('数据集版本'))) throw new Error('训练向导缺少数据来源选项');
   if (!wizard.createDisabled) throw new Error('未选择目录时不应允许创建数据集快照');
   if (wizard.submitVisible) throw new Error('未创建数据集时不应出现提交训练入口');
+  // 数据集版本来源：必须提供版本选择，且未选版本时不得允许创建快照。
+  const versionSource = await window.webContents.executeJavaScript(`(async()=>{
+    const button=[...document.querySelectorAll('.training-sources button')].find(node=>node.innerText.includes('数据集版本'));
+    button.click();
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    const select=document.querySelector('[aria-label="数据集版本"]');
+    const create=[...document.querySelectorAll('.training-wizard button')].find(node=>node.innerText.trim()==='创建数据集快照');
+    return {selected:!!select,disabled:!!create?.disabled};})()`);
+  if (!versionSource.selected || !versionSource.disabled) throw new Error('数据集版本来源缺少版本选择，或未选版本时允许创建快照');
 
   await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.training-sources button')].find(b=>b.innerText.includes('AI 标注结果'))?.click())()`);
   await waitFor(`!!document.querySelector('[aria-label="导出版本"]')`);

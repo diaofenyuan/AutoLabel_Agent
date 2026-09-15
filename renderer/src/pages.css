@@ -22,6 +22,20 @@
 .mapping-row{display:grid;grid-template-columns:78px 16px 1fr 28px;gap:8px;align-items:center;margin-bottom:10px}.mapping-row>input,.mapping-row>select{min-width:0}
 .location-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.location-row strong,.location-row small{grid-column:1/-1}.location-row small{color:var(--muted)}
 .operation-issues{margin-top:12px}.issue-detail{padding:12px 0}.issue-detail>small{color:var(--muted)}.issue-detail p{margin:5px 0}.operation-result .button{margin-top:10px}
+/* 版本配方折叠区：默认收起，展开后按可用宽度自动分列，窄屏下自然回落为单列。 */
+.dataset-version-body .recipe-section{border:1px solid var(--border);border-radius:7px;margin-top:12px;padding:0 14px}
+.dataset-version-body .recipe-section>summary{cursor:pointer;font-size:12px;font-weight:500;padding:12px 0;display:flex;align-items:center;gap:8px;list-style:none}
+.dataset-version-body .recipe-section>summary::-webkit-details-marker{display:none}
+.dataset-version-body .recipe-section>summary:before{content:"+";color:var(--soft);width:10px;font-size:12px}
+.dataset-version-body .recipe-section[open]>summary:before{content:"−"}
+.dataset-version-body .recipe-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;padding-bottom:10px}
+.dataset-version-body .recipe-grid>label{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--muted)}
+.dataset-version-body .recipe-flags{display:flex;flex-wrap:wrap;gap:14px;padding:4px 0 12px;font-size:11px;color:var(--muted)}
+.dataset-version-body .recipe-flags>label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.dataset-version-body .recipe-classes{border-top:1px solid var(--border);padding-top:10px}
+.dataset-version-body .recipe-classes>.tiny{display:block;margin-bottom:8px}
+.dataset-version-body .recipe-strict{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);padding-bottom:10px;cursor:pointer}
+.dataset-version-body .recipe-section>.tiny{display:block;padding-bottom:12px}
 .export-tabs{padding:0 22px}.export-record{margin:12px 0 20px;padding:14px;background:var(--surface);border-radius:6px;font-size:11px}.export-record p{margin-top:8px;line-height:1.7}
 .export-difference{max-height:230px;overflow:auto;margin-top:14px;padding:12px;border:1px solid var(--border);border-radius:6px;font-size:11px;line-height:1.7}.export-difference p+p{margin-top:8px}
 .update-settings>.field{max-width:650px}.update-status{position:relative;overflow:hidden;margin-top:25px;padding:20px 22px;border:1px solid var(--border);border-radius:13px;background:linear-gradient(135deg,color-mix(in srgb,var(--surface) 82%,var(--accent-bg)),var(--bg) 72%);box-shadow:0 10px 30px color-mix(in srgb,var(--text) 4%,transparent);animation:page-in .22s ease-out}.update-status::after{content:"";position:absolute;width:190px;height:190px;right:-110px;top:-110px;border:1px solid color-mix(in srgb,var(--accent) 15%,transparent);border-radius:50%;pointer-events:none;animation:empty-drift 9s ease-in-out infinite}.update-status[data-state=available],.update-status[data-state=ready]{border-color:color-mix(in srgb,var(--accent) 35%,var(--border))}.update-status[data-state=error]{border-color:color-mix(in srgb,var(--error) 35%,var(--border))}.update-status>.section-toolbar,.update-status>.update-release,.update-status>.download-progress,.update-status>.inline-error,.update-status>.actions,.update-status>.operation-section,.update-status>p{position:relative;z-index:1}.update-release{margin:20px 0;padding:17px 0;border-block:1px solid var(--border)}.update-release h3{margin-bottom:8px}.release-notes{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:18px;line-height:1.8;max-height:260px;overflow:auto;font-size:12px}.download-progress{padding:14px 16px;border:1px solid color-mix(in srgb,var(--accent) 16%,var(--border));border-radius:9px;background:color-mix(in srgb,var(--bg) 66%,transparent);animation:page-in .2s ease-out}
