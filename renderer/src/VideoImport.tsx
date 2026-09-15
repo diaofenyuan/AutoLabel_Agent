@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Plus, Trash2 } from 'lucide-react';
-import { VIDEO_DENSITY_LABELS, VIDEO_DENSITY_SECONDS, type MediaJob, type VideoCreateRequest, type VideoDensity, type VideoExtractionParameters, type VideoExtractionRecipe, type VideoInspection, type VideoTimeRange } from '../../shared/media';
+import { VIDEO_DENSITY_LABELS, VIDEO_DENSITY_SECONDS, type MediaJob, type VideoCreateRequest, type VideoDensity, type VideoExtractionParameters, type VideoExtractionRecipe, type VideoInspection, type VideoRecipeDraft, type VideoTimeRange } from '../../shared/media';
 import { getBridge, request, errorMessage, isDemo } from './bridge';
 import { useApp } from './context';
 import { Button, Field, IconButton, Modal, Notice } from './ui';
 import { MediaError } from './mediaUi';
 import type { MediaErrorActionHandlers } from './mediaErrorMap';
-import { allRecipes, loadUserRecipes, recipeSummary, removeRecipe, saveRecipe } from './videoRecipes';
+import { listRecipes, recipeScopeNote, recipeSummary, removeRecipe, saveRecipe } from './videoRecipes';
 
 /** 引擎单次抽帧上限，与 VideoFrames.java 的 maxFrames 默认值一致；超过就整单失败，所以在 UI 侧提前拦截。 */
 const MAX_FRAMES = 10000;
@@ -29,13 +29,22 @@ function transcodeCommand(sourcePath: string, targetPath: string) {
 }
 
 export default function VideoImport({ projectId, onClose, onCreated }: { projectId: string; onClose: () => void; onCreated: (job: MediaJob, temporarySource?: string) => void }) {
-  const { notify } = useApp();
+  const { notify, project } = useApp();
   const [sourcePath, setSourcePath] = useState(''), [inspection, setInspection] = useState<VideoInspection | null>(null), [error, setError] = useState('');
   const [inspecting, setInspecting] = useState(false), [busy, setBusy] = useState(false);
   const [transcodePath, setTranscodePath] = useState(''), [transcoding, setTranscoding] = useState(false), [elapsed, setElapsed] = useState(0);
   const [density, setDensity] = useState<VideoDensity>('standard'), [customMode, setCustomMode] = useState<'interval' | 'every_n' | 'fps'>('interval'), [customValue, setCustomValue] = useState('1');
-  const [recipes, setRecipes] = useState<VideoExtractionRecipe[]>(loadUserRecipes), [recipeId, setRecipeId] = useState(''), [recipeNotice, setRecipeNotice] = useState('');
-  const [savingRecipe, setSavingRecipe] = useState(false), [recipeName, setRecipeName] = useState('');
+  const [recipes, setRecipes] = useState<VideoExtractionRecipe[]>([]), [recipeId, setRecipeId] = useState(''), [recipeNotice, setRecipeNotice] = useState('');
+  const [savingRecipe, setSavingRecipe] = useState(false), [recipeName, setRecipeName] = useState(''), [recipeBusy, setRecipeBusy] = useState(false);
+  /**
+   * 配方从引擎读取：它是跟着数据目录走的长期资产，不放在界面本地存储里，因此换数据目录、迁移机器或
+   * 从备份恢复后都还在。读取失败只意味着这次没有可套用的配方，不该影响手动抽帧，所以静默忽略。
+   */
+  useEffect(() => {
+    let live = true;
+    void listRecipes().then(items => { if (live) setRecipes(items); }).catch(() => { /* 无配方时按默认参数手动抽帧。 */ });
+    return () => { live = false; };
+  }, []);
   const [advanced, setAdvanced] = useState(false), [command, setCommand] = useState('');
   const [whole, setWhole] = useState(true), [ranges, setRanges] = useState<VideoTimeRange[]>([{ start: 0, end: 1 }]);
   const [resize, setResize] = useState(false), [width, setWidth] = useState('640'), [height, setHeight] = useState('640'), [fit, setFit] = useState<'contain' | 'stretch'>('contain');
@@ -150,36 +159,53 @@ export default function VideoImport({ projectId, onClose, onCreated }: { project
     try { await navigator.clipboard.writeText(text); notify('已复制转码命令，可在本机终端执行后重新选择转码后的文件。'); }
     catch { setCommand(text); notify('无法访问剪贴板，命令已显示在弹窗内，可手动复制。'); }
   }
-  const available = allRecipes(recipes);
-  /** 当前表单对应的配方：套用与保存共用同一份字段清单，避免两处各自维护而漂移。 */
-  function currentRecipe(name: string): VideoExtractionRecipe {
-    return { id: `recipe-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, name, density, customMode, customValue, resize, width, height, fit, format, quality };
+  const available = recipes;
+  /**
+   * 当前表单对应的配方草案。表单里的数值始终是字符串（避免输入过程中被改写），只在交给引擎时转成数字；
+   * 顺带把当前项目的任务类型与类别集记进配方，套用时才能核对「这条配方是不是为这类标注准备的」。
+   */
+  function recipeDraft(name: string, id?: string): VideoRecipeDraft | null {
+    const custom = Number(customValue), widthValue = Number(width), heightValue = Number(height), qualityValue = Number(quality);
+    if (!Number.isFinite(custom) || custom <= 0) return null;
+    if (!Number.isInteger(widthValue) || !Number.isInteger(heightValue) || !Number.isInteger(qualityValue)) return null;
+    return { ...(id ? { id } : {}), name, density, customMode, customValue: custom, resize, width: widthValue, height: heightValue, fit, format, quality: qualityValue,
+      taskType: project?.taskType ?? null, classNames: project ? project.classes.map(item => item.name) : [], note: '' };
   }
   function applyRecipe(recipe: VideoExtractionRecipe) {
     applyingRecipe.current = true;
-    setDensity(recipe.density); setCustomMode(recipe.customMode); setCustomValue(recipe.customValue);
-    setResize(recipe.resize); setWidth(recipe.width); setHeight(recipe.height); setFit(recipe.fit);
-    setFormat(recipe.format); setQuality(recipe.quality);
-    setRecipeId(recipe.id); setRecipeNotice(`已套用「${recipe.name}」：${recipeSummary(recipe)}`);
+    setDensity(recipe.density); setCustomMode(recipe.customMode); setCustomValue(String(recipe.customValue));
+    setResize(recipe.resize); setWidth(String(recipe.width)); setHeight(String(recipe.height)); setFit(recipe.fit);
+    setFormat(recipe.format); setQuality(String(recipe.quality));
+    setRecipeId(recipe.id);
+    // 配方自带的说明（内置推荐配方都有）跟着一起给出，用户才知道这条推荐为什么这样配。
+    setRecipeNotice([`已套用「${recipe.name}」：${recipeSummary(recipe)}`, recipe.note, recipeScopeNote(recipe, project)].filter(Boolean).join(' '));
     setError('');
   }
-  /** 同名视为更新而非新增，否则反复保存会攒出一串无法区分的同名项。 */
-  function commitRecipe() {
+  /** 同名视为更新而非新增：这条规则在引擎侧落地，反复保存不会攒出一串无法区分的同名项。 */
+  async function commitRecipe() {
     const name = recipeName.trim();
     if (!name) { notify('请先填写配方名称。', true); return; }
+    const draft = recipeDraft(name);
+    if (!draft) { notify('请先填写合法的采样值与输出尺寸，再保存配方。', true); return; }
+    setRecipeBusy(true);
     try {
-      const recipe = currentRecipe(name);
-      setRecipes(saveRecipe(recipes, recipe));
-      setRecipeId(recipe.id); setRecipeNotice(`已保存配方「${name}」：${recipeSummary(recipe)}`);
+      const saved = await saveRecipe(draft);
+      setRecipes(await listRecipes());
+      setRecipeId(saved.id); setRecipeNotice(`已保存配方「${name}」：${recipeSummary(saved)}`);
       setSavingRecipe(false); setRecipeName('');
-      notify(`配方「${name}」已保存在本机，下次打开弹窗可直接套用。`);
+      notify(`配方「${name}」已保存在数据目录中，之后可在任意项目里套用。`);
     } catch (e) { notify(errorMessage(e), true); }
+    finally { setRecipeBusy(false); }
   }
-  function dropRecipe(id: string) {
-    try { setRecipes(removeRecipe(recipes, id)); }
-    catch (e) { notify(errorMessage(e), true); return; }
-    if (recipeId === id) { setRecipeId(''); setRecipeNotice(''); }
-    notify('配方已删除。');
+  async function dropRecipe(id: string) {
+    setRecipeBusy(true);
+    try {
+      await removeRecipe(id);
+      setRecipes(await listRecipes());
+      if (recipeId === id) { setRecipeId(''); setRecipeNotice(''); }
+      notify('配方已删除。');
+    } catch (e) { notify(errorMessage(e), true); }
+    finally { setRecipeBusy(false); }
   }
   /** 只挂当前确实兑现得了的动作，缺 handler 的动作不会渲染成死按钮。 */
   const errorHandlers: MediaErrorActionHandlers = {
@@ -189,7 +215,7 @@ export default function VideoImport({ projectId, onClose, onCreated }: { project
     ...(sourcePath ? { copyCommand: () => void copyTranscodeCommand(), transcode: () => void transcode() } : {})
   };
   const fileName = sourcePath ? sourcePath.split(/[\\/]/).pop() : '';
-  const blocked = busy || inspecting || transcoding;
+  const blocked = busy || inspecting || transcoding || recipeBusy;
   return <Modal title="从视频抽取素材" onClose={() => { if (!blocked) onClose(); }}><div className="form-stack video-import">
     {!inspection
       ? <div className="video-start">
@@ -201,8 +227,8 @@ export default function VideoImport({ projectId, onClose, onCreated }: { project
       : <>
         <div className="video-inspection"><div className="video-inspection-head"><strong title={sourcePath}>{inspection.sourceName}</strong><button className="text-button" onClick={() => void choose()} disabled={blocked}>重新选择</button></div><p>{inspection.width} × {inspection.height} · {durationLabel(duration)}</p><p className="muted tiny">报告帧率：{inspection.reportedFrameRate ?? '未知'} · 报告帧数：{inspection.reportedFrameCount ?? '未知'}</p>{transcodePath && <p className="muted tiny">来源为本机转码副本（临时文件，导入素材后自动删除）。</p>}</div>
         {inspection.geometryNotice && <Notice>{inspection.geometryNotice}</Notice>}
-        <div className="video-recipe"><Field label="抽帧配方"><select aria-label="抽帧配方" disabled={busy} value={recipeId} onChange={e => { const picked = available.find(item => item.id === e.target.value); if (picked) applyRecipe(picked); else { setRecipeId(''); setRecipeNotice(''); } }}><option value="">自定义（不使用配方）</option><optgroup label="推荐配方">{available.filter(item => item.builtin).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup>{recipes.length > 0 && <optgroup label="我的配方">{recipes.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup>}</select></Field><div className="video-recipe-actions"><Button disabled={busy} onClick={() => { setSavingRecipe(true); setRecipeName(''); }}>保存当前为配方</Button>{recipes.some(item => item.id === recipeId) && <Button disabled={busy} onClick={() => dropRecipe(recipeId)}>删除配方</Button>}</div></div>
-        {savingRecipe && <div className="video-recipe-save"><input aria-label="配方名称" maxLength={40} placeholder="例如：园区监控夜间" disabled={busy} value={recipeName} onChange={e => setRecipeName(e.target.value)} /><Button className="primary" disabled={busy} onClick={commitRecipe}>保存</Button><Button disabled={busy} onClick={() => { setSavingRecipe(false); setRecipeName(''); }}>取消</Button></div>}
+        <div className="video-recipe"><Field label="抽帧配方"><select aria-label="抽帧配方" disabled={blocked} value={recipeId} onChange={e => { const picked = available.find(item => item.id === e.target.value); if (picked) applyRecipe(picked); else { setRecipeId(''); setRecipeNotice(''); } }}><option value="">自定义（不使用配方）</option><optgroup label="推荐配方">{available.filter(item => item.builtin).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup>{available.some(item => !item.builtin) && <optgroup label="我的配方">{available.filter(item => !item.builtin).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup>}</select></Field><div className="video-recipe-actions"><Button disabled={blocked} onClick={() => { setSavingRecipe(true); setRecipeName(''); }}>保存当前为配方</Button>{available.some(item => item.id === recipeId && !item.builtin) && <Button disabled={blocked} onClick={() => void dropRecipe(recipeId)}>删除配方</Button>}</div></div>
+        {savingRecipe && <div className="video-recipe-save"><input aria-label="配方名称" maxLength={40} placeholder="例如：园区监控夜间" disabled={blocked} value={recipeName} onChange={e => setRecipeName(e.target.value)} /><Button className="primary" busy={recipeBusy} disabled={blocked} onClick={() => void commitRecipe()}>保存</Button><Button disabled={blocked} onClick={() => { setSavingRecipe(false); setRecipeName(''); }}>取消</Button></div>}
         {recipeNotice && <p className="muted tiny">{recipeNotice}</p>}
         <div className="field-grid">
           <Field label="采样密度"><select aria-label="视频采样密度" disabled={busy} value={density} onChange={e => setDensity(e.target.value as VideoDensity)}>{(Object.keys(VIDEO_DENSITY_LABELS) as VideoDensity[]).map(key => <option key={key} value={key}>{VIDEO_DENSITY_LABELS[key]}</option>)}</select></Field>

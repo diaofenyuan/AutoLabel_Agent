@@ -179,6 +179,9 @@ async function dispatch(command: string, p: Record<string, unknown>): Promise<un
     case 'export.format.get': return demoExportFormats(String(p.taskType ?? 'detect'))[0];
     case 'export.format.save': case 'export.format.delete':
       throw new Error('浏览器演示不保存导出格式模板，请在桌面版本中管理。');
+    case 'media.recipe.list': return [];
+    case 'media.recipe.save': case 'media.recipe.delete':
+      throw new Error('浏览器演示不保存抽帧配方，请在桌面版本中管理。');
     case 'export.create': {
       const selected = data.assets.filter(item => item.projectId === p.projectId && (!Array.isArray(p.assetIds) || p.assetIds.includes(item.id)) && (!p.onlyConfirmed || item.status === 'confirmed'));
       if (!selected.length) throw new Error('没有符合条件的素材。');

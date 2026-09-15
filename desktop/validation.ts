@@ -60,6 +60,8 @@ const mediaPath = z.string().min(1).max(32767);
 const mediaPage = { offset: z.number().int().min(0).max(2147483647).optional(), limit: z.number().int().min(1).max(500).optional() };
 const mediaJob = z.strictObject({ jobId: id });
 const mediaStream = z.number().int().min(0).max(65535);
+// 配方标识允许内置前缀（builtin:xxx）：删除内置配方由引擎给出可读的 403，不在这里退化成格式错误。
+const recipeId = z.string().min(1).max(128).regex(/^(builtin:)?[A-Za-z0-9_-]+$/);
 const videoRanges = z.array(z.strictObject({ start: finite.min(0).max(604800), end: finite.min(0).max(604800) })
   .refine(value => value.start < value.end, '时间段结束值须大于开始值')).min(1).max(32)
   .refine(values => values.every((value, index) => index === 0 || value.start >= values[index - 1].end), '时间段须按时间排序且不能重叠');
@@ -254,6 +256,18 @@ const schemas: Record<string, z.ZodType> = {
   'media.job.retry': mediaJob,
   'media.screening.create': z.strictObject({ projectId: id, assetIds: flowAssetIds.optional(), parameters: screening }),
   'media.screening.result': mediaJob.extend({ ...mediaPage, section: z.enum(['items', 'exactGroups', 'nearPairs', 'sourceLeakageGroups']).optional() }),
+  // 抽帧配方：全局记录（不属于任何项目）。除名称外都可缺省，缺省值与边界校验由引擎统一负责，
+  // 这里只拦住明显越界的形状，避免把两份取值范围维护成两套口径。
+  'media.recipe.list': z.strictObject({ kind: z.literal('video_extract').optional() }),
+  'media.recipe.save': z.strictObject({
+    id: recipeId.optional(), baseVersion: z.number().int().min(0).max(2147483647).optional(), kind: z.literal('video_extract').optional(), name: z.string().min(1).max(40),
+    density: z.enum(['dense', 'standard', 'sparse', 'custom']).optional(), customMode: z.enum(['interval', 'every_n', 'fps']).optional(),
+    customValue: z.number().positive().max(1000000).optional(), resize: z.boolean().optional(),
+    width: z.number().int().min(1).max(20000).optional(), height: z.number().int().min(1).max(20000).optional(),
+    fit: z.enum(['contain', 'stretch']).optional(), format: z.enum(['png', 'jpg']).optional(), quality: z.number().int().min(2).max(31).optional(),
+    taskType: taskType.nullable().optional(), classNames: z.array(z.string().min(1).max(100)).max(500).optional(), note: z.string().max(200).optional()
+  }),
+  'media.recipe.delete': z.strictObject({ recipeId }),
   'track.timeline.create': z.strictObject({ projectId: trackIdentifier, mediaJobId: trackIdentifier, name: trackName.optional() }),
   'track.timeline.list': z.strictObject({ projectId: trackIdentifier, ...trackPage }),
   'track.timeline.get': z.strictObject({ timelineId: trackIdentifier }),

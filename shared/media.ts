@@ -32,25 +32,40 @@ export const VIDEO_DENSITY_LABELS: Record<VideoDensity, string> = { dense: '每 
 /**
  * 抽帧配方：固化「同一类素材往往会重复选择」的那部分选项。
  *
- * 只包含采样密度与输出尺寸/格式：时间范围随每段视频变化，任务类型与类别集属于项目属性，
- * 都不该进配方，否则套用配方会悄悄改变用户没打算改的东西。
- * 数值字段保持字符串形态，与表单控件的取值一致，避免 0.50 / 0.5 之类的往返改写。
+ * 由引擎按 kind 分类保存，跟随数据目录与备份一起走；内置推荐配方的 id 带 `builtin:` 前缀，只存在于
+ * 引擎代码里，不入库。数值字段是数字而不是表单字符串 —— 存储层不该承担界面取值的形态。
+ * 时间范围不进来（随每段视频变化）；taskType 与 classNames 是「这条配方面向什么标注」的可空意图，
+ * 供界面与当前项目核对，不参与抽帧本身。
  */
 export interface VideoExtractionRecipe {
   id: string;
+  kind: 'video_extract';
   name: string;
-  /** 内置推荐配方随应用发布：可套用，但只存在于代码里，不写入本机存储、不可删除。 */
-  builtin?: boolean;
+  builtin: boolean;
+  version: number;
   density: VideoDensity;
   customMode: 'interval' | 'every_n' | 'fps';
-  customValue: string;
+  customValue: number;
   resize: boolean;
-  width: string;
-  height: string;
+  width: number;
+  height: number;
   fit: 'contain' | 'stretch';
   format: 'png' | 'jpg';
-  quality: string;
+  quality: number;
+  /** 配方面向的标注任务；null 表示不限。 */
+  taskType: string | null;
+  /** 类别集按名称记录：类别 id 是项目内的，换项目就对不上。 */
+  classNames: string[];
+  note: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
+
+/** 保存配方的载荷：名称必填，其余缺省值由引擎补齐；带 id 时走向更新分支。 */
+export type VideoRecipeDraft = {
+  name: string; id?: string; baseVersion?: number;
+} & Partial<Pick<VideoExtractionRecipe,
+  'density' | 'customMode' | 'customValue' | 'resize' | 'width' | 'height' | 'fit' | 'format' | 'quality' | 'taskType' | 'classNames' | 'note'>>;
 
 export interface ScreeningParameters {
   deduplicate?: boolean;
