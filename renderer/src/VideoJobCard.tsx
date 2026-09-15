@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, CheckCircle2, LoaderCircle, X } from 'lucide-react';
+import { ArrowRight, CheckCircle2, LoaderCircle, Route, X } from 'lucide-react';
 import type { MediaJob } from '../../shared/media';
 import { getBridge, request, errorMessage } from './bridge';
+import { useApp } from './context';
 import { Button, IconButton } from './ui';
 import { MediaError, MediaProgressView, mediaJobName } from './mediaUi';
+import { trackRequest } from './trackUi';
 
 /** 自动导入的尝试上限：抽帧完成即导入，但连续失败时不再自动重发。 */
 const MAX_AUTO_IMPORTS = 3;
@@ -18,20 +20,26 @@ const MAX_AUTO_IMPORTS = 3;
  *
  * 转码副本的生命周期也在这里收口：导入进项目后源视频不再被任何后续步骤引用，此时才删除副本。
  */
-export default function VideoJobCard({ jobId, temporarySource, onImported, onOpen, onOpenTasks, onDismiss }: {
+export default function VideoJobCard({ jobId, temporarySource, onImported, onOpen, onOpenTimeline, onOpenTasks, onDismiss }: {
   jobId: string; temporarySource?: string;
   onImported: () => Promise<unknown> | void;
   onOpen: () => void;
+  /** 帧入库后自动建轴的那条时间轴；点「进入视频轨迹」时带上它，用户不必在历史时间轴里再找一遍。 */
+  onOpenTimeline?: (timelineId: string) => void;
   onOpenTasks: () => void;
   onDismiss: () => void;
 }) {
+  const { project } = useApp();
   const [currentId, setCurrentId] = useState(jobId);
   const [job, setJob] = useState<MediaJob | null>(null);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
-  const imported = useRef(false), recycled = useRef(false), attempts = useRef(0);
+  const [timeline, setTimeline] = useState(''), [timelineNote, setTimelineNote] = useState('');
+  const imported = useRef(false), recycled = useRef(false), attempts = useRef(0), timelineChecked = useRef(false);
+  const notifyTimeline = useRef(onOpenTimeline);
+  notifyTimeline.current = onOpenTimeline;
   const status = useRef('');
   status.current = job?.status ?? '';
-  useEffect(() => { setCurrentId(jobId); setJob(null); imported.current = false; recycled.current = false; }, [jobId]);
+  useEffect(() => { setCurrentId(jobId); setJob(null); imported.current = false; recycled.current = false; timelineChecked.current = false; setTimeline(''); setTimelineNote(''); }, [jobId]);
   useEffect(() => {
     let live = true, timer: ReturnType<typeof setTimeout>;
     async function read() {
@@ -70,6 +78,27 @@ export default function VideoJobCard({ jobId, temporarySource, onImported, onOpe
     imported.current = true; attempts.current += 1;
     void importFrames();
   }, [job]);
+  /**
+   * 帧入库后自动建立视频时间轴。
+   *
+   * 「视频轨迹」原先要求先有一条已入库的抽帧任务才能建轴，这条依赖在界面上没有任何提示，用户只能
+   * 试错；而抽帧本身就是为到达轨迹标注，所以导入完成即顺手把轴建好。按 mediaJobId 去重，同一批帧
+   * 不会重复建轴；建轴失败不阻断图片标注，只是不显示轨迹入口。
+   */
+  useEffect(() => {
+    if (!job?.assetsCommitted || job.kind !== 'video_extract' || timelineChecked.current) return;
+    if (!project || project.id !== job.projectId || !['detect', 'pose'].includes(project.taskType)) return;
+    timelineChecked.current = true;
+    void (async () => {
+      try {
+        const page = await trackRequest('track.timeline.list', { projectId: job.projectId, offset: 0, limit: 100 });
+        const existing = page.items.find(item => item.mediaJobId === job.id);
+        const created = existing ?? await trackRequest('track.timeline.create', { projectId: job.projectId, mediaJobId: job.id });
+        setTimeline(created.id);
+        setTimelineNote(existing ? '这批帧对应的时间轴已存在，可直接进入轨迹标注。' : '已按当前标注模板为这批帧建立时间轴，可直接进入轨迹标注。');
+      } catch { /* 建轴失败不影响图片标注；用户仍可在「轨迹标注」分区手动建立。 */ }
+    })();
+  }, [job, project]);
   async function importFrames() {
     setBusy(true); setError('');
     try {
@@ -96,9 +125,10 @@ export default function VideoJobCard({ jobId, temporarySource, onImported, onOpe
     <MediaProgressView job={job} />
     {importing && <p className="muted tiny"><LoaderCircle className="spin" size={13} /> 正在把抽出的帧导入项目…</p>}
     {!committed && (job.status === 'failed' || job.status === 'interrupted') && <MediaError busy={busy} handlers={{ retry: () => void control('media.job.retry') }} error={job.error ? `[${job.error.code}] ${job.error.message}` : '抽帧任务未完成'} />}
+    {committed && timelineNote && <p className="muted tiny">{timelineNote}</p>}
     <div className="actions">
       {committed
-        ? <><Button className="primary" onClick={onOpen}>开始标注<ArrowRight size={14} /></Button><Button onClick={onOpenTasks}>在任务中心查看</Button></>
+        ? <><Button className="primary" onClick={onOpen}>开始标注<ArrowRight size={14} /></Button>{timeline && <Button onClick={() => notifyTimeline.current?.(timeline)}><Route size={13} />进入视频轨迹</Button>}<Button onClick={onOpenTasks}>在任务中心查看</Button></>
         : <>{attempts.current >= MAX_AUTO_IMPORTS && error && <Button className="primary" busy={busy} onClick={() => { attempts.current = 0; void importFrames(); }}>重试导入</Button>}{job.canCancel && <Button busy={busy} onClick={() => void control('media.job.cancel')}>{job.status === 'cancelling' ? '正在取消' : '取消抽帧'}</Button>}{job.canRetry && <Button busy={busy} onClick={() => void control('media.job.retry')}>创建重试任务</Button>}<Button onClick={onOpenTasks}>在任务中心查看</Button></>}
     </div>
     <MediaError error={error} busy={busy} />

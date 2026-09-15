@@ -11,12 +11,13 @@ import TrackTools, { type TrackToolResult } from './TrackTools';
 import TrackGenerationPanel from './TrackGenerationPanel';
 import { frameStates, keyframeStates, TrackError, trackRequest } from './trackUi';
 
-export default function VideoTimeline({ project, tasksOnly = false }: { project: Project; tasksOnly?: boolean }) {
+export default function VideoTimeline({ project, tasksOnly = false, initialTimelineId = '' }: { project: Project; tasksOnly?: boolean; initialTimelineId?: string }) {
   const [timelines, setTimelines] = useState<TrackPage<TrackTimeline>>({ items: [], total: 0 }), [offset, setOffset] = useState(0), [id, setId] = useState(''), [detail, setDetail] = useState<TrackTimelineDetail | null>(null);
   const [jobs, setJobs] = useState<MediaJob[]>([]), [jobOffset, setJobOffset] = useState(0), [jobTotal, setJobTotal] = useState(0), [jobId, setJobId] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [refresh, setRefresh] = useState(0);
-  useEffect(() => { setOffset(0); setId(''); setDetail(null); setJobId(''); setJobOffset(0); }, [project.id]);
-  useEffect(() => { let live = true; setError(''); void trackRequest('track.timeline.list', { projectId: project.id, offset, limit: 50 }).then(result => { if (live) { setTimelines(result); setId(value => value || result.items[0]?.id || ''); } }).catch(e => { if (live) setError(errorMessage(e)); }); return () => { live = false; }; }, [project.id, offset, refresh]);
+  // initialTimelineId 变化代表用户明确要落到某条时间轴（抽帧导入后自动建轴的那条），此时清掉旧选择。
+  useEffect(() => { setOffset(0); setId(''); setDetail(null); setJobId(''); setJobOffset(0); }, [project.id, initialTimelineId]);
+  useEffect(() => { let live = true; setError(''); void trackRequest('track.timeline.list', { projectId: project.id, offset, limit: 50 }).then(result => { if (live) { setTimelines(result); setId(value => value || (result.items.some(item => item.id === initialTimelineId) ? initialTimelineId : '') || result.items[0]?.id || ''); } }).catch(e => { if (live) setError(errorMessage(e)); }); return () => { live = false; }; }, [project.id, offset, refresh, initialTimelineId]);
   useEffect(() => { if (!id) return; let live = true; setDetail(null); void trackRequest('track.timeline.get', { timelineId: id }).then(value => { if (live) setDetail(value); }).catch(e => { if (live) setError(errorMessage(e)); }); return () => { live = false; }; }, [id, refresh]);
   useEffect(() => { if (tasksOnly) return; let live = true; void request<{ items: MediaJob[]; total: number }>('media.job.list', { projectId: project.id, kind: 'video_extract', offset: jobOffset, limit: 50 }).then(result => { if (live) { setJobs(result.items); setJobTotal(result.total); } }).catch(e => { if (live) setError(errorMessage(e)); }); return () => { live = false; }; }, [project.id, jobOffset, tasksOnly, refresh]);
   async function create() { if (!jobId) return; setBusy(true); setError(''); try { const timeline = await trackRequest('track.timeline.create', { projectId: project.id, mediaJobId: jobId }); setId(timeline.id); setRefresh(v => v + 1); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); } }

@@ -43,9 +43,11 @@ export interface AppState {
   /**
    * 正在跟踪的抽帧任务。放在应用层而不是工作台内部：抽帧常常要等几十秒，
    * 用户中途去任务中心看一眼再回来，卡片与自动导入都不该丢。
+   * timelineId 记录这批帧对应的时间轴：导入后自动建轴，用户点「进入视频轨迹」时直接落到这一条，
+   * 而不是在一串历史时间轴里重新找。
    */
-  mediaJob: { id: string; temporarySource?: string } | null;
-  setMediaJob: React.Dispatch<React.SetStateAction<{ id: string; temporarySource?: string } | null>>;
+  mediaJob: { id: string; temporarySource?: string; timelineId?: string } | null;
+  setMediaJob: React.Dispatch<React.SetStateAction<{ id: string; temporarySource?: string; timelineId?: string } | null>>;
   setAssets: React.Dispatch<React.SetStateAction<Asset[]>>;
   setProject: React.Dispatch<React.SetStateAction<Project | null>>;
   openProject: (project: Project) => Promise<void>;
