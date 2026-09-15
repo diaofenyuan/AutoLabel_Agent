@@ -3,9 +3,11 @@ package cn.autolabel.engine;
 import com.google.gson.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.zip.*;
 
 /**
- * 阶段 B 验收：过滤谓词、素材形态硬规则、采样（仅训练集）、遗漏范围与确定性。
+ * 阶段 A～F 验收：过滤谓词、素材形态硬规则、采样（仅训练集）、遗漏范围与确定性、
+ * 几何裁剪与平铺、数据加强、划分策略、消费端接入与备份复核。
  * 全部使用本地合成夹具，不发起任何外部请求。
  */
 final class DatasetVersionsTest {
@@ -19,6 +21,7 @@ final class DatasetVersionsTest {
         augment(root.resolve("augment"));
         splitting(root.resolve("splitting"));
         consumption(root.resolve("consumption"));
+        backup(root.resolve("backup"));
     }
 
     // ===== 过滤与硬规则 =====
@@ -550,6 +553,62 @@ final class DatasetVersionsTest {
             JsonObject diagnostics=EngineTest.command(e,"diagnostics.get");
             check(diagnostics.has("datasetVersions"),"诊断包含数据集版本摘要");
             check(!diagnostics.toString().contains(root.toString()),"诊断不含本机绝对路径");
+        }
+    }
+
+    // ===== 备份与恢复：版本副本与清单整体可复核（F-4） =====
+
+    private static void backup(Path root)throws Exception{
+        Path output=root.resolve("out"),restoreParent=root.resolve("restore");
+        Files.createDirectories(output);Files.createDirectories(restoreParent);
+        String versionId,restoredDir;
+        try(Engine e=new Engine(root.resolve("data"))){
+            JsonObject project=EngineTest.command(e,"project.create",Json.obj("name","版本备份","taskType","detect",
+                "classes",Json.arr(Json.obj("id","cat","name","猫","color","#3b82f6"))));
+            String pid=Json.required(project,"id");
+            JsonArray ids=EngineTest.importSamples(e,pid,3);
+            for(JsonElement id:ids)annotateAt(e,id.getAsString(),"cat",200,180,200,120);
+            JsonObject version=await(e,EngineTest.command(e,"dataset.version.create",Json.obj("projectId",pid,"seed","backup-seed",
+                "transform",Json.obj("augment",Json.obj("multiplier",1,"brightness",true)))));
+            versionId=Json.required(version,"id");
+            long expected;
+            try(var walk=Files.walk(versionDirectory(e,versionId))){expected=walk.filter(Files::isRegularFile).count();}
+            check(expected>1,"版本目录包含清单与逐项副本");
+
+            JsonObject preflight=EngineTest.command(e,"backup.preflight",Json.obj("outputDir",output.toString()));
+            check(Json.bool(preflight,"ready",false),"含版本副本的备份预检就绪");
+            String operationId=Json.id();
+            JsonObject maintenance=EngineTest.command(e,"system.prepareDataMaintenance",Json.obj("operationId",operationId));
+            check(Json.bool(maintenance,"ready",false),"备份前数据维护就绪");
+            JsonObject created=EngineTest.command(e,"backup.create",Json.obj("outputDir",output.toString(),"operationId",operationId));
+            check(Json.required(created,"status").equals("completed"),"备份完成");
+            String archive=Json.required(created,"backupPath");
+            // 归档必须包含版本清单与全部副本，而不是只备份数据库记录。
+            String prefix="files/datasets/versions/"+versionId+"/";long entries=0;boolean manifestPresent=false;
+            try(ZipFile zip=new ZipFile(Path.of(archive).toFile())){
+                var iterator=zip.entries();
+                while(iterator.hasMoreElements()){
+                    ZipEntry entry=iterator.nextElement();
+                    if(entry.isDirectory()||!entry.getName().startsWith(prefix))continue;
+                    entries++;if(entry.getName().equals(prefix+"manifest.json"))manifestPresent=true;
+                }
+            }
+            check(manifestPresent,"归档包含版本清单");
+            check(entries==expected,"归档包含版本目录全部副本："+entries+" / "+expected);
+
+            JsonObject restored=EngineTest.command(e,"restore.prepare",Json.obj("backupPath",archive,"targetParent",restoreParent.toString(),"operationId",operationId));
+            check(Json.required(restored,"status").equals("prepared"),"恢复目录已准备");
+            restoredDir=Json.required(restored,"dataDir");
+            check(Files.isRegularFile(Path.of(restoredDir).resolve("datasets/versions/"+versionId+"/manifest.json")),"恢复目录内版本副本就位");
+            JsonObject released=EngineTest.command(e,"system.cancelDataMaintenance",Json.obj("operationId",operationId));
+            check(Json.bool(released,"released",false),"备份完成后释放数据维护锁");
+        }
+        // 新引擎读取恢复目录：版本仍可按清单复核（I1、I3）。
+        try(Engine recovered=new Engine(Path.of(restoredDir))){
+            check(Json.bool(EngineTest.command(recovered,"dataset.version.verify",Json.obj("versionId",versionId)),"consistent",false),
+                "恢复后的版本副本仍可复核");
+            check(Json.required(EngineTest.command(recovered,"dataset.version.get",Json.obj("versionId",versionId)),"status").equals("ready"),
+                "恢复后的版本状态保持 ready");
         }
     }
 

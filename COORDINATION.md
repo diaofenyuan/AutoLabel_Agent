@@ -103,7 +103,7 @@
 
 - 边界修订：`SPEC.md` 原先“不纳入软件内训练”的条款已按用户最新要求修订为第 10 节。训练在本地执行，不使用业务云，**不计入模型 API 预算**（不接入 `Budgets`/`Costs`），仅记录任务事件与耗时。本模块未实现前，不得在界面或说明中声称训练可用。
 - 数据集统一为不可变快照 `training_datasets`（`snapshotHash`）：来源为 `upload`（用户选择的训练集与验证集目录）或 `export`（引用已完成导出版本，逐文件校验清单哈希后复制）。训练只读快照，启动后不可变；换数据即新快照与新任务。划分沿用导出既有的 `{split}` 与来源组防泄漏规则，效果图不进入训练图片。
-- 引擎命令（参数与响应边界写入新增的 `shared/training.ts`，界面与桌面共用）：`training.runtime.get`、`training.dataset.create/list/get`、`training.job.preflight/create/list/get/metrics/log/cancel/retry`、`training.job.artifact`、`training.job.registerModel`、`training.job.delete`。
+- 引擎命令（参数与响应边界写入新增的 `shared/training.ts`，界面与桌面共用）：`training.runtime.get`、`training.root.status/pin`、`training.dataset.create/list/get`、`training.job.preflight/create/list/get/metrics/log/cancel/retry`、`training.job.artifact`、`training.job.registerModel`、`training.job.delete`。产物与快照根由 `Store.trainingRoot` 解析（缺省 `<数据目录>/training`）；配置失效（相对路径、磁盘根、数据目录及其上级、不可写）只回退默认位置并在 `training.root.status` 的 `fallbackReason` 如实上报，**不让引擎拒绝启动**；`training.root.save` 由桌面主进程校验后落盘，切换目录不改写历史记录。
 - 桌面：`training.dataset.create` 的 `trainDir`/`valDir` 必须经 `PathGrants.require(..., ['directory'])`；`training.job.artifact` 与 `local.model.resolve` 同级，不向渲染层开放。`local.model.register` 只接受经文件对话框或受管产物授权通道产生的 `modelPath`：训练产物由主进程先经 `training.job.artifact` 解析受管绝对路径，再 `PathGrants.add(path,'model')`，**不得为此放宽既有校验规则**。
 - 训练进程：新增 `inference/train_worker.py`，沿用 `inference/worker.py` 的行级 JSON 协议族（`ready` 握手、`event` 进度、`response` 结果）、`AUTOLABEL_PARENT_PID` 父进程句柄监测与 `YOLO_AUTOINSTALL=false`；命令为 `probe`/`train`/`cancel`/`shutdown`。训练请求**不设固定总超时**，由 Java 侧心跳与停滞判定管理；**不得复用 `LocalInference`**（该类硬限制单请求 `timeout<=600000ms` 且一进程单活动请求）。
 - 训练进程的实现约束（实测踩坑，不得改动）：Windows 上只要存在一个阻塞在 stdin 读取上的线程，之后再导入 `torch`/`ultralytics` 就会永久挂起。因此依赖必须在控制线程启动之前完成预加载（`preload()`），训练在主线程内联执行，控制线程只处理 `cancel`/`shutdown` 这类无导入的回执。协议通道固定为真实 stdout（`protocol` 引用），训练期的 `redirect_stdout` 不得改写协议行。
@@ -122,7 +122,7 @@
 - 导出默认落点（阶段 5.1–5.3 已实现）：`export.create` 的 `outputDir` 可缺省，由桌面主进程注入 `<datasetsRoot>\<项目名>-<时间戳>` 并授权；流程定义中启用的 `export` 步骤缺省时同样注入，模板里显式写的路径仍逐一授权。渲染层只从 `storage.paths.get` 读取该目录用于提示，不自行拼接判断。
 - 受管原图根（阶段 5.4–5.6 已实现，接口已冻结）：引擎启动 JSON 新增可选 `materialsRoot`，缺省保持 `<数据目录>/originals`；自定义值必须是绝对路径且不等于、不包含数据目录，否则启动即 `materials_root_invalid`，**不静默回退**。桌面在 `createBackend` 传入解析后的 `uploads` 目录，因此导入复制（`asset.import` 的 copy 模式）、素材重定位复制、流程导入暂存都落在该目录，`OverlayRenderer.protectTarget` 与 `ExportHistory.protectDestination` 同样把它当作受保护目录；`ProjectDeletion` 只删除数据库确认属于该项目、且位于数据目录或受管原图根之内的文件。
 - 受管原图根的生效时机：该值只在引擎启动时读取。`storage.paths.save` 后若上传目录实际变化，主进程在引擎空闲（`system.canUpdate.ready`）时自动重启引擎使新落点立即生效，并返回 `materialsRoot:'active'`；有在途任务时返回 `materialsRoot:'pending-restart'`，界面必须如实说明「将在引擎重启后生效」，不得显示为已生效。
-- 备份与恢复：归档条目沿用内容派生的相对名（`originals/imported-<hash>.<ext>`），恢复按绑定重写把外部受管原图收进新数据目录的 `originals/`，恢复目录自包含；三类新数据目录（`datasets/`、`uploads/`、`chats/`）**尚未纳入 `backup.create`**（计划 §5 风险 2 的建议项），界面与文档不得声称已被备份覆盖。
+- 备份与恢复：归档条目沿用内容派生的相对名（`originals/imported-<hash>.<ext>`），恢复按绑定重写把外部受管原图收进新数据目录的 `originals/`，恢复目录自包含。数据集版本副本（`<数据目录>/datasets/versions/<version_id>/` 的清单、辅助文件与逐项副本）**已纳入** `backup.create`，版本目录内的相对位置即恢复位置、不登记路径绑定，恢复后仍可按同一清单复核。三类存储根目录（`<存储根>/datasets/`、`<存储根>/uploads/`、`<存储根>/chats/`）**仍未作为独立条目纳入**（计划 §5 风险 2 的建议项）：`uploads` 内的受管原图与 `datasets` 内的导出产物会经 `assets`/`exports` 记录被间接备份，**`chats` 对话记录完全不在备份范围内**，界面与文档不得声称已被备份覆盖。
 - 界面现状：阶段 3（Codex 式侧栏、对话主页、取消项目中心）与阶段 4 的界面部分（项目删除三步弹窗、会话删除/置顶/重命名入口）已在工作区实现并通过源码态八页 UI 检查（含项目删除弹窗断言），不属于缺口；仍有待补的是三类新数据目录纳入备份清单，以及需要外部环境的验收项（干净 Windows、真实用户机器升级演练、代码签名）。
 
 ## 数据集版本管理模块（本轮新增，阶段 10）
@@ -131,9 +131,9 @@
 - 不可变约束（实现时不得放宽）：版本进入 `ready` 后内容、清单与划分归属不可变更，任何调整必须产生新版本号；生成过程只读原始素材与标注；副本逐文件校验哈希；划分以来源组为最小单位，分组约束优先级高于比例与分层；增强仅作用于训练集（阶段 D）；同源 + 同配方 + 同种子必须得到同一内容哈希。
 - 存储与命令：schema 由 9 升至 10，只新增 `dataset_versions`（项目内递增 `number`，`UNIQUE(project_id,version)`）、`dataset_version_items`（被排除项也入库并带 `reasonCode`）、`dataset_version_builds`（分阶段真实计数进度）与可空字段，不改既有表结构。目录为数据根下 `datasets/versions/<version_id>/`，先写 `.autolabel-partial-` 临时目录再原子发布，失败整体删除。
 - 清单：`manifest.json` 使用 `schemaVersion 3`、`kind='dataset-version'`，与导出清单同源；**不得包含绝对路径、用户目录与凭据**（I9）。读取侧对缺字段的历史清单回退既有约定。
-- 阶段 A 只支持最简配方：`sourceKind='project'`、`annotationScope` 为 `labeled`/`confirmed`、无筛选与转换、按默认 70/20/10 以来源组为单位划分（`rule='ratio-source-group-v1'`）。`upload`/`export` 来源、过滤与采样、几何裁剪与平铺、增强、自定义划分分别属于后续阶段，未实现前不得在界面声称可用。
+- 实现现状（2026-09-15 核实）：阶段 A–E 已实现——`sourceKind` 支持 `project`/`upload`/`export`；过滤与采样、几何裁剪（静态裁剪 / 平铺三模式 / 缩放 contain+stretch / 灰度化 / 语义重映射）、确定性增强（仅训练集、倍数 0～4）、自定义比例与三种重划分算法、显式清单、严格防泄漏均已落地（`DatasetVersionsTest` 143 项断言）。阶段 F 已完成导出清单 schemaVersion 3 血缘（F-1）、训练快照 `source=version`（F-2）、版本副本纳入 `backup.create`（F-4）与诊断版本计数（F-5）；**未完成**的是 F-3（评测集引用版本划分）、F-6（打包放行与打包态冒烟）以及界面 M9 向导（`DatasetVersions.tsx` 仍为基础界面：列表 / 详情 / 生成，尚无筛选、转换、划分步骤）。
 - 桌面与 Agent：`dataset.version.*` 写操作**不进入** `agent/tools.ts` 白名单，只能由用户在界面显式触发；所有命令的参数结构写入 `desktop/validation.ts`，不引入新的路径授权（版本副本全部位于受管目录）。
-- 删除为软删除，副本保留，彻底清理交由「本地数据存储」生命周期处理；阶段 F 之前没有消费端引用版本。
+- 删除为软删除，副本保留，彻底清理交由「本地数据存储」生命周期处理；导出与训练快照已可引用版本（`datasetVersionId` / `source=version`），评测集引用版本（F-3）尚未实现。
 
 ## 桌面更新接口
 

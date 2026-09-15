@@ -150,6 +150,7 @@ final class DataBackups {
                 for(JsonElement element:Json.array(version,"assets")){JsonObject asset=element.getAsJsonObject();String file=relative(Json.str(asset,"image","images/"+safeId(Json.required(asset,"assetId"))+".png"));add(plan,dataRoot.resolve(directory).resolve(file).toString(),directory+"/"+file,hashValue(asset,"contentHash"),"evaluation",dataRoot,confined);}
             }
             for(JsonObject row:Store.rows(c,"SELECT id,data FROM exports WHERE json_extract(data,'$.status')='completed'"))export(plan,row,dataRoot,confined);
+            if(plan.schemaVersion>=10)versionFiles(plan,c,dataRoot,confined);
         }
         return plan;
     }
@@ -309,6 +310,30 @@ final class DataBackups {
         if(Files.exists(file)&&!file.toRealPath().startsWith(directory.toRealPath()))throw error(422,"backup_dependency_invalid","历史导出依赖通过链接越过登记目录。");return file;
     }
 
+    /**
+     * 数据集版本副本：清单、辅助文件与逐项副本整体纳入备份。
+     * 版本目录内的相对位置即恢复位置，故不登记路径绑定；恢复后同一版本仍可按清单复核（I1、I3、I8）。
+     */
+    private static void versionFiles(Plan plan,Connection c,Path root,boolean confined)throws Exception{
+        for(JsonObject row:Store.rows(c,"SELECT id,manifest_hash FROM dataset_versions WHERE status='ready'")){
+            String versionId=safeId(Json.required(row,"id")),directory="datasets/versions/"+versionId;
+            Path base=root.resolve("datasets").resolve("versions").resolve(versionId),manifest=base.resolve("manifest.json");
+            add(plan,manifest.toString(),directory+"/manifest.json",Json.str(row,"manifest_hash",null),"dataset_version",root,confined);
+            for(JsonObject item:Store.rows(c,"SELECT data FROM dataset_version_items WHERE version_id=? ORDER BY position",versionId)){
+                JsonObject entry=Json.parse(item.get("data").getAsString());
+                // 被排除与采样丢弃项没有副本文件，只在数据库记录中保留原因码。
+                String image=Json.str(entry,"image",""),label=Json.str(entry,"label","");
+                if(!image.isBlank())add(plan,base.resolve(relative(image)).toString(),directory+"/"+relative(image),Json.str(entry,"contentHash",null),"dataset_version",root,confined);
+                if(!label.isBlank())add(plan,base.resolve(relative(label)).toString(),directory+"/"+relative(label),Json.str(entry,"labelHash",null),"dataset_version",root,confined);
+            }
+            // 辅助文件范围取自清单本身，避免目录扫描把无关文件带进备份。
+            if(Files.isRegularFile(manifest,LinkOption.NOFOLLOW_LINKS))for(JsonElement element:Json.array(Json.parse(Files.readString(manifest,StandardCharsets.UTF_8)),"auxiliaryFiles")){
+                JsonObject auxiliary=element.getAsJsonObject();String path=relative(Json.required(auxiliary,"path"));
+                add(plan,base.resolve(path).toString(),directory+"/"+path,hashValue(auxiliary,"hash"),"dataset_version",root,confined);
+            }
+        }
+    }
+
     private static void add(Plan plan,String source,String target,String expected,String kind,Path root,boolean confined){
         target=relative(target);Path input=absolute(source);if(confined&&!input.startsWith(root))throw error(422,"backup_binding_missing","恢复后的素材仍指向备份之外。");
         FileRef previous=plan.files.get(target);if(previous!=null){if(expected!=null&&previous.expected!=null&&!expected.equals(previous.expected))throw error(422,"backup_dependency_conflict","不同文件版本使用了同一保存位置。");if(previous.expected==null)previous.expected=expected;previous.candidates.add(input);return;}
@@ -447,7 +472,7 @@ final class DataBackups {
         if(value.isEmpty()||value.length()>8192||value.indexOf('\\')>=0||value.startsWith("/")||value.contains(":")||value.indexOf('\0')>=0)throw error(422,"backup_path_invalid","备份条目必须是安全的相对路径。");
         for(String part:value.split("/",-1))if(part.isEmpty()||part.equals(".")||part.equals("..")||part.endsWith(".")||part.endsWith(" ")||part.matches(".*[\\x00-\\x1f<>\"|?*].*")||part.matches("(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(\\..*)?"))throw error(422,"backup_path_invalid","备份条目包含不安全路径。");return value;
     }
-    private static boolean allowedTarget(String target){return List.of("media/","originals/","run-inputs/","resource-library/","evaluation-sets/","exports/").stream().anyMatch(target::startsWith)
+    private static boolean allowedTarget(String target){return List.of("media/","originals/","run-inputs/","resource-library/","evaluation-sets/","exports/","datasets/versions/").stream().anyMatch(target::startsWith)
         ||target.matches("video-sources/[a-f0-9]{64}\\.[a-z0-9]{1,10}")
         ||target.matches("media-jobs/[a-zA-Z0-9_-]{1,100}/(?:screening\\.json|generation/(?:recipe\\.json|filter\\.txt|frames\\.jsonl|complete\\.json|frames/frame-[0-9]{8}\\.(?:png|jpg)))")
         ||target.matches("flow-inputs/[a-zA-Z0-9_-]{1,100}/[a-zA-Z0-9_-]{1,100}/[a-zA-Z0-9_-]{1,100}/(?:generation\\.json|views/[a-zA-Z0-9_-]{1,100}/input\\.(?:png|json))");}
