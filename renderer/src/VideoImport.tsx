@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Plus, Trash2 } from 'lucide-react';
-import type { MediaJob, VideoCreateRequest, VideoExtractionParameters, VideoInspection, VideoTimeRange } from '../../shared/media';
+import { VIDEO_DENSITY_LABELS, VIDEO_DENSITY_SECONDS, type MediaJob, type VideoCreateRequest, type VideoDensity, type VideoExtractionParameters, type VideoExtractionRecipe, type VideoInspection, type VideoTimeRange } from '../../shared/media';
 import { getBridge, request, errorMessage, isDemo } from './bridge';
 import { useApp } from './context';
 import { Button, Field, IconButton, Modal, Notice } from './ui';
 import { MediaError } from './mediaUi';
 import type { MediaErrorActionHandlers } from './mediaErrorMap';
+import { allRecipes, loadUserRecipes, recipeSummary, removeRecipe, saveRecipe } from './videoRecipes';
 
 /** 引擎单次抽帧上限，与 VideoFrames.java 的 maxFrames 默认值一致；超过就整单失败，所以在 UI 侧提前拦截。 */
 const MAX_FRAMES = 10000;
-type Density = 'dense' | 'standard' | 'sparse' | 'custom';
-const DENSITY_SECONDS: Record<Exclude<Density, 'custom'>, number> = { dense: 0.5, standard: 1, sparse: 2 };
-const DENSITY_LABELS: Record<Density, string> = { dense: '每 0.5 秒一帧', standard: '每 1 秒一帧（默认）', sparse: '每 2 秒一帧', custom: '自定义…' };
 
 /** 源帧率可能是 "30000/1001" 这样的分数；估帧数时才需要，解析不出来就如实返回未知。 */
 function parseRate(reported: string | null | undefined): number | null {
@@ -35,14 +33,25 @@ export default function VideoImport({ projectId, onClose, onCreated }: { project
   const [sourcePath, setSourcePath] = useState(''), [inspection, setInspection] = useState<VideoInspection | null>(null), [error, setError] = useState('');
   const [inspecting, setInspecting] = useState(false), [busy, setBusy] = useState(false);
   const [transcodePath, setTranscodePath] = useState(''), [transcoding, setTranscoding] = useState(false), [elapsed, setElapsed] = useState(0);
-  const [density, setDensity] = useState<Density>('standard'), [customMode, setCustomMode] = useState<'interval' | 'every_n' | 'fps'>('interval'), [customValue, setCustomValue] = useState('1');
+  const [density, setDensity] = useState<VideoDensity>('standard'), [customMode, setCustomMode] = useState<'interval' | 'every_n' | 'fps'>('interval'), [customValue, setCustomValue] = useState('1');
+  const [recipes, setRecipes] = useState<VideoExtractionRecipe[]>(loadUserRecipes), [recipeId, setRecipeId] = useState(''), [recipeNotice, setRecipeNotice] = useState('');
+  const [savingRecipe, setSavingRecipe] = useState(false), [recipeName, setRecipeName] = useState('');
   const [advanced, setAdvanced] = useState(false), [command, setCommand] = useState('');
   const [whole, setWhole] = useState(true), [ranges, setRanges] = useState<VideoTimeRange[]>([{ start: 0, end: 1 }]);
   const [resize, setResize] = useState(false), [width, setWidth] = useState('640'), [height, setHeight] = useState('640'), [fit, setFit] = useState<'contain' | 'stretch'>('contain');
   const [format, setFormat] = useState<'png' | 'jpg'>('png'), [quality, setQuality] = useState('3');
   const duration = inspection?.durationSeconds ?? null;
   const durationUnknown = inspection !== null && duration === null;
-  useEffect(() => { setError(''); }, [density, customMode, customValue, whole, ranges, resize, width, height, fit, format, quality]);
+  /**
+   * 参数变化即清掉上一次的错误，同时取消配方选中：用户手动改过选项后，下拉框不该继续宣称
+   * 「当前套用的是某某配方」。套用配方自身会一次性写入全部字段，用 ref 跳过这一次重置。
+   */
+  const applyingRecipe = useRef(false);
+  useEffect(() => {
+    setError('');
+    if (applyingRecipe.current) { applyingRecipe.current = false; return; }
+    setRecipeId(''); setRecipeNotice('');
+  }, [density, customMode, customValue, whole, ranges, resize, width, height, fit, format, quality]);
   /** 转码副本只在弹窗存活期间有效：换源或放弃时立即删除，只有真正创建了抽帧任务的那份留给任务卡回收。 */
   async function discardTemporary(path: string) {
     try { await (await getBridge()).discardTranscode({ path }); }
@@ -84,7 +93,7 @@ export default function VideoImport({ projectId, onClose, onCreated }: { project
     } catch (e) { setInspection(null); setError(errorMessage(e)); } finally { setInspecting(false); }
   }
   const mode = density === 'custom' ? customMode : 'interval';
-  const sampling = density === 'custom' ? customValue : String(DENSITY_SECONDS[density]);
+  const sampling = density === 'custom' ? customValue : String(VIDEO_DENSITY_SECONDS[density]);
   /** 估算帧数取区间上界，宁可高估也不放过超限。 */
   function estimateFrames(): number | null {
     if (duration === null) return null;
@@ -105,9 +114,9 @@ export default function VideoImport({ projectId, onClose, onCreated }: { project
   const estimated = estimateFrames(), suggested = suggestedSeconds();
   function applySuggestion() {
     if (suggested === null) return;
-    if (suggested <= DENSITY_SECONDS.dense) setDensity('dense');
-    else if (suggested <= DENSITY_SECONDS.standard) setDensity('standard');
-    else if (suggested <= DENSITY_SECONDS.sparse) setDensity('sparse');
+    if (suggested <= VIDEO_DENSITY_SECONDS.dense) setDensity('dense');
+    else if (suggested <= VIDEO_DENSITY_SECONDS.standard) setDensity('standard');
+    else if (suggested <= VIDEO_DENSITY_SECONDS.sparse) setDensity('sparse');
     else { setDensity('custom'); setCustomMode('interval'); setCustomValue(String(suggested)); }
   }
   function parameters(): VideoExtractionParameters {
@@ -141,6 +150,37 @@ export default function VideoImport({ projectId, onClose, onCreated }: { project
     try { await navigator.clipboard.writeText(text); notify('已复制转码命令，可在本机终端执行后重新选择转码后的文件。'); }
     catch { setCommand(text); notify('无法访问剪贴板，命令已显示在弹窗内，可手动复制。'); }
   }
+  const available = allRecipes(recipes);
+  /** 当前表单对应的配方：套用与保存共用同一份字段清单，避免两处各自维护而漂移。 */
+  function currentRecipe(name: string): VideoExtractionRecipe {
+    return { id: `recipe-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, name, density, customMode, customValue, resize, width, height, fit, format, quality };
+  }
+  function applyRecipe(recipe: VideoExtractionRecipe) {
+    applyingRecipe.current = true;
+    setDensity(recipe.density); setCustomMode(recipe.customMode); setCustomValue(recipe.customValue);
+    setResize(recipe.resize); setWidth(recipe.width); setHeight(recipe.height); setFit(recipe.fit);
+    setFormat(recipe.format); setQuality(recipe.quality);
+    setRecipeId(recipe.id); setRecipeNotice(`已套用「${recipe.name}」：${recipeSummary(recipe)}`);
+    setError('');
+  }
+  /** 同名视为更新而非新增，否则反复保存会攒出一串无法区分的同名项。 */
+  function commitRecipe() {
+    const name = recipeName.trim();
+    if (!name) { notify('请先填写配方名称。', true); return; }
+    try {
+      const recipe = currentRecipe(name);
+      setRecipes(saveRecipe(recipes, recipe));
+      setRecipeId(recipe.id); setRecipeNotice(`已保存配方「${name}」：${recipeSummary(recipe)}`);
+      setSavingRecipe(false); setRecipeName('');
+      notify(`配方「${name}」已保存在本机，下次打开弹窗可直接套用。`);
+    } catch (e) { notify(errorMessage(e), true); }
+  }
+  function dropRecipe(id: string) {
+    try { setRecipes(removeRecipe(recipes, id)); }
+    catch (e) { notify(errorMessage(e), true); return; }
+    if (recipeId === id) { setRecipeId(''); setRecipeNotice(''); }
+    notify('配方已删除。');
+  }
   /** 只挂当前确实兑现得了的动作，缺 handler 的动作不会渲染成死按钮。 */
   const errorHandlers: MediaErrorActionHandlers = {
     reselect: () => void choose(),
@@ -161,8 +201,11 @@ export default function VideoImport({ projectId, onClose, onCreated }: { project
       : <>
         <div className="video-inspection"><div className="video-inspection-head"><strong title={sourcePath}>{inspection.sourceName}</strong><button className="text-button" onClick={() => void choose()} disabled={blocked}>重新选择</button></div><p>{inspection.width} × {inspection.height} · {durationLabel(duration)}</p><p className="muted tiny">报告帧率：{inspection.reportedFrameRate ?? '未知'} · 报告帧数：{inspection.reportedFrameCount ?? '未知'}</p>{transcodePath && <p className="muted tiny">来源为本机转码副本（临时文件，导入素材后自动删除）。</p>}</div>
         {inspection.geometryNotice && <Notice>{inspection.geometryNotice}</Notice>}
+        <div className="video-recipe"><Field label="抽帧配方"><select aria-label="抽帧配方" disabled={busy} value={recipeId} onChange={e => { const picked = available.find(item => item.id === e.target.value); if (picked) applyRecipe(picked); else { setRecipeId(''); setRecipeNotice(''); } }}><option value="">自定义（不使用配方）</option><optgroup label="推荐配方">{available.filter(item => item.builtin).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup>{recipes.length > 0 && <optgroup label="我的配方">{recipes.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup>}</select></Field><div className="video-recipe-actions"><Button disabled={busy} onClick={() => { setSavingRecipe(true); setRecipeName(''); }}>保存当前为配方</Button>{recipes.some(item => item.id === recipeId) && <Button disabled={busy} onClick={() => dropRecipe(recipeId)}>删除配方</Button>}</div></div>
+        {savingRecipe && <div className="video-recipe-save"><input aria-label="配方名称" maxLength={40} placeholder="例如：园区监控夜间" disabled={busy} value={recipeName} onChange={e => setRecipeName(e.target.value)} /><Button className="primary" disabled={busy} onClick={commitRecipe}>保存</Button><Button disabled={busy} onClick={() => { setSavingRecipe(false); setRecipeName(''); }}>取消</Button></div>}
+        {recipeNotice && <p className="muted tiny">{recipeNotice}</p>}
         <div className="field-grid">
-          <Field label="采样密度"><select aria-label="视频采样密度" disabled={busy} value={density} onChange={e => setDensity(e.target.value as Density)}>{(Object.keys(DENSITY_LABELS) as Density[]).map(key => <option key={key} value={key}>{DENSITY_LABELS[key]}</option>)}</select></Field>
+          <Field label="采样密度"><select aria-label="视频采样密度" disabled={busy} value={density} onChange={e => setDensity(e.target.value as VideoDensity)}>{(Object.keys(VIDEO_DENSITY_LABELS) as VideoDensity[]).map(key => <option key={key} value={key}>{VIDEO_DENSITY_LABELS[key]}</option>)}</select></Field>
           {density === 'custom' && <Field label="采样方式"><select aria-label="视频采样方式" disabled={busy} value={customMode} onChange={e => { setCustomMode(e.target.value as typeof customMode); setCustomValue(e.target.value === 'every_n' ? '10' : '1'); }}><option value="interval">每隔指定秒数</option><option value="every_n">每 N 个源帧</option><option value="fps">按目标帧率</option></select></Field>}
         </div>
         {density === 'custom' && <Field label={customMode === 'interval' ? '间隔（秒）' : customMode === 'every_n' ? '源帧间隔 N' : '目标帧率（帧/秒）'}><input aria-label="视频采样值" type="number" min={customMode === 'every_n' ? 1 : 0.001} step={customMode === 'every_n' ? 1 : 'any'} disabled={busy} value={customValue} onChange={e => setCustomValue(e.target.value)} /></Field>}

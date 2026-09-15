@@ -28,6 +28,14 @@
 .media-error-diagnostics{margin-top:8px}
 .transcode-command{width:100%;min-height:64px;font-family:ui-monospace,Consolas,monospace;font-size:11px;resize:vertical}
 
+/* 抽帧配方：把重复使用的采样密度与输出选项固化成一条选择，避免每段视频都从零填表。 */
+.video-recipe{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin:16px 0 4px}
+.video-recipe>.field{flex:1 1 240px;min-width:0;margin:0}
+.video-recipe-actions{display:flex;gap:8px;padding-bottom:1px}
+.video-recipe-actions .button,.video-recipe-save .button{height:32px;padding:0 12px;font-size:12px}
+.video-recipe-save{display:flex;gap:8px;align-items:center;margin:10px 0 4px}
+.video-recipe-save>input{flex:1 1 auto;min-width:0}
+
 /* 工作台内的抽帧任务卡：抽帧只是到达标注的中间步骤，进度、导入与入口都留在工作台，不再跳页。 */
 .video-job-card{flex:none;margin:0 24px 14px;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface);animation:drawer-in .2s ease-out both}
 .video-job-card.done{border-color:color-mix(in srgb,var(--accent) 32%,var(--border))}

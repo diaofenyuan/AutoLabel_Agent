@@ -24,6 +24,34 @@ export type VideoExtractionParameters = VideoExtractionOptions & (
   | { mode: 'fps'; targetFps: number; intervalSeconds?: never; everyNFrames?: never }
 );
 
+/** 采样密度档位：把「三种采样模式 + 自由数值」收敛为首屏的四选一，自定义才展开原有模式。 */
+export type VideoDensity = 'dense' | 'standard' | 'sparse' | 'custom';
+export const VIDEO_DENSITY_SECONDS: Record<Exclude<VideoDensity, 'custom'>, number> = { dense: 0.5, standard: 1, sparse: 2 };
+export const VIDEO_DENSITY_LABELS: Record<VideoDensity, string> = { dense: '每 0.5 秒一帧', standard: '每 1 秒一帧（默认）', sparse: '每 2 秒一帧', custom: '自定义…' };
+
+/**
+ * 抽帧配方：固化「同一类素材往往会重复选择」的那部分选项。
+ *
+ * 只包含采样密度与输出尺寸/格式：时间范围随每段视频变化，任务类型与类别集属于项目属性，
+ * 都不该进配方，否则套用配方会悄悄改变用户没打算改的东西。
+ * 数值字段保持字符串形态，与表单控件的取值一致，避免 0.50 / 0.5 之类的往返改写。
+ */
+export interface VideoExtractionRecipe {
+  id: string;
+  name: string;
+  /** 内置推荐配方随应用发布：可套用，但只存在于代码里，不写入本机存储、不可删除。 */
+  builtin?: boolean;
+  density: VideoDensity;
+  customMode: 'interval' | 'every_n' | 'fps';
+  customValue: string;
+  resize: boolean;
+  width: string;
+  height: string;
+  fit: 'contain' | 'stretch';
+  format: 'png' | 'jpg';
+  quality: string;
+}
+
 export interface ScreeningParameters {
   deduplicate?: boolean;
   nearEnabled?: boolean;
