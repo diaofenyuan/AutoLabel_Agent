@@ -688,12 +688,23 @@ async function smoke(): Promise<void> {
   if (process.argv.includes('--desktop-ui-resume')) { await checkPersistedUiEdit(window!, output); app.quit(); return; }
   if (process.argv.includes('--desktop-training-check')) {
     await checkTrainingUi(window!, output, {
-      // 训练页验收用真实数据：示例项目导出为固定版本，再生成不可变训练快照。
+      // 训练页验收用真实数据：示例项目 → 生成不可变数据集版本 → 从版本导出 → 冻结训练快照，
+      // 使源码态与打包态都覆盖「生成 → 导出 → 训练」链路，而不是只验证导出这一环。
       prepareDataset: async () => {
         const directory = path.join(userData, 'training-fixtures');
         await mkdir(directory, { recursive: true });
         const example = await engine.request('project.example', {}) as { id: string };
-        const exported = await engine.request('export.create', { projectId: example.id, outputDir: directory, annotationSelection: 'confirmed' }) as { id: string };
+        const created = await engine.request('dataset.version.create', { projectId: example.id, seed: `training-ui-${Date.now()}` }) as { id: string };
+        let status = 'building';
+        // 版本由引擎异步构建，这里按真实状态轮询，不假设固定耗时。
+        for (let attempt = 0; attempt < 120 && status !== 'ready'; attempt++) {
+          const state = await engine.request('dataset.version.get', { versionId: created.id }) as { status: string; failure?: { message?: string } };
+          status = state.status;
+          if (status === 'failed' || status === 'cancelled') throw new Error(`数据集版本生成未成功：${state.failure?.message ?? status}`);
+          if (status !== 'ready') await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        if (status !== 'ready') throw new Error('数据集版本生成超时');
+        const exported = await engine.request('export.create', { projectId: example.id, outputDir: directory, annotationSelection: 'confirmed', datasetVersionId: created.id }) as { id: string };
         return await engine.request('training.dataset.create', { projectId: example.id, source: 'export', exportId: exported.id }) as Record<string, unknown>;
       },
     });

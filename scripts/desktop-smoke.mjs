@@ -60,7 +60,9 @@ args.push(...extraLaunchArgs);
 const run = async runArgs => {
 const child = spawn(executable, runArgs, { cwd: root, env, windowsHide: true, stdio: 'inherit' });
 return new Promise((resolve, reject) => {
-  const timeout = setTimeout(() => { child.kill(); reject(new Error('桌面验收超时')); }, 60000);
+  // 打包态首次启动（解压 asar 与初始化运行时）可能超过默认 60 秒，受限环境可显式放宽。
+  const timeoutMs = Number(process.env.AUTOLABEL_SMOKE_TIMEOUT ?? 60000);
+  const timeout = setTimeout(() => { child.kill(); reject(new Error('桌面验收超时')); }, timeoutMs);
   child.once('error', error => { clearTimeout(timeout); reject(error); });
   child.once('exit', code => { clearTimeout(timeout); resolve(code); });
 });
