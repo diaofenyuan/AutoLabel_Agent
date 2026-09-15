@@ -63,7 +63,7 @@ export async function checkRelease7b(window: BrowserWindow, output: string, engi
   await wait(`!!document.querySelector('.workbench')`);
   const assetPreview = await js(`new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve({width:image.naturalWidth,height:image.naturalHeight});image.onerror=()=>reject(new Error('已导入帧不可读'));image.src='autolabel-media://asset/${frames.items[0].assetId}';})`);
   assert.deepEqual(assetPreview, { width: 384, height: 288 });
-  await js(`document.querySelectorAll('.nav-item')[3].click()`); await button('素材处理');
+  await js(`document.querySelectorAll('.nav-item')[3].click()`); await button('素材任务');
   await wait(`!!document.querySelector('.media-job-list>button')`);
   await js(`[...document.querySelectorAll('.media-job-list>button')].find(b=>b.innerText.includes('素材筛选分析')).click()`);
   await wait(`!!document.querySelector('.screening-results')`);

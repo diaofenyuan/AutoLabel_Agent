@@ -29,7 +29,7 @@ interface DeletionResult {
 
 const countNames: Record<string, string> = {
   assets: '素材', versions: '标注版本', drafts: '草稿', runs: '标注任务', samples: '任务样本',
-  attempts: '调用尝试', exports: '导出版本', flowRuns: '流程运行', mediaJobs: '素材处理任务',
+  attempts: '调用尝试', exports: '导出版本', flowRuns: '自动流程', mediaJobs: '素材任务',
   timelines: '轨迹时间轴', tracks: '轨迹', generations: '轨迹生成', evaluationSets: '评测集',
   evaluations: '评测', reviewItems: '复核项', trainingDatasets: '训练数据集快照', trainingJobs: '训练任务',
 };

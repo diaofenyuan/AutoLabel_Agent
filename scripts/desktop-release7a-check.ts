@@ -78,7 +78,7 @@ export async function checkRelease7a(window: BrowserWindow, output: string, engi
   const artifact = await request('flow.artifact', { artifactId: finished.steps[0].outputArtifactId, limit: 1 });
   report.flow = { status: finished.status, requestsUsed: finished.statistics.requestsUsed, artifactKind: artifact.kind, inputCount: artifact.total, inputId: artifact.items[0]?.inputId };
   await js(`document.querySelectorAll('.nav-item')[3].click()`);
-  await clickButton('流程运行');
+  await clickButton('自动流程');
   await wait(`[...document.querySelectorAll('.flow-run-list button')].some(button=>button.innerText.includes('7A 安装包固定输入预览'))`);
   await js(`[...document.querySelectorAll('.flow-run-list button')].find(button=>button.innerText.includes('7A 安装包固定输入预览')).click()`);
   await clickButton('查看固定产物'); await clickButton('查看实际输入');

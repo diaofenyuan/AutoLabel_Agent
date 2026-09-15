@@ -80,7 +80,9 @@
 .local-model-list>button:hover:not(:disabled){background:var(--surface);border-color:var(--soft);transform:translateX(2px)}
 .local-model-detail{animation:drawer-in .2s ease-out both}
 .resources-layout.editing .resource-editor{animation:drawer-in .2s ease-out both}
-.task-kind-tabs + .tasks-layout,.task-kind-tabs + .section-toolbar + .tasks-layout{animation:page-in .2s ease-out both}
+/* 任务分区的区分说明插在标签栏与内容之间，因此相邻兄弟选择器要同时覆盖「有说明」与「无说明」两种结构。 */
+.task-kind-tabs + .tasks-layout,.task-kind-tabs + .section-toolbar + .tasks-layout,.task-kind-tabs + .task-kind-note + .tasks-layout,.task-kind-tabs + .task-kind-note + .section-toolbar + .tasks-layout{animation:page-in .2s ease-out both}
+.task-kind-note{margin:0 0 14px;max-width:760px;line-height:1.7}
 
 .input-reuse-source>details p{margin:8px 0}.model-input-summary>.input-reuse-source{margin:14px 0}.reuse-source-run>details{overflow-wrap:anywhere}.reuse-source-run>details p{margin:9px 0;font-size:11px}
 

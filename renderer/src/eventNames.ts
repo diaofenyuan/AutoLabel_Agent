@@ -1,5 +1,5 @@
 const eventNames: Record<string, string> = {
-  'media.job.created': '素材任务已创建', 'media.job.started': '素材任务开始', 'media.job.progress': '素材处理进度更新', 'media.job.inspected': '视频检查完成', 'media.job.artifact_committed': '抽帧结果已封存', 'media.job.import_queued': '素材导入已排队', 'media.job.assets_committed': '视频素材已入库', 'media.job.screening_completed': '素材分析已完成', 'media.job.cancelled': '素材任务已取消', 'media.job.interrupted': '素材任务已中断', 'media.job.finished': '素材任务结束',
+  'media.job.created': '素材任务已创建', 'media.job.started': '素材任务开始', 'media.job.progress': '素材任务进度更新', 'media.job.inspected': '视频检查完成', 'media.job.artifact_committed': '抽帧结果已封存', 'media.job.import_queued': '素材导入已排队', 'media.job.assets_committed': '视频素材已入库', 'media.job.screening_completed': '素材分析已完成', 'media.job.cancelled': '素材任务已取消', 'media.job.interrupted': '素材任务已中断', 'media.job.finished': '素材任务结束',
   'project.created': '项目已创建', 'project.updated': '项目已更新',
   'asset.imported': '素材已导入', 'asset.relocated': '素材位置已更新',
   'annotation.candidate': '候选标注已保存', 'annotation.saved': '标注已保存', 'annotation.rendered': '标注预览已生成', 'annotation.draft_saved': '标注草稿已保存', 'annotation.draft_discarded': '标注草稿已放弃',

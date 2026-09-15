@@ -15,9 +15,22 @@ import { eventName } from './eventNames';
 import ModelInputResult, { InputProgressView } from './ModelInputResult';
 
 const stageNames: Record<string,string> = { preparing:'准备输入',sending:'发送请求',waiting:'等待模型响应',parsing:'解析结果',validating:'校验标注',saving:'保存结果',retry_wait:'等待重试',...statusNames };
+type TaskKind = 'flow' | 'annotation' | 'media' | 'tracks';
+/**
+ * 四类任务的职责边界。
+ *
+ * 「任务 / 作业 / 运行」曾各自命名，用户很难从入口名字判断该点哪个；标签统一后名字变短了，
+ * 边界反而更需要一句话说明，因此每个分区固定给出「这一类是什么、什么时候用它」。
+ */
+const kindNotes: Record<TaskKind, string> = {
+  flow: '自动流程：按流程编辑器配置的步骤自动跑标注，运行状态与实际事件在这里回看。',
+  annotation: '标注任务：一次标注执行的状态、逐样本结果与已发送的请求数。',
+  media: '素材任务：视频抽帧与素材筛选等原料加工；抽帧完成后回工作台即可开始标注。',
+  tracks: '轨迹标注：视频时间轴上的对象轨迹、关键帧与待复核候选。'
+};
 export default function Tasks() {
   const { events, engine, notify, navigate, assets, project, mediaTaskId } = useApp();
-  const [kind, setKind] = useState<'flow' | 'annotation' | 'media' | 'tracks'>(mediaTaskId ? 'media' : 'flow');
+  const [kind, setKind] = useState<TaskKind>(mediaTaskId ? 'media' : 'flow');
   useEffect(() => { if (mediaTaskId) setKind('media'); }, [mediaTaskId]);
   const [runs,setRuns]=useState<Run[]>([]);
   const [quality,setQuality]=useState(false);
@@ -30,8 +43,9 @@ export default function Tasks() {
   async function control(action:string){if(!selected)return;setBusy(true);try{const payload:Record<string,unknown>={runId:selected.id};if(action==='retry')payload.assetIds=(selected.samples??[]).filter(sample=>sample.status==='failed').map(sample=>sample.assetId);const run=await request<Run>(`run.${action}`,payload);setSelected(run);await refresh();notify(`操作已提交，任务状态：${stageNames[run.status]??run.status}。`);}catch(e){notify(errorMessage(e),true);}finally{setBusy(false);}}
   const visible=runs.filter(run=>(filter==='all'||(filter==='active'?['running','queued','paused','needs_attention'].includes(run.status):['completed','completed_with_errors','succeeded','failed','cancelled','partial'].includes(run.status)))&&`${run.model} ${run.id}`.toLowerCase().includes(search.toLowerCase()));
   const recent=events.filter(e=>!selected||e.runId===selected.id).slice(-35).reverse();
-  return <div className="content tasks-page">{quality&&<QualityCenter onClose={()=>setQuality(false)}/>}<PageHeader title="任务中心" description="查看执行状态、样本结果与实际发生的事件" actions={<><Button onClick={()=>setQuality(true)}>评测与复核</Button>{kind==='annotation'&&<Button busy={loading} disabled={loading} onClick={()=>void refresh()}><RefreshCw size={14}/>刷新标注任务</Button>}<Button className="primary" onClick={()=>void navigate('workflow')}><PlusIcon/>创建任务</Button></>}/>
-    <div className="tabs task-kind-tabs"><button className={kind==='flow'?'selected':''} onClick={()=>setKind('flow')}>流程运行</button><button className={kind==='annotation'?'selected':''} onClick={()=>setKind('annotation')}>标注任务</button><button className={kind==='media'?'selected':''} onClick={()=>setKind('media')}>素材处理</button><button className={kind==='tracks'?'selected':''} disabled={!project||!['detect','pose'].includes(project.taskType)} onClick={()=>setKind('tracks')}>轨迹候选</button></div>
+  return <div className="content tasks-page">{quality&&<QualityCenter onClose={()=>setQuality(false)}/>}<PageHeader title="任务中心" description="按类型查看：自动流程、标注任务与素材任务分属三类；训练任务在「模型训练」页单独查看" actions={<><Button onClick={()=>setQuality(true)}>评测与复核</Button>{kind==='annotation'&&<Button busy={loading} disabled={loading} onClick={()=>void refresh()}><RefreshCw size={14}/>刷新标注任务</Button>}<Button className="primary" onClick={()=>void navigate('workflow')}><PlusIcon/>创建任务</Button></>}/>
+    <div className="tabs task-kind-tabs"><button className={kind==='flow'?'selected':''} onClick={()=>setKind('flow')}>自动流程</button><button className={kind==='annotation'?'selected':''} onClick={()=>setKind('annotation')}>标注任务</button><button className={kind==='media'?'selected':''} onClick={()=>setKind('media')}>素材任务</button><button className={kind==='tracks'?'selected':''} disabled={!project||!['detect','pose'].includes(project.taskType)} onClick={()=>setKind('tracks')}>轨迹标注</button></div>
+    <p className="muted tiny task-kind-note">{kindNotes[kind]}</p>
     {kind==='tracks'?project&&<VideoTimeline key={project.id} project={project} tasksOnly/>:kind==='flow'?<FlowRuns projectId={project?.id}/>:kind==='media'?<MediaJobs initialJobId={mediaTaskId}/>:<><div className="section-toolbar"><div className="tabs">{[['all','全部任务'],['active','进行中'],['done','已结束']].map(([key,label])=><button key={key} className={filter===key?'selected':''} onClick={()=>setFilter(key)}>{label}</button>)}</div><SearchField placeholder="搜索模型或任务" value={search} onChange={setSearch}/></div>
     {error&&<p role="alert" className="inline-error">{error}</p>}
     <div className="tasks-layout"><div className="tasks-main">{loading?<div className="page-loading tasks-loading" role="status"><RefreshCw size={18} className="spin"/>正在读取标注任务…</div>:visible.length?<div className="run-list">{visible.map(run=>{const s=run.statistics??{};const total=s.total??run.total??0;const completed=s.completed??0;return <button key={run.id} data-status={run.status} className={`run-row ${selected?.id===run.id?'selected':''}`} onClick={()=>void request<Run>('run.get',{runId:run.id}).then(setSelected).catch(e=>notify(errorMessage(e),true))}><div className="run-icon"><Activity size={20}/></div><div className="run-summary"><strong>{String(run.name??run.model??'标注任务')}{run.kind==='local'&&' · 本地模型'}</strong><p>{run.createdAt?new Date(run.createdAt).toLocaleString('zh-CN'):'创建时间未知'}</p><div className="progress"><span style={{width:`${total?Math.min(100,completed/total*100):0}%`}}/></div><small>完成 {completed} / {total} · 成功 {s.succeeded??0}（含复用 {s.reused??0}）· 失败 {s.failed??0} · 已发送请求 {s.requestsUsed??'未知'}</small><InputProgressView statistics={s}/></div><span className="tiny-badge">{stageNames[run.status]??run.status}</span></button>;})}</div>:<Empty icon={<ListTodo size={28}/>} title="还没有运行任务" description={isDemo?'当前是浏览器演示，不生成模拟任务或进度。':'从流程编辑器启动你的第一个标注任务。'}><Button onClick={()=>void navigate('workflow')}>打开流程编辑器<ArrowUpRight size={14}/></Button></Empty>}

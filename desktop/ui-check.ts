@@ -157,7 +157,7 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   await settle();
   await captureSecondary('secondary-workflow-runs.png', 'workflow-runs');
   await openPage(3);
-  for (const [index, label] of ['标注任务', '素材处理', '轨迹候选'].entries()) {
+  for (const [index, label] of ['标注任务', '素材任务', '轨迹标注'].entries()) {
     await window.webContents.executeJavaScript(`(()=>{const b=[...document.querySelectorAll('.task-kind-tabs button')].find(item=>item.innerText.trim()===${JSON.stringify(label)});if(b&&!b.disabled)b.click()})()`);
     await waitFor(`!!document.querySelector('.page-tasks') && !document.querySelector('.page-loading')`);
     await settle();

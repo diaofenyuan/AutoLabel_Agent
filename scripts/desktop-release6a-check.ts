@@ -46,8 +46,8 @@ export async function checkRelease6a(window: BrowserWindow, output: string, engi
   const artifact = await request('flow.artifact', { artifactId, limit: 1 });
   report.flow = { status: finished.status, requestsUsed: finished.statistics.requestsUsed, artifactKind: artifact.kind, exportId: artifact.exportId };
   await window.webContents.executeJavaScript(`document.querySelectorAll('.nav-item')[3].click()`);
-  await waitFor(`[...document.querySelectorAll('button')].some(b=>b.innerText.trim()==='流程运行')`);
-  await window.webContents.executeJavaScript(`[...document.querySelectorAll('button')].find(b=>b.innerText.trim()==='流程运行').click()`);
+  await waitFor(`[...document.querySelectorAll('button')].some(b=>b.innerText.trim()==='自动流程')`);
+  await window.webContents.executeJavaScript(`[...document.querySelectorAll('button')].find(b=>b.innerText.trim()==='自动流程').click()`);
   await waitFor(`[...document.querySelectorAll('.flow-run-list button')].some(b=>b.innerText.includes('6A 安装包人工检查链路'))`);
   await window.webContents.executeJavaScript(`[...document.querySelectorAll('.flow-run-list button')].find(b=>b.innerText.includes('6A 安装包人工检查链路')).click()`);
   await waitFor(`!!document.querySelector('.flow-run-list button.selected')`);
