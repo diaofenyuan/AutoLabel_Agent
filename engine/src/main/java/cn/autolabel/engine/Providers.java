@@ -233,7 +233,12 @@ final class Providers {
         try{pending=interactive.submit(()->callTracked(payload));sessions.computeIfAbsent(session,k->ConcurrentHashMap.newKeySet()).add(pending);return pending.get();}catch(RejectedExecutionException e){throw new ApiError(429,"interactive_busy","对话调用繁忙，请稍后重试。");}
         catch(CancellationException e){throw new ApiError(499,"call_cancelled","对话已取消；已发送调用的状态会单独保存。");}
         catch(InterruptedException e){if(pending!=null)pending.cancel(true);Thread.currentThread().interrupt();throw new ApiError(503,"interrupted","对话等待中断。");}
-        catch(ExecutionException e){if(e.getCause() instanceof ApiError a)throw a;throw new ApiError(502,"provider_call_failed","接口调用失败。");}
+        // 远端失败已由 callTracked 转成 ApiError/RemoteError；能走到这里的通常是本地处理异常（空指针、类初始化失败等）。
+        // 此前一律压成「接口调用失败」，用户既看不到原因也拿不到线索，这里保留类型与消息并写入引擎日志。
+        catch(ExecutionException e){Throwable cause=e.getCause()==null?e:e.getCause();if(cause instanceof ApiError a)throw a;
+            if(cause instanceof RemoteError r)throw new ApiError(502,r.code,r.getMessage());
+            System.err.println("provider_call_failed:"+cause.getClass().getName()+":"+cause.getMessage());cause.printStackTrace(System.err);
+            throw new ApiError(500,"provider_call_failed_internal","调用未完成（本地处理异常 "+cause.getClass().getSimpleName()+"）："+(cause.getMessage()==null?"无附加信息":cause.getMessage()));}
         finally{if(pending!=null){Set<Future<?>> set=sessions.get(session);if(set!=null){set.remove(pending);if(set.isEmpty())sessions.remove(session,set);}}}
     }
     JsonObject cancel(String session){int cancelled=0;Set<Future<?>> calls=sessions.get(session);if(calls!=null)for(Future<?> call:calls)if(call.cancel(true))cancelled++;return Json.obj("sessionId",session,"cancelled",cancelled);}

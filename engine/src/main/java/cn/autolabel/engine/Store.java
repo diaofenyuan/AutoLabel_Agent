@@ -35,6 +35,8 @@ final class Store implements AutoCloseable {
             int version; try(ResultSet rs=s.executeQuery("PRAGMA user_version")) {version=rs.getInt(1);}
             if(version>SCHEMA_VERSION) throw new ApiError(409,"database_version_newer","数据目录由更新版本创建，请升级软件后打开。");
             s.execute("PRAGMA journal_mode=WAL"); s.execute("PRAGMA synchronous=FULL");
+            // 事件表只增不减，长会话下 WAL 会持续膨胀；显式设置自动 checkpoint 阈值。
+            s.execute("PRAGMA wal_autocheckpoint=1000");
             if(version>0&&version<SCHEMA_VERSION)backupBeforeMigration(version);
             writer.setAutoCommit(false);
             s.execute("CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,data TEXT NOT NULL)");
@@ -183,15 +185,30 @@ final class Store implements AutoCloseable {
         boolean interrupted=false;
         try {Future<T> pending=writes.submit(()->{
             try {writer.setAutoCommit(false);T result=work.run(writer);writer.commit();return result;}
-            catch(Exception e){writer.rollback();if(e instanceof SQLException)writeFailed=true;throw e;}
+            catch(Exception e){writer.rollback();if(unrecoverable(e))writeFailed=true;throw e;}
             finally {writer.setAutoCommit(true);}
         });
             // 写入一旦入队就等待明确提交结论，退出中断不能制造“失败却已提交”的歧义。
             for(;;){try{return pending.get();}catch(InterruptedException e){interrupted=true;}}
         }
         catch(RejectedExecutionException e){throw new ApiError(503,"storage_busy","本地写入繁忙，请稍后重试。");}
-        catch(ExecutionException e){if(e.getCause() instanceof ApiError a)throw a;writeFailed=true;throw new ApiError(500,"storage_write_failed","本地写入失败，已停止新调用；请检查磁盘空间与目录权限。");}
+        catch(ExecutionException e){if(e.getCause() instanceof ApiError a)throw a;if(unrecoverable(e.getCause()))writeFailed=true;throw new ApiError(500,"storage_write_failed","本地写入失败，已停止新调用；请检查磁盘空间与目录权限。");}
         finally{if(interrupted)Thread.currentThread().interrupt();}
+    }
+    /**
+     * writeFailed 是「停止继续写入」的闩锁，只在确实无法继续的存储故障上置位：
+     * 8 只读、10 IO 错误、11 损坏、13 磁盘满、14 无法打开、26 非数据库文件。
+     * 瞬时争用（SQLITE_BUSY/LOCKED）由 busy_timeout 内部重试，业务参数类异常更不代表数据库损坏；
+     * 若把它们也算作不可恢复，一次偶发失败就会让整个引擎永久停摆且只能靠重启恢复。
+     */
+    static boolean unrecoverable(Throwable failure){
+        for(Throwable t=failure;t!=null;t=t.getCause()){
+            if(t instanceof SQLException sql){
+                int code=sql.getErrorCode();
+                return code==8||code==10||code==11||code==13||code==14||code==26;
+            }
+        }
+        return false;
     }
     static PreparedStatement statement(Connection c,String sql,Object... args)throws SQLException{
         PreparedStatement p=c.prepareStatement(sql);for(int i=0;i<args.length;i++)p.setObject(i+1,args[i] instanceof JsonElement e?e.toString():args[i]);return p;

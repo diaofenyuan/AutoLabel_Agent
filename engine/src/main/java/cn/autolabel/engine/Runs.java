@@ -14,6 +14,8 @@ final class Runs implements AutoCloseable {
     private final Object dispatchGate=new Object();
     private volatile boolean closed,suspended,storagePaused,dataMaintenancePaused;
     private volatile long suspendedAt;
+    /** 存储异常只暂停派发一段时间：瞬时磁盘抖动或一次写失败不应该让后台任务永久停摆。 */
+    private volatile long storagePausedUntil;
     private int roundRobin;
     volatile Runnable flowTick=()->{};
     Runs(Store store,Projects projects,Providers providers){this.store=store;this.projects=projects;this.providers=providers;reuse=new CandidateReuse(store);
@@ -102,7 +104,14 @@ final class Runs implements AutoCloseable {
             default->throw new IllegalArgumentException();}
         run.addProperty("updatedAt",Json.now());Store.update(c,"UPDATE runs SET status=?,data=? WHERE id=?",Json.required(run,"status"),run,id);Store.event(c,"run."+action,id,null,null,Json.obj("status",run.get("status"),"maxRequests",run.get("maxRequests"),"retryUnknown",Json.bool(p,"retryUnknown",false)));return view(c,id,true);}
     boolean dispatchAllowed(){return !closed&&!suspended&&!storagePaused&&!dataMaintenancePaused&&!store.writeFailed;}
-    void tick(){synchronized(dispatchGate){if(dispatchAllowed())flowTick.run();dispatchTick();}}
+    /** 存储类失败只暂停派发固定时长，到期自动复核；磁盘仍不可用时下一次 tick 会再次暂停。 */
+    void pauseStorage(String reason){storagePaused=true;storagePausedUntil=System.currentTimeMillis()+30000;System.err.println("engine_dispatch_paused:"+reason);}
+    void tick(){synchronized(dispatchGate){
+        // 调度线程是唯一驱动后台流程的线程。ScheduledExecutorService 在任务抛出异常后会静默停止
+        // 后续执行，表现为 HTTP 与健康检查都正常、但任务永远不再推进，因此这里必须兜住所有异常。
+        if(storagePaused&&System.currentTimeMillis()>=storagePausedUntil)storagePaused=false;
+        if(dispatchAllowed()){try{flowTick.run();}catch(Throwable failure){System.err.println("engine_flow_tick_failed:"+failure.getClass().getSimpleName());}}
+        dispatchTick();}}
     private void dispatchTick(){if(closed||suspended||storagePaused||dataMaintenancePaused||store.writeFailed)return;
         try{
             if(requests.getActiveCount()+requests.getQueue().size()>=globalLimit)return;store.requireSpace(0);
@@ -120,8 +129,8 @@ final class Runs implements AutoCloseable {
                 try{requests.execute(()->execute(run,sample,attempt));}catch(RejectedExecutionException e){releasePreparation(id,sampleId,attempt,0);}
                 return;
             }
-        }catch(ApiError e){if(e.code.startsWith("storage_")||e.code.equals("disk_space_low")){storagePaused=true;System.err.println("engine_dispatch_paused:"+e.code);}}
-        catch(Exception e){storagePaused=true;System.err.println("engine_dispatch_paused:internal_error");}
+        }catch(ApiError e){if(e.code.startsWith("storage_")||e.code.equals("disk_space_low"))pauseStorage(e.code);}
+        catch(Exception e){pauseStorage("internal_error");}
     }
     void pauseBudget(String id){pauseBudget(id,"budget_exhausted");}
     record ReuseRequest(JsonObject body,CandidateReuse.Prepared prepared){}
@@ -195,14 +204,14 @@ final class Runs implements AutoCloseable {
                 sample.addProperty("candidateVersion",version);sample.addProperty("completedAt",Json.now());sample.remove("errorCode");sample.remove("message");if(cancelled)sample.addProperty("lateResult",true);Store.update(c,"UPDATE samples SET status=?,data=? WHERE id=?",cancelled?"cancelled":"succeeded",sample,sampleId);
                 JsonObject a=Json.parse(Store.one(c,"SELECT data FROM attempts WHERE id=?",attempt).get("data").getAsString());a.addProperty("status","completed");a.addProperty("completedAt",Json.now());a.add("usage",reply.usage());a.add("response",providers.redact(reply.raw(),credential));Store.update(c,"UPDATE attempts SET status='completed',data=? WHERE id=?",a,attempt);
                 Store.event(c,cancelled?"sample.cancelled":"sample.succeeded",runId,assetId,attempt,Json.obj("stage",cancelled?"cancelled":"completed","candidateVersion",version,"manualProtected",protectedHuman,"currentTemplateCompatible",currentTemplateCompatible,"lateResult",cancelled,"usage",reply.usage()));Store.event(c,"annotation.candidate",runId,assetId,attempt,Json.obj("version",version,"manualProtected",protectedHuman,"lateResult",cancelled));return null;});
-        }catch(Exception e){try{if(!sent&&e instanceof ApiError auth&&Set.of("credential_missing","credential_binding_changed").contains(auth.code)){pauseBudget(runId,auth.code);releasePreparation(runId,sampleId,attempt,0);return;}fail(initialRun,row,sample,attempt,sent,e);if(Json.bool(initialRun,"inputResults",false))inputResults.apiFailure(initialRun,sample,attempt,sent,parsedInput,e);}catch(Exception storage){storagePaused=true;System.err.println("engine_result_not_saved:storage_write_failed");}}
-        finally{providers.release(acquired);try{settle(runId);}catch(Exception e){storagePaused=true;}}
+        }catch(Exception e){try{if(!sent&&e instanceof ApiError auth&&Set.of("credential_missing","credential_binding_changed").contains(auth.code)){pauseBudget(runId,auth.code);releasePreparation(runId,sampleId,attempt,0);return;}fail(initialRun,row,sample,attempt,sent,e);if(Json.bool(initialRun,"inputResults",false))inputResults.apiFailure(initialRun,sample,attempt,sent,parsedInput,e);}catch(Exception storage){pauseStorage("result_not_saved:"+(storage instanceof ApiError a?a.code:storage.getClass().getSimpleName()));}}
+        finally{providers.release(acquired);try{settle(runId);}catch(Exception e){pauseStorage("settle_failed");}}
     }
     void stage(String run,String sample,String asset,String attempt,String stage){store.tx(c->{int changed=Store.update(c,"UPDATE samples SET status=? WHERE id=? AND active_attempt=?",stage,sample,attempt);if(changed==1)Store.event(c,"sample."+stage,run,asset,attempt,Json.obj("stage",stage));return null;});}
     void fail(JsonObject initialRun,JsonObject row,JsonObject sample,String attempt,boolean sent,Exception error){
         String runId=Json.required(initialRun,"id"),sampleId=Json.required(row,"id"),assetId=Json.required(row,"asset_id");boolean unknown=error instanceof Providers.RemoteError r&&r.unknown;boolean retryable=error instanceof Providers.RemoteError r&&r.retryable;
         String code=error instanceof Providers.RemoteError r?r.code:error instanceof ApiError a?a.code:"input_or_result_failed";String message=error instanceof Providers.RemoteError r?r.getMessage():error instanceof ApiError a?a.getMessage():"素材读取或结果处理失败。";
-        if(error instanceof ApiError a&&a.code.startsWith("storage_")){storagePaused=true;return;}
+        if(error instanceof ApiError a&&a.code.startsWith("storage_")){pauseStorage(a.code);return;}
         int count=Json.integer(row,"attempt_count",0)+(sent?1:0);long wait=error instanceof Providers.RemoteError r?r.retryAfter:0;
         long next=System.currentTimeMillis()+Math.max(wait,Math.min(60000,1000L*(1L<<Math.min(count,6)))+ThreadLocalRandom.current().nextLong(250));
         store.tx(c->{JsonObject current=Store.one(c,"SELECT active_attempt FROM samples WHERE id=?",sampleId);if(current==null||!attempt.equals(Json.str(current,"active_attempt","")))return null;JsonObject run=Store.document(c,"runs",runId);

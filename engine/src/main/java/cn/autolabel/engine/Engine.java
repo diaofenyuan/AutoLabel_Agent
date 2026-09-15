@@ -20,11 +20,11 @@ final class Engine implements AutoCloseable {
         if(value.isBlank())return null;
         try{return Path.of(value);}catch(Exception e){return Path.of(".");}
     }
-    Engine(Path path,JsonObject startup)throws Exception{store=new Store(path,materialsRoot(startup),trainingRoot(startup));projects=new Projects(store);exporter=new Exporter(store,projects);exportFormats=new ExportFormats(store);providers=new Providers(store);localModels=new LocalModels(store,projects);localRuntime=new LocalRuntime(localModels,startup);runs=new Runs(store,projects,providers);runResults=new RunResults(this);inputReuse=new InputResultReuse(this);runs.inputResults=runResults;runs.inputReuse=inputReuse;localRuns=new LocalRuns(this);flows=new Flows(this);mediaJobs=new MediaJobs(this,startup);exporter.mediaJobs=mediaJobs;datasetVersions=new DatasetVersions(store,projects,exporter);exporter.datasetVersions=datasetVersions;tracks=new Tracks(this);trackGenerations=new TrackGenerations(this,tracks);tracks.generations=trackGenerations;trainingRuntime=new TrainingRuntime(localRuntime,startup);localRuntime.shareTrainingRuntime(trainingRuntime);trainingDatasets=new TrainingDatasets(store,projects,datasetVersions);trainingJobs=new TrainingJobs(store,trainingDatasets,localModels,localRuntime,trainingRuntime);runs.flowTick=()->{flows.tick();localRuns.tick();mediaJobs.tick();trackGenerations.tick();trainingJobs.tick();};maintenance=new Maintenance(this);projectDeletion=new ProjectDeletion(this);}
+    Engine(Path path,JsonObject startup)throws Exception{store=new Store(path,materialsRoot(startup),trainingRoot(startup));projects=new Projects(store);exporter=new Exporter(store,projects);exportFormats=new ExportFormats(store);providers=new Providers(store);localModels=new LocalModels(store,projects);localRuntime=new LocalRuntime(localModels,startup);runs=new Runs(store,projects,providers);runResults=new RunResults(this);inputReuse=new InputResultReuse(this);runs.inputResults=runResults;runs.inputReuse=inputReuse;localRuns=new LocalRuns(this);flows=new Flows(this);mediaJobs=new MediaJobs(this,startup);exporter.mediaJobs=mediaJobs;datasetVersions=new DatasetVersions(store,projects,exporter);exporter.datasetVersions=datasetVersions;tracks=new Tracks(this);trackGenerations=new TrackGenerations(this,tracks);tracks.generations=trackGenerations;trainingRuntime=new TrainingRuntime(localRuntime,startup);localRuntime.shareTrainingRuntime(trainingRuntime);trainingDatasets=new TrainingDatasets(store,projects,datasetVersions);trainingJobs=new TrainingJobs(store,trainingDatasets,localModels,localRuntime,trainingRuntime);runs.flowTick=()->{step(flows::tick);step(localRuns::tick);step(mediaJobs::tick);step(trackGenerations::tick);step(trainingJobs::tick);};maintenance=new Maintenance(this);projectDeletion=new ProjectDeletion(this);}
     Object command(String command,JsonObject p)throws Exception{
         if(command.equals("system.canUpdate"))return maintenance.status();if(command.equals("system.prepareUpdate"))return maintenance.prepare();if(command.equals("system.cancelUpdate"))return maintenance.cancel();
         if(command.equals("system.prepareDataMaintenance"))return maintenance.prepareData(p);if(command.equals("system.cancelDataMaintenance"))return maintenance.cancelData(p);
-        if(command.equals("backup.create")||command.equals("restore.prepare")){maintenance.enterOwned(command,p);try{return execute(command,p);}finally{maintenance.leaveOwned();}}
+        if(Maintenance.isDataAction(command)){maintenance.enterOwned(command,p);try{return execute(command,p);}finally{maintenance.leaveOwned();}}
         boolean tracked=maintenance.enter(command);try{return execute(command,p);}finally{if(tracked)maintenance.leave();}
     }
     private Object execute(String command,JsonObject p)throws Exception{return switch(command){
@@ -256,5 +256,14 @@ final class Engine implements AutoCloseable {
     static boolean trackingReviewRequired(JsonObject raw){return Json.bool(raw,"requiresTrackingReview",false);}
     JsonObject settings(){return store.read(c->{JsonObject r=Store.one(c,"SELECT data FROM settings WHERE id='global'");return r==null?Json.obj("theme","light","globalConcurrency",8,"closeBehavior","ask"):Json.parse(r.get("data").getAsString());});}
     JsonObject resourceImage(JsonObject p){ResourceLibrary library=new ResourceLibrary(store,projects);JsonObject resource=library.get(p);if(!Json.required(resource,"kind").equals("reference"))throw new ApiError(422,"reference_invalid","只有人工参考资源包含固定图片。");JsonObject content=Json.object(resource,"content");return Json.obj("resourceId",resource.get("id"),"resourceVersion",resource.get("version"),"path",library.referencePath(content).toString(),"contentHash",content.get("contentHash"),"width",content.get("width"),"height",content.get("height"));}
-    @Override public void close(){trainingJobs.close();datasetVersions.close();trainingRuntime.close();trackGenerations.close();mediaJobs.close();localRuns.close();flows.close();runs.close();providers.close();store.close();}
+    /**
+     * 后台调度与关停的分步兜底。
+     * 调度侧：某一步的偶发异常不应饿死同一轮里的后续步骤，更不应停掉调度线程。
+     * 关停侧：任一环节关闭失败都不能跳过 store.close()，否则 SQLite 连接不关、WAL 不做 checkpoint。
+     */
+    private static void step(Runnable action){
+        try{action.run();}
+        catch(Throwable failure){System.err.println("engine_step_failed:"+failure.getClass().getSimpleName());}
+    }
+    @Override public void close(){step(trainingJobs::close);step(datasetVersions::close);step(trainingRuntime::close);step(trackGenerations::close);step(mediaJobs::close);step(localRuns::close);step(flows::close);step(runs::close);step(providers::close);step(store::close);}
 }

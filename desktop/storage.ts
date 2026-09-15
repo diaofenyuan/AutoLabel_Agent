@@ -250,9 +250,12 @@ export class DataStorage<T extends StorageBackend> {
       credentialScopeId: rebind ? randomUUID() : this.active.credentialScopeId, createdAt: Date.now(), rebind });
     return preparationId;
   }
-  /** 供项目删除等需要独占数据目录的操作复用同一套维护锁与在途任务检查。 */
-  withMaintenance<R>(action: () => Promise<R>): Promise<R> {
-    return this.exclusive(() => this.owned(() => action()));
+  /**
+   * 供项目删除等需要独占数据目录的操作复用同一套维护锁与在途任务检查。
+   * 动作必须拿到本次维护锁的 operationId：引擎只接受携带当前锁归属的破坏性动作。
+   */
+  withMaintenance<R>(action: (operationId: string) => Promise<R>): Promise<R> {
+    return this.exclusive(() => this.owned(operationId => action(operationId)));
   }
   async createBackup(outputDir: string): Promise<unknown> {
     return this.exclusive(() => this.owned(async operationId => {

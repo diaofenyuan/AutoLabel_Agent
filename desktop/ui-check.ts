@@ -1,6 +1,14 @@
 import type { BrowserWindow } from 'electron';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFileSync } from 'node:fs';
 import path from 'node:path';
+
+/** 临时诊断：Electron 是 GUI 子系统程序，stdout 不进控制台，阶段日志只能落盘。 */
+function stage(message: string): void {
+  const target = process.env.AUTOLABEL_STAGE_LOG;
+  if (!target) return;
+  try { appendFileSync(target, `${new Date().toISOString()} ${message}\n`); } catch { /* 诊断失败不影响运行 */ }
+}
 
 export async function checkDesktopConnection(window: BrowserWindow, output: string, control: { stop: () => Promise<void>; restart: () => Promise<unknown> }): Promise<void> {
   const waitFor = async (expression: string) => {
@@ -12,10 +20,15 @@ export async function checkDesktopConnection(window: BrowserWindow, output: stri
     throw new Error('连接状态界面未在预期时间完成变化');
   };
   window.show();
+  stage('conn:shown');
   await waitFor(`!!document.querySelector('.connection .status-dot.ready') && !document.querySelector('.connection-banner')`);
+  stage('conn:ready');
   const before = await window.webContents.executeJavaScript(`({ready:!!document.querySelector('.connection .status-dot.ready'),banner:!!document.querySelector('.connection-banner')})`);
+  stage('conn:before-captured');
   await control.stop();
+  stage('conn:stopped');
   await waitFor(`!!document.querySelector('.connection-banner') && document.querySelector('.connection-banner').innerText.includes('重新连接')`);
+  stage('conn:banner');
   const disconnected = await window.webContents.executeJavaScript(`(()=>{const banner=document.querySelector('.connection-banner');const button=[...banner.querySelectorAll('button')].find(b=>b.innerText.trim()==='重新连接');return {visible:!!banner,role:banner.getAttribute('role'),busy:banner.getAttribute('aria-busy'),buttonEnabled:!!button&&!button.disabled,message:banner.innerText.trim()}})()`);
   await window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
   await writeFile(output.replace(/\.json$/i, '-disconnected.png'), (await window.webContents.capturePage()).toPNG());

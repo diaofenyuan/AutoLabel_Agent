@@ -6,7 +6,8 @@ import java.util.Set;
 
 final class Maintenance {
     private static final Set<String> READ_ONLY=Set.of("project.list","project.open","asset.list","asset.get","annotation.history","export.preflight","export.list","export.compare","provider.list","provider.capabilities","run.list","run.get","run.attempts","budget.get","event.list","event.snapshot","resource.list","settings.get","diagnostics.get","asset.checkLocations","evaluationSet.list","evaluationSet.get","evaluationSet.getTruth","evaluation.preflight","evaluation.list","evaluation.get","evaluation.results","review.list","budget.estimate","evaluation.rerun.preflight","evaluation.rerun.get","resource.get","resource.image","backup.inspect");
-    private static final Set<String> DATA_ACTIONS=Set.of("backup.create","restore.prepare");
+    // 数据维护期间允许执行、但必须声明当前锁归属的破坏性动作：备份、恢复与项目级联删除。
+    private static final Set<String> DATA_ACTIONS=Set.of("backup.create","restore.prepare","project.delete");
     private final Engine engine;
     private String mode,operationId;
     private final Set<String> cancelledOperations=new HashSet<>();
@@ -74,6 +75,8 @@ final class Maintenance {
         ownedActions++;
     }
     synchronized void leaveOwned(){ownedActions--;}
+    /** 调度层据此判断命令是否走「持有维护锁的操作」通道，避免名单在两处各写一份。 */
+    static boolean isDataAction(String command){return DATA_ACTIONS.contains(command);}
     private void requireOwner(String requested){if(!"data".equals(mode))throw modeConflict();if(!requested.equals(operationId))throw ownerConflict();}
     private static String operationId(JsonObject p){
         JsonElement value=p.get("operationId");if(value==null||!value.isJsonPrimitive()||!value.getAsJsonPrimitive().isString()||!value.getAsString().matches("[A-Za-z0-9_-]{1,128}"))throw new ApiError(400,"invalid_argument","operationId 必须为 1～128 个字母、数字、下划线或连字符。");return value.getAsString();

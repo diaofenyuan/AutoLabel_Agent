@@ -13,7 +13,7 @@ final class DataMaintenanceTest {
     static JsonObject owner(){return Json.obj("operationId","fixture-backup-1");}
     static void await(BooleanSupplier condition,String message)throws Exception{long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);while(!condition.getAsBoolean()&&System.nanoTime()<end)Thread.sleep(10);check(condition.getAsBoolean(),message);}
     static JsonObject ready(Engine e)throws Exception{long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);JsonObject state;do{state=cmd(e,"system.prepareDataMaintenance",owner());if(Json.bool(state,"ready",false))return state;Thread.sleep(20);}while(System.nanoTime()<end);throw new AssertionError("maintenance not ready: "+state);}
-    static void run(Path root)throws Exception{ownershipAndRecovery(root);inFlight(root);dispatchBarrier(root);ManualChainTest.root=root;ManualChainTest.maintenance();}
+    static void run(Path root)throws Exception{ownershipAndRecovery(root);ownedProjectDeletion(root);inFlight(root);dispatchBarrier(root);ManualChainTest.root=root;ManualChainTest.maintenance();}
     static void ownershipAndRecovery(Path root)throws Exception{
         Path data=root.resolve("data-maintenance-owner");
         try(Engine e=new Engine(data)){
@@ -31,6 +31,27 @@ final class DataMaintenanceTest {
         }
         try(Engine e=new Engine(data)){check(Json.required(e.runs.get("user"),"pauseReason").equals("user")&&Json.required(e.runs.get("budget_exhausted"),"pauseReason").equals("budget_exhausted")&&Json.required(e.runs.get("result_unknown"),"pauseReason").equals("result_unknown"),"restart preserves existing pause reasons");check(Json.required(e.runs.get("restart"),"pauseReason").equals("restart_review"),"only previously running run gains restart reason");check(!Json.bool(e.runs.diagnostics(),"dataMaintenancePaused",true),"process-owned maintenance flag does not survive restart");}
         try(Engine e=new Engine(root.resolve("data-update-conflict"))){check(Json.bool(cmd(e,"system.prepareUpdate",new JsonObject()),"ready",false),"update lock acquired");ManualChainTest.rejects("maintenance_mode_conflict",()->cmd(e,"system.prepareDataMaintenance",owner()));ManualChainTest.rejects("maintenance_mode_conflict",()->cmd(e,"system.cancelDataMaintenance",owner()));check(Json.bool(cmd(e,"system.canUpdate",new JsonObject()),"locked",false),"data command cannot release update lock");cmd(e,"system.cancelUpdate",new JsonObject());}
+    }
+    /**
+     * 项目删除由桌面端在同一维护锁内发起（先备份、再级联删除），因此它必须与 backup.create 走同一条
+     * 「持有维护锁的动作」通道：既不能在锁外被其它写入绕过，也不能因为锁已生效而自我拒绝。
+     */
+    static void ownedProjectDeletion(Path root)throws Exception{
+        try(Engine e=new Engine(root.resolve("data-project-deletion"))){
+            JsonObject kept=EngineTest.project(e,"detect");String keptId=Json.required(kept,"id");
+            JsonObject doomed=EngineTest.project(e,"detect");String doomedId=Json.required(doomed,"id"),doomedName=Json.required(doomed,"name");
+            String lock=Json.required(owner(),"operationId");
+            ManualChainTest.rejects("invalid_argument",()->cmd(e,"project.delete",Json.obj("projectId",doomedId,"confirmName",doomedName)));
+            ready(e);
+            ManualChainTest.rejects("engine_data_maintenance_locked",()->cmd(e,"project.create",Json.obj("name","blocked","taskType","detect")));
+            ManualChainTest.rejects("maintenance_owner_conflict",()->cmd(e,"project.delete",Json.obj("projectId",doomedId,"confirmName",doomedName,"operationId","another-operation")));
+            JsonObject removed=cmd(e,"project.delete",Json.obj("projectId",doomedId,"confirmName",doomedName,"removeManagedFiles",true,"operationId",lock));
+            check(Json.bool(removed,"deleted",false)&&Json.required(removed,"name").equals(doomedName),"owned project delete runs while the data lock is held");
+            JsonArray remaining=(JsonArray)e.command("project.list",new JsonObject());
+            check(remaining.size()==1&&Json.required(remaining.get(0).getAsJsonObject(),"id").equals(keptId),"cascade removes only the requested project");
+            cmd(e,"system.cancelDataMaintenance",owner());
+            check(((JsonArray)e.command("project.list",new JsonObject())).size()==1,"project list stays consistent after the lock is released");
+        }
     }
     static JsonObject request(JsonObject provider,String pid,JsonArray ids){return Json.obj("projectId",pid,"providerId",provider.get("id"),"model","fixture","prompt","locate","assetIds",ids,"concurrency",1,"maxRequests",10,"maxRetries",0);}
     static void inFlight(Path root)throws Exception{
