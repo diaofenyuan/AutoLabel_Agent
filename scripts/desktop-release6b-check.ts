@@ -17,6 +17,14 @@ export async function checkRelease6b(window: BrowserWindow, output: string, engi
     await wait(`window.autoLabel.request('run.get',{runId:${JSON.stringify(runId)}}).then(run=>run.status==='completed')`);
     return request('run.get', { runId });
   };
+  // 示例只从「设置 → 示例」载入：首屏不再有示例横幅。
+  const loadExample = async () => {
+    await js(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');item.click();})()`);
+    await wait(`!!document.querySelector('.settings-tabs')`);
+    await js(`[...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()==='示例').click()`);
+    await wait(`!!document.querySelector('[aria-label="载入示例"]')`);
+    await js(`document.querySelector('[aria-label="载入示例"]').click()`);
+  };
   let requests = 0; let asset: any;
   // 安装包只检查一组本地协议调用及复用读取，完整策略和竞态已由专项覆盖。
   const server = createServer((incoming, response) => {
@@ -29,8 +37,8 @@ export async function checkRelease6b(window: BrowserWindow, output: string, engi
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
     window.setContentSize(1440, 940); window.show();
-    await wait(`!!document.querySelector('.getting-started button') && !document.querySelector('.connection-banner')`);
-    await js(`document.querySelector('.getting-started button').click()`);
+    await wait(`!!document.querySelector('.chat-home') && !document.querySelector('.connection-banner')`);
+    await loadExample();
     await wait(`!!document.querySelector('.annotation-canvas image')`);
     const project = (await request('project.list'))[0];
     const assets = await request('asset.list', { projectId: project.id, limit: 1 });

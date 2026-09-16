@@ -57,8 +57,17 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
     await Promise.all(document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   })()`);
+  // 示例只从「设置 → 示例」载入：首屏不再有示例引导，脚本统一走这个入口，避免依赖已删除的横幅按钮。
+  const loadExample = async () => {
+    await window.webContents.executeJavaScript(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');
+      if(!item)throw new Error('缺少设置导航项');item.click();})()`);
+    await waitFor(`!!document.querySelector('.settings-tabs')`);
+    await window.webContents.executeJavaScript(`[...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()==='示例').click()`);
+    await waitFor(`!!document.querySelector('[aria-label="载入示例"]')`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="载入示例"]').click()`);
+  };
   window.show();
-  await waitFor(`!!document.querySelector('.getting-started button') && !document.querySelector('.skeleton-list')`);
+  await waitFor(`!!document.querySelector('.chat-home') && !document.querySelector('.skeleton-list')`);
   await waitFor(`!!document.querySelector('.sidebar-status .status-dot.ready') && !document.querySelector('.connection-banner')`);
   for (let i = 0; i < pages.length; i++) {
     if (i === 0) {
@@ -77,7 +86,7 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
       results.push({ check: 'command-palette', ...palette });
     }
     if (i === 1) {
-      await window.webContents.executeJavaScript(`document.querySelector('.getting-started button').click()`);
+      await loadExample();
       await waitFor(`!!document.querySelector('.annotation-canvas image') && !document.querySelector('.image-failure')`);
       const image = await window.webContents.executeJavaScript(`new Promise(resolve=>{
         const source=document.querySelector('.annotation-canvas image').getAttribute('href');
@@ -249,8 +258,14 @@ export async function checkPackagedRelease(window: BrowserWindow, output: string
     throw new Error('新包功能入口未能完成启动');
   };
   window.show();
-  await waitFor(`!!document.querySelector('.getting-started button') && !document.querySelector('.connection-banner')`);
-  await window.webContents.executeJavaScript(`document.querySelector('.getting-started button').click()`);
+  await waitFor(`!!document.querySelector('.chat-home') && !document.querySelector('.connection-banner')`);
+  // 示例入口在「设置 → 示例」，与界面一致，不再依赖首屏横幅。
+  await window.webContents.executeJavaScript(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');
+    if(!item)throw new Error('缺少设置导航项');item.click();})()`);
+  await waitFor(`!!document.querySelector('.settings-tabs')`);
+  await window.webContents.executeJavaScript(`[...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()==='示例').click()`);
+  await waitFor(`!!document.querySelector('[aria-label="载入示例"]')`);
+  await window.webContents.executeJavaScript(`document.querySelector('[aria-label="载入示例"]').click()`);
   await waitFor(`!!document.querySelector('.annotation-canvas image')`);
   await window.webContents.executeJavaScript(`document.querySelectorAll('.nav-item')[3].click()`);
   await waitFor(`[...document.querySelectorAll('button')].some(b=>b.innerText.trim()==='评测与复核')`);

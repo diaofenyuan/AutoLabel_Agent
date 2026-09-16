@@ -11,6 +11,14 @@ export async function checkRelease5(window: BrowserWindow, output: string, engin
   };
   const settle = () => window.webContents.executeJavaScript(`(async()=>{await Promise.all(document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));})()`);
   const capture = async (name: string) => { await settle(); await writeFile(output.replace(/\.json$/i, `-${name}.png`), (await window.webContents.capturePage()).toPNG()); };
+  // 示例只从「设置 → 示例」载入：首屏不再有示例横幅。
+  const loadExample = async () => {
+    await window.webContents.executeJavaScript(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');item.click();})()`);
+    await waitFor(`!!document.querySelector('.settings-tabs')`);
+    await window.webContents.executeJavaScript(`[...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()==='示例').click()`);
+    await waitFor(`!!document.querySelector('[aria-label="载入示例"]')`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="载入示例"]').click()`);
+  };
   const original = engine.request.bind(engine);
   engine.request = async (command: string, payload: Record<string, unknown> = {}, timeout?: number) => {
     if (command === 'asset.list' && payload.limit === 100) report.rendererAssetPageLimit = 100;
@@ -18,8 +26,8 @@ export async function checkRelease5(window: BrowserWindow, output: string, engin
   };
   try {
     window.show();
-    await waitFor(`!!document.querySelector('.getting-started button') && !document.querySelector('.connection-banner')`);
-    await window.webContents.executeJavaScript(`document.querySelector('.getting-started button').click()`);
+    await waitFor(`!!document.querySelector('.chat-home') && !document.querySelector('.connection-banner')`);
+    await loadExample();
     await waitFor(`!!document.querySelector('.annotation-canvas image') && !!document.querySelector('[aria-label="素材页码"]')`);
     report.paginationControls = await window.webContents.executeJavaScript(`!!document.querySelector('[aria-label="上一页素材"]') && !!document.querySelector('[aria-label="下一页素材"]')`);
     await capture('workbench');

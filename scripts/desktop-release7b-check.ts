@@ -24,7 +24,8 @@ export async function checkRelease7b(window: BrowserWindow, output: string, engi
     await writeFile(output.replace(/\.json$/, suffix), (await window.webContents.capturePage()).toPNG());
   };
   window.setContentSize(1440, 940); window.showInactive();
-  await wait(`!!document.querySelector('.getting-started')&&!document.querySelector('.connection-banner')`);
+  // 首屏不再有示例横幅，改用引擎连接状态作为「界面已就绪」的判据。
+  await wait(`!!document.querySelector('.sidebar-status .status-dot.ready')&&!document.querySelector('.connection-banner')`);
   const diagnostics = await engine.request('diagnostics.get'), runtime = await api('media.runtime.get'), local = await api('local.runtime.get');
   assert.equal(diagnostics.databaseVersion, 5); assert.equal(runtime.configured, true); assert.equal(runtime.busy, false);
   assert.equal(local.configured, false); assert.equal(local.workerAvailable, true);

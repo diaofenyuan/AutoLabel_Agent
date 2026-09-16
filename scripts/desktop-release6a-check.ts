@@ -11,14 +11,22 @@ export async function checkRelease6a(window: BrowserWindow, output: string, engi
     throw new Error('6A 页面入口未就绪');
   };
   const request = (command: string, payload: Record<string, unknown> = {}) => window.webContents.executeJavaScript(`window.autoLabel.request(${JSON.stringify(command)},${JSON.stringify(payload)})`);
+  // 示例只从「设置 → 示例」载入：首屏不再有示例横幅。
+  const loadExample = async () => {
+    await window.webContents.executeJavaScript(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');item.click();})()`);
+    await waitFor(`!!document.querySelector('.settings-tabs')`);
+    await window.webContents.executeJavaScript(`[...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()==='示例').click()`);
+    await waitFor(`!!document.querySelector('[aria-label="载入示例"]')`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="载入示例"]').click()`);
+  };
   const waitRun = async (flowRunId: string, expected: string[]) => {
     const deadline = Date.now() + 10000; let run: any;
     do { run = await request('flow.get', { flowRunId }); if (expected.includes(run.status)) return run; if (run.status === 'failed') throw new Error(JSON.stringify(run.steps)); await new Promise(resolve => setTimeout(resolve, 100)); } while (Date.now() < deadline);
     throw new Error('流程状态未收敛：' + JSON.stringify(run));
   };
   window.show();
-  await waitFor(`!!document.querySelector('.getting-started button') && !document.querySelector('.connection-banner')`);
-  await window.webContents.executeJavaScript(`document.querySelector('.getting-started button').click()`);
+  await waitFor(`!!document.querySelector('.chat-home') && !document.querySelector('.connection-banner')`);
+  await loadExample();
   await waitFor(`!!document.querySelector('.annotation-canvas image')`);
   const projects = await request('project.list'); const project = projects[0];
   const assets = await request('asset.list', { projectId: project.id, limit: 1 });
