@@ -16,20 +16,7 @@ export async function checkRelease7a(window: BrowserWindow, output: string, engi
     await wait(`[...document.querySelectorAll('button')].some(button=>button.innerText.trim()===${JSON.stringify(label)}&&!button.disabled)`);
     await js(`[...document.querySelectorAll('button')].find(button=>button.innerText.trim()===${JSON.stringify(label)}&&!button.disabled).click()`);
   };
-  /** 工作台已不占导航位，走快速跳转进入。 */
-  const openWorkbench = async () => {
-    await js(`(async()=>{
-      window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true}));
-      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-      const input=document.querySelector('.command-search input');
-      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,'标注工作台');
-      input.dispatchEvent(new Event('input',{bubbles:true}));
-      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-      window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
-    })()`);
-    await wait(`!!document.querySelector('.page-workbench') && !document.querySelector('.page-loading')`);
-  };
-  // 示例只从「设置 → 示例」载入；载入后落到该项目的会话，素材编辑仍在工作台。
+  // 示例只从「设置 → 示例」载入；载入后落到该项目的会话。
   const loadExample = async () => {
     await js(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');item.click();})()`);
     await wait(`!!document.querySelector('.settings-tabs')`);
@@ -38,7 +25,6 @@ export async function checkRelease7a(window: BrowserWindow, output: string, engi
     await js(`document.querySelector('[aria-label="载入示例"]').click()`);
     // 载入示例自己会跳到该项目的会话：等它落定再导航，否则后面的跳转会被它覆盖。
     await wait(`!!document.querySelector('.page-chat') && !document.querySelector('.page-loading')`);
-    await openWorkbench();
   };
   window.setContentSize(1440, 940); window.show();
   await wait(`!!document.querySelector('.chat-home') && !document.querySelector('.connection-banner')`);
@@ -90,7 +76,7 @@ export async function checkRelease7a(window: BrowserWindow, output: string, engi
     await writeFile(output, JSON.stringify(report, null, 2)); return;
   }
   await loadExample();
-  await wait(`!!document.querySelector('.annotation-canvas image')`);
+  await wait(`!!document.querySelector('.chat-panel') && !document.querySelector('.page-loading')`);
   const project = (await request('project.list'))[0];
   const assets = await request('asset.list', { projectId: project.id, limit: 1 });
   // 无 Python 配置时仍验证真实像素处理及固定媒体读取，不向包中附带测试模型。

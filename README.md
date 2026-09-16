@@ -34,4 +34,4 @@ npm run pack:win
 - `node scripts/validate-agent-integration.mts`：隔离本地协议服务下的 Agent → Java → 标注队列联调，不代表实际服务商验证。
 - `py -3.11 scripts/validate-datasets.py <导出目录...>`：使用已安装的 Ultralytics 读取实际导出数据，不训练模型。
 
-模型 API Key 在应用的模型中心填写，由桌面凭据模块保存；不要放进源码。离线街景为合成图片，附带的两个框是人工预置示范，不是完整真值集或 AI 标注结果。
+模型 API Key 在应用「设置 → 软件 AI 配置」里填写，由桌面凭据模块保存；不要放进源码。离线街景为合成图片，附带的两个框是人工预置示范，不是完整真值集或 AI 标注结果。

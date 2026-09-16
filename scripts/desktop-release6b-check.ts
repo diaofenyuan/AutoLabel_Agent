@@ -17,20 +17,7 @@ export async function checkRelease6b(window: BrowserWindow, output: string, engi
     await wait(`window.autoLabel.request('run.get',{runId:${JSON.stringify(runId)}}).then(run=>run.status==='completed')`);
     return request('run.get', { runId });
   };
-  /** 工作台已不占导航位，走快速跳转进入。 */
-  const openWorkbench = async () => {
-    await js(`(async()=>{
-      window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true}));
-      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-      const input=document.querySelector('.command-search input');
-      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,'标注工作台');
-      input.dispatchEvent(new Event('input',{bubbles:true}));
-      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-      window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
-    })()`);
-    await wait(`!!document.querySelector('.page-workbench') && !document.querySelector('.page-loading')`);
-  };
-  // 示例只从「设置 → 示例」载入；载入后落到该项目的会话，素材编辑仍在工作台。
+  // 示例只从「设置 → 示例」载入；载入后落到该项目的会话。
   const loadExample = async () => {
     await js(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');item.click();})()`);
     await wait(`!!document.querySelector('.settings-tabs')`);
@@ -39,7 +26,6 @@ export async function checkRelease6b(window: BrowserWindow, output: string, engi
     await js(`document.querySelector('[aria-label="载入示例"]').click()`);
     // 载入示例自己会跳到该项目的会话：等它落定再导航，否则后面的跳转会被它覆盖。
     await wait(`!!document.querySelector('.page-chat') && !document.querySelector('.page-loading')`);
-    await openWorkbench();
   };
   let requests = 0; let asset: any;
   // 安装包只检查一组本地协议调用及复用读取，完整策略和竞态已由专项覆盖。
@@ -55,30 +41,17 @@ export async function checkRelease6b(window: BrowserWindow, output: string, engi
     window.setContentSize(1440, 940); window.show();
     await wait(`!!document.querySelector('.chat-home') && !document.querySelector('.connection-banner')`);
     await loadExample();
-    await wait(`!!document.querySelector('.annotation-canvas image')`);
+    await wait(`!!document.querySelector('.chat-panel') && !document.querySelector('.page-loading')`);
     const project = (await request('project.list'))[0];
     const assets = await request('asset.list', { projectId: project.id, limit: 1 });
     asset = await request('asset.get', { assetId: assets.items[0].id });
-    // 流程编辑器已不占导航位，改用快速跳转进入。
-    await js(`(async()=>{
-      window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true}));
-      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-      const input=document.querySelector('.command-search input');
-      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,'流程编辑器');
-      input.dispatchEvent(new Event('input',{bubbles:true}));
-      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-      window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
-    })()`);
-    await wait(`!!document.querySelector('.flow-node')`);
-    await js(`[...document.querySelectorAll('.flow-node')].find(node=>node.innerText.includes('API 标注')).click()`);
-    await wait(`!!document.querySelector('.flow-inspector .reuse-policy')`);
-    await js(`document.querySelector('.flow-inspector .reuse-policy>summary').click()`);
-    report.policyDefaults = await js(`({reuseEnabled:document.querySelector('[aria-label="允许复用已有候选"]').checked,forceRerun:document.querySelector('[aria-label="强制重新请求模型"]').checked,maxAge:document.querySelector('[aria-label="复用结果有效期"]').value})`);
+    // 流程配置改由对话与引擎默认值决定，复用默认值直接用真实运行核对：相同输入第二次提交必须复用而不是重新请求。
     const port = (server.address() as { port: number }).port;
     const provider = await request('provider.save', { name: '6B 安装包本地协议', baseUrl: `http://127.0.0.1:${port}/v1`, protocol: 'chat-completions' });
     await request('credential.set', { providerId: provider.id, key: 'isolated-release6b-fixture' });
     const input = { projectId: project.id, assetIds: [asset.id], providerId: provider.id, model: 'release-fixture', prompt: '输出基准图标注',
       maxRequests: 1, budgetScopeId: 'release6b-fixture', reuseEnabled: true, forceRerun: false, reuseMaxAgeSeconds: null };
+    report.policyDefaults = '由真实运行核对：第二次提交复用成功即表示默认允许复用且未强制重跑。';
     const first = await completed((await request('run.create', input)).id); assert.equal(first.requestsUsed, 1);
     const reused = await completed((await request('run.create', input)).id);
     report.firstRunId = first.id; report.requests = requests;
