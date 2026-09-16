@@ -1,6 +1,11 @@
 import type { ReactNode } from 'react';
 import { AlertCircle, Info } from 'lucide-react';
+import { ACTION_LABELS, REASON_ACTIONS, REASON_LABELS, reasonLabel, type ReasonActionHandlers } from '../../shared/reasons';
 import { Button } from './ui';
+
+// 原因码中文映射与建议动作放在 shared：助手在对话里解释同一件事时读的是同一份表。
+export { reasonLabel, reasonAction } from '../../shared/reasons';
+export type { ReasonActionHandlers, ReasonActionId } from '../../shared/reasons';
 
 /**
  * 原因码 → 面向用户的中文说明与建议动作。
@@ -12,55 +17,6 @@ import { Button } from './ui';
  *    否则界面只能把 `annotation_scope_excluded 10` 这样的原始码摆在用户面前。
  *
  * 动作由调用方按自身能力提供 handler，缺少 handler 的动作不渲染——避免出现点了没反应的按钮。
- */
-export type ReasonActionId = 'openTemplate' | 'openChat' | 'openExport' | 'openAssets' | 'openScreening';
-export type ReasonActionHandlers = { [K in ReasonActionId]?: () => void };
-
-const ACTION_LABELS: Record<ReasonActionId, string> = {
-  openTemplate: '打开类别与点位模板',
-  openChat: '去对话里处理',
-  openExport: '改用数据导出',
-  openAssets: '查看素材',
-  openScreening: '去素材筛选'
-};
-
-/** 聚合计数用的短标签：必须覆盖 DatasetSelection 的全部原因码，否则会在界面上漏出原始码。 */
-const REASON_LABELS: Record<string, string> = {
-  annotation_scope_excluded: '尚未生成正式标注，不在当前标注范围',
-  annotation_scope_confirmed_only: '尚未人工确认',
-  form_video_frame: '视频抽帧素材（同一视频的帧视为一个来源组）',
-  form_derived: '衍生素材',
-  form_overlay_rendering: '叠加框线的效果图',
-  explicit_exclude: '被显式排除',
-  empty_label_excluded: '空标签策略为「全部排除」',
-  empty_label_limit_exceeded: '空标签超出保留上限',
-  class_excluded: '命中「排除类别」',
-  class_not_included: '不在「包含类别」范围',
-  size_excluded: '尺寸不在筛选区间',
-  source_group_excluded: '来源组不在所选范围',
-  time_excluded: '导入时间不在筛选区间',
-  sampled_out: '采样未入选（只作用于训练集）',
-  near_duplicate_folded: '近重复折叠，保留代表样张'
-};
-
-/** 问题码 → 建议动作。只收录「确实有下一步」的码，其余只展示引擎给的中文说明。 */
-const REASON_ACTIONS: Record<string, ReasonActionId> = {
-  annotation_scope_excluded: 'openChat',
-  annotation_scope_confirmed_only: 'openChat',
-  form_video_frame: 'openExport',
-  asset_unlabeled: 'openChat',
-  export_empty: 'openChat',
-  classes_empty: 'openTemplate',
-  classification_missing: 'openTemplate',
-  media_missing: 'openAssets',
-  dataset_augment_flip_requires_symmetry: 'openTemplate',
-  screening_not_complete: 'openScreening',
-  dataset_split_leak_detected: 'openScreening'
-};
-
-/**
- * 提示型错误的中文标题。仅用于把「操作失败」类错误码换成一句可读的话；
- * 数据集与导出的问题明细走上面的 message 直出路径，不在这里重复覆盖。
  */
 const ERROR_TITLES: Record<string, string> = {
   dataset_version_blocked: '数据集体检未通过，请先处理列出的问题',
@@ -101,16 +57,6 @@ export function parseReasonCode(raw: string): { code: string; message: string } 
   const trimmed = (raw ?? '').trim();
   const matched = BRACKET_CODE.exec(trimmed);
   return matched ? { code: matched[1], message: matched[2].trim() || trimmed } : { code: '', message: trimmed };
-}
-
-/** 聚合计数用的中文标签；未收录的码退化为中性描述，绝不把原始码摆到界面上。 */
-export function reasonLabel(code: string): string {
-  return REASON_LABELS[code] ?? '其他原因';
-}
-
-export function reasonAction(code: string): { id: ReasonActionId; label: string } | null {
-  const id = REASON_ACTIONS[code];
-  return id ? { id, label: ACTION_LABELS[id] } : null;
 }
 
 /**
@@ -169,13 +115,24 @@ export function ReasonIssueList({ issues, handlers, limit = 6, grouped = false }
   </div>;
 }
 
-/** 遗漏范围摘要：把「原因码 张数」渲染成可读列表。 */
-export function ReasonSummary({ reasons, limit = 6 }: { reasons: Record<string, number>; limit?: number }): ReactNode {
+/**
+ * 遗漏范围摘要：把「原因码 张数」渲染成可读列表。
+ *
+ * 传入 `handlers` 时，每一类原因后面带上它能兑现的下一步（例如视频帧 → 「改用数据导出」）。
+ * 聚合结构里没有逐张素材明细，界面无法列出「被排除的 7 张是哪 7 张」，
+ * 但把出路摆在原因旁边同样能让用户从「知道被排除了」走到「知道该用哪条链路」。
+ */
+export function ReasonSummary({ reasons, limit = 6, handlers }: { reasons: Record<string, number>; limit?: number; handlers?: ReasonActionHandlers }): ReactNode {
   const entries = Object.entries(reasons);
   if (!entries.length) return null;
   const shown = entries.slice(0, limit);
   return <ul className="reason-summary">
-    {shown.map(([code, count]) => <li key={code}><span>{reasonLabel(code)}</span><strong>{count} 张</strong></li>)}
+    {shown.map(([code, count]) => {
+      const action = REASON_ACTIONS[code];
+      const handler = action ? handlers?.[action] : undefined;
+      return <li key={code}><span>{reasonLabel(code)}</span><strong>{count} 张</strong>
+        {handler && <Button onClick={handler}>{ACTION_LABELS[action!]}</Button>}</li>;
+    })}
     {entries.length > limit && <li className="muted tiny">另有 {entries.length - limit} 类原因未显示。</li>}
   </ul>;
 }

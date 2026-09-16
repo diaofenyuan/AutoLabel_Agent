@@ -537,7 +537,10 @@ export class DesktopError extends Error {
 }
 
 const agentCommands = new Set(['provider.list', 'provider.capabilities', 'chat.send', 'chat.cancel', 'project.open', 'asset.list', 'asset.get',
+  // dataset.version.preflight 是只读预检：助手要能自查「素材为什么进不了数据集版本」（含视频帧硬规则），
+  // 否则用户问到时只能猜。创建 / 取消 / 删除仍然留在白名单之外。
   'run.list', 'run.get', 'run.create', 'run.pause', 'run.resume', 'run.cancel', 'export.preflight', 'export.create',
+  'dataset.version.preflight',
   'export.format.list', 'export.format.get',
   'evaluationSet.list', 'evaluationSet.get', 'evaluation.list', 'evaluation.get', 'evaluation.results',
   'evaluation.preflight', 'evaluation.create', 'review.list',

@@ -256,10 +256,11 @@ export function DatasetVersionDialog({ project, onClose, onOpenTemplate, onOpenC
           {!!preflight.transformPreview && (preflight.transformPreview as Record<string, unknown>).enabled === true
             && <p>按当前转换预计 {String((preflight.transformPreview as Record<string, unknown>).estimatedItems ?? '—')} 个版本项（含变体）</p>}
           {!!preflight.splitPreview && <p>预计划分：{(['train', 'val', 'test'] as const).map(key => `${key} ${String(((preflight.splitPreview as { actualGroups?: Record<string, unknown> }).actualGroups ?? {})[key] ?? '—')} 组`).join(' · ')}</p>}
-          {/* 遗漏范围给中文标签，问题清单给引擎原文 + 直达动作：只报数量的写法用户无法据此行动。 */}
+          {/* 遗漏范围给中文标签，并带上这一类原因能走的下一步：视频帧只保留「改用数据导出」这条真实出路。 */}
           {Object.keys(preflightReasons(preflight)).length > 0 && <div className="version-preview-block">
             <p>遗漏范围（{String(preflight.excludedTotal ?? preflight.excluded ?? 0)} 张）</p>
-            <ReasonSummary reasons={preflightReasons(preflight)} />
+            <ReasonSummary reasons={preflightReasons(preflight)} handlers={issueHandlers} />
+            {Object.hasOwn(preflightReasons(preflight), 'form_video_frame') && <p className="muted tiny">视频抽帧素材不进数据集版本：同一视频的所有帧属于同一个来源组，拆分会让训练集与验证集互相泄漏。这批素材可以正常「数据导出」，但训练快照只能由数据集版本建立。</p>}
           </div>}
           <ReasonIssueList issues={preflightIssues(preflight)} handlers={issueHandlers} /></div>}
       </form>}

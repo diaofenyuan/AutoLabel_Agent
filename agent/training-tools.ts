@@ -1,4 +1,5 @@
 import { TRAINING_LIMITS, TRAINING_OPTIMIZERS } from '../shared/training.ts';
+import { reasonBreakdown } from '../shared/reasons.ts';
 import type { ToolDefinition, ToolEnvironment } from './tools.ts';
 import { registeredLocalModel } from './inference-tools.ts';
 import { AgentError, fields, id, integer, object, text } from './validation.ts';
@@ -154,6 +155,26 @@ function jobId(value: unknown, env: ToolEnvironment) {
 }
 
 export const TRAINING_TOOL_DEFINITIONS: ToolDefinition[] = [
+  { name: 'dataset_preflight', description: '只读检查当前项目能否生成数据集版本：可用素材、来源组、标注范围外的素材及中文原因、阻断项与体检问题。不会创建版本，也不返回文件路径。注意：视频抽帧素材按固定规则排除在数据集版本之外——同一视频的所有帧属于同一个来源组，拆开会让训练集与验证集互相泄漏；这类素材可以正常导出，但训练快照只能由数据集版本建立。',
+    parameters: schema({ annotationScope: { type: ['string', 'null'], enum: ['labeled', 'confirmed', 'all', null] } }), mutation: false,
+    async execute(args, env) {
+      fields(args, ['annotationScope']); active(env);
+      const project = projectId(env);
+      const scope = args.annotationScope == null ? 'labeled' : String(args.annotationScope);
+      if (!['labeled', 'confirmed', 'all'].includes(scope)) throw new AgentError('INVALID_ARGUMENT', '标注范围应为 labeled、confirmed 或 all');
+      const result = object(await env.engine.request('dataset.version.preflight', { projectId: project, annotationScope: scope }), '数据集预检');
+      const rawReasons = object(result.excludedByReason ?? {}, '遗漏范围');
+      // 原因码在这里就翻成中文：助手读到的已经是可读说明，不会把原始码复述给用户。
+      const reasons = Object.fromEntries(Object.entries(rawReasons).filter(([, count]) => typeof count === 'number')) as Record<string, number>;
+      const inspection = result.inspection == null ? null : object(result.inspection, '数据集体检');
+      return compact({ projectId: project, annotationScope: scope,
+        assets: integer(result.assets, '可用素材', 0, Number.MAX_SAFE_INTEGER),
+        excluded: integer(result.excluded, '范围外素材', 0, Number.MAX_SAFE_INTEGER),
+        groups: integer(result.groups, '来源组', 0, Number.MAX_SAFE_INTEGER),
+        blocking: integer(result.blocking, '阻断项', 0, Number.MAX_SAFE_INTEGER), canBuild: result.canBuild === true,
+        // 体检问题同样只给中文说明：原始码留给界面上的「诊断详情」，不进对话上下文。
+        excludedReasons: reasonBreakdown(reasons), issues: issues(inspection?.issues ?? null, '数据集体检问题').map(item => pick(item, ['severity', 'message'])) });
+    } },
   { name: 'list_dataset_versions', description: '分页列出当前项目已生成的数据集版本：划分比例、规模与构建状态。版本不可变，这里只读取摘要；不会创建、修改或删除版本，也不返回清单与文件路径。',
     parameters: schema({ offset: nullableInteger(0, 2147483647), limit: nullableInteger(1, 100) }), mutation: false,
     async execute(args, env) {

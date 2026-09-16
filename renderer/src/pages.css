@@ -426,3 +426,5 @@
 .run-next-steps>h3{font-size:12px;font-weight:550;margin:0 0 9px}
 .run-next-steps>.actions{display:flex;gap:7px;flex-wrap:wrap}
 .run-next-steps>p{margin:9px 0 0;line-height:1.7}
+/* 遗漏范围里每类原因带的下一步动作：行内小按钮，不抢原因与张数的可读性。 */
+.reason-summary>li>.button{min-height:24px;padding:2px 8px;font-size:10px;margin-left:auto}

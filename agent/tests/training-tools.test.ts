@@ -27,6 +27,11 @@ function fixture() {
   const engine: EngineClient = { async request<T>(command: string, payload: RecordValue = {}) {
     calls.push({ command, payload });
     if (command === 'dataset.version.list') return { items: state.versions.slice(payload.offset as number, (payload.offset as number) + (payload.limit as number)), total: state.versions.length, offset: payload.offset, limit: payload.limit } as T;
+    if (command === 'dataset.version.preflight') return { projectId: 'project-1', taskType: 'detect', annotationScope: payload.annotationScope ?? 'labeled',
+      assets: 0, excluded: 7, groups: 0, excludedTotal: 9, blocking: 1, canBuild: false,
+      excludedByReason: { form_video_frame: 7, annotation_scope_excluded: 2 },
+      inspection: { issues: [{ severity: 'error', code: 'export_empty', message: '没有可导出的素材。', assetId: 'D:/private/asset.png' }] },
+      private: 'D:/private/preflight' } as T;
     if (command === 'training.dataset.list') return { items: state.datasets.slice(payload.offset as number, (payload.offset as number) + (payload.limit as number)), total: state.datasets.length, offset: payload.offset, limit: payload.limit } as T;
     if (command === 'training.dataset.get') return structuredClone(state.datasets.find(item => item.id === payload.datasetId) ?? {}) as T;
     if (command === 'training.dataset.create') return structuredClone(state.datasets[0]) as T;
@@ -58,6 +63,24 @@ test('训练来源只读取当前项目的数据集版本与快照，不返回�
   f.state.versions[0] = { ...version, projectId: 'other-project' };
   await assert.rejects(tool('list_dataset_versions').execute({}, f.environment), /不属于当前项目/);
   await assert.rejects(tool('list_training_datasets').execute({ limit: 101 }, f.environment), /不支持的参数|每页数量/);
+});
+
+test('数据集预检只读，原因与问题都以中文返回，不带原始码与本地路径', async () => {
+  const f = fixture();
+  const report = await tool('dataset_preflight').execute({ annotationScope: 'all' }, f.environment) as RecordValue;
+  assert.deepEqual(f.calls.at(-1), { command: 'dataset.version.preflight', payload: { projectId: 'project-1', annotationScope: 'all' } });
+  assert.equal(report.canBuild, false); assert.equal(report.blocking, 1); assert.equal(report.excluded, 7);
+  const text = JSON.stringify(report);
+  // 原因码与问题码都必须已经在工具侧翻成中文，否则助手会把它们原样复述给用户。
+  assert.equal(/form_video_frame|annotation_scope_excluded|export_empty/.test(text), false, text);
+  assert.ok(text.includes('视频抽帧素材'), text);
+  assert.ok(text.includes('尚未生成正式标注'), text);
+  assert.ok(text.includes('没有可导出的素材。'), text);
+  assert.equal(text.includes('D:/private'), false);
+  await tool('dataset_preflight').execute({ annotationScope: null }, f.environment);
+  assert.deepEqual(f.calls.at(-1)!.payload, { projectId: 'project-1', annotationScope: 'labeled' });
+  await assert.rejects(tool('dataset_preflight').execute({ annotationScope: 'everything' }, f.environment), /标注范围/);
+  await assert.rejects(tool('dataset_preflight').execute({ annotationScope: 'all', projectId: 'other' }, f.environment), /不支持的参数/);
 });
 
 test('训练快照只能由已生成版本建立，提交前先预检且不猜测参数', async () => {
