@@ -9,7 +9,7 @@ import { TaskCards } from './TaskCards';
 import ModelPicker from './ModelPicker';
 import FlowPicker from './FlowPicker';
 import { DropOverlay } from './fileDrop';
-import { useChatFileDrop } from './chatDrop';
+import { VideoPickList, useChatFileDrop } from './chatDrop';
 import { useEffect, useRef } from 'react';
 import { MessageSquare, Settings2, FolderOpen, Sparkles } from 'lucide-react';
 import { blankChatSession, useApp, type ChatSession } from './context';
@@ -157,6 +157,8 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
         {!aiConfigured && <span className="muted tiny">配置 AI 后可自动标注</span>}
       </div>
     </footer>
+    {/* 拖入多个视频时先给候选清单：原先只打开第一个，其余文件名连提都不提。 */}
+    <VideoPickList picks={drop.picks} onChoose={drop.chooseVideo} onClose={drop.closePicks} />
     {drop.video && <VideoImport key={drop.video.path} projectId={drop.video.projectId} initialSourcePath={drop.video.path} onClose={drop.closeVideo}
       onCreated={(job, temporarySource) => {
         setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource }); drop.closeVideo();

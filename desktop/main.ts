@@ -44,6 +44,8 @@ const chatStore = new ChatStore(() => storagePaths?.entries.find(entry => entry.
 const iconPath = path.join(root, 'build', 'icon.png');
 /** 视频候选清单的上限：界面上是一份让用户逐个点「抽帧」的列表，不需要把上万条路径送回渲染层。 */
 const MEDIA_LIST_LIMIT = 500;
+/** 单次拖入的文件数上限：超量时把「上限」和「本次数量」一起回给界面，而不是抛错误码。 */
+const DROP_FILE_LIMIT = 500;
 const grants = new PathGrants();
 const localExecution = new LocalExecutionSettings(preferenceStore, grants);
 const mediaExecution = new MediaExecutionSettings(preferenceStore, grants, path.join(app.isPackaged ? process.resourcesPath : path.join(root, 'build'), 'media-tools'));
@@ -533,20 +535,28 @@ function registerIpc(): void {
   });
   /**
    * 拖入对话的文件与文件选择器同属用户显式动作，按同样的规则登记授权。
-   * 类型只认图片与视频（其余由界面明确告知不支持），授权范围由主进程按扩展名判定，不交给渲染层。
    * 白名单取 shared/mediaFormats：与选择器、目录扫描共用一份，图片收紧到引擎真正能收的 jpg/jpeg/png。
+   *
+   * 拒绝项返回 `{name, reason}` 而不是文件名数组，超量也不抛原始错误码：
+   * 界面上「暂不支持这些文件：images」既分不清是格式问题还是数量问题，也没有下一步。
+   * 目录按 kind:'directory' 授权，交由引擎递归收集。
    */
   handle('autolabel:grant-dropped-files', async (_event, values) => {
-    if (!Array.isArray(values) || !values.length || values.length > 500) throw new DesktopError('INVALID_PAYLOAD', '拖入的文件数量无效');
-    const granted: string[] = []; const rejected: string[] = [];
+    if (!Array.isArray(values) || !values.length) return { granted: [], rejected: [], overLimit: { limit: DROP_FILE_LIMIT, received: 0 } };
+    if (values.length > DROP_FILE_LIMIT) return { granted: [], rejected: [], overLimit: { limit: DROP_FILE_LIMIT, received: values.length } };
+    const granted: string[] = []; const rejected: Array<{ name: string; reason: string }> = [];
     for (const value of values) {
-      if (typeof value !== 'string' || !value || value.length > 32767 || !path.isAbsolute(value)) { rejected.push(String(value).slice(0, 200)); continue; }
-      const kind = isImagePath(value) ? 'images' : isVideoPath(value) ? 'video' : '';
-      if (!kind) { rejected.push(path.basename(value)); continue; }
+      if (typeof value !== 'string' || !value || value.length > 32767 || !path.isAbsolute(value)) { rejected.push({ name: String(value).slice(0, 200), reason: 'invalid_path' }); continue; }
       try {
-        if (!(await stat(value)).isFile()) { rejected.push(path.basename(value)); continue; }
+        const info = await stat(value);
+        const display = path.basename(value) || value;
+        // 文件夹按目录授权，由引擎按 jpg/jpeg/png 递归收集；单文件按扩展名判定。
+        if (info.isDirectory()) { granted.push(await grants.add(value, 'directory')); continue; }
+        if (!info.isFile()) { rejected.push({ name: display, reason: 'unsupported_extension' }); continue; }
+        const kind = isImagePath(value) ? 'images' : isVideoPath(value) ? 'video' : '';
+        if (!kind) { rejected.push({ name: display, reason: 'unsupported_extension' }); continue; }
         granted.push(await grants.add(value, kind));
-      } catch { rejected.push(path.basename(value)); }
+      } catch { rejected.push({ name: path.basename(value) || String(value).slice(0, 200), reason: 'invalid_path' }); }
     }
     return { granted, rejected };
   });

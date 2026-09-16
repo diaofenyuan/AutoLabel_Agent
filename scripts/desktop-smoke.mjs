@@ -178,7 +178,11 @@ if (directoryImportOnly) {
   // 视频文件夹先列候选再逐个发起，点「抽帧」真的打开抽帧面板。
   assert.equal(byCheck.get('video-folder-picker')?.candidates, 2);
   assert.equal(byCheck.get('video-folder-picker')?.panelOpened, true);
-  console.log(`目录导入与白名单一致性检查通过：${output}`); process.exit(0);
+  // 拖入契约：图片与文件夹放行、txt 与 webp 带原因拒绝、超量回落上限与本次数量。
+  assert.equal(byCheck.get('drop-contract')?.declared, 2);
+  assert.equal(byCheck.get('drop-contract')?.extensionReasons, 2);
+  assert.deepEqual(byCheck.get('drop-contract')?.overLimit, { limit: 500, received: 501 });
+  console.log(`目录导入、拖入限制与白名单一致性检查通过：${output}`); process.exit(0);
 }
 if (projectIdentityOnly) {
   assert.equal(result.passed, true);

@@ -2,28 +2,16 @@ import { useState } from 'react';
 import { FolderPlus, Image as ImageIcon, Film } from 'lucide-react';
 import { useApp } from './context';
 import { request, errorMessage, getBridge } from './bridge';
-import { Button, Composer, Modal } from './ui';
+import { Composer } from './ui';
 import { AiSetupNotice } from './AiSetup';
 import { DropOverlay } from './fileDrop';
-import { useChatFileDrop } from './chatDrop';
+import { VideoPickList, useChatFileDrop } from './chatDrop';
 import VideoImport from './VideoImport';
 import ModelPicker from './ModelPicker';
 import FlowPicker from './FlowPicker';
 import { VIDEO_EXTENSION_LABEL } from '../../shared/mediaFormats';
+import { directoryName, folderName, sameNameProject } from './projectNaming';
 import type { Project } from './types';
-
-/** 从导入路径里取一个像样的项目名：用文件所在文件夹名，取不到就退回通用名。 */
-function folderName(file: string): string {
-  const parts = file.split(/[\\/]/).filter(Boolean);
-  const name = parts.length >= 2 ? parts[parts.length - 2] : '';
-  return name.slice(0, 80) || '未命名项目';
-}
-/** 选中文件夹时项目名取它自己的名字：用 folderName 会取到上一级，与用户预期不符。 */
-function directoryName(directory: string): string {
-  const parts = directory.split(/[\\/]/).filter(Boolean);
-  return parts[parts.length - 1]?.slice(0, 80) || '未命名项目';
-}
-const baseName = (value: string) => value.split(/[\\/]/).filter(Boolean).pop() ?? value;
 
 /**
  * 欢迎页：还没有进入任何项目时落在这里。
@@ -36,8 +24,6 @@ export default function ChatHome() {
   const [busy, setBusy] = useState(false);
   // 欢迎页还没有项目时，用户点「选择视频抽帧」要先有一个项目承载抽帧产物；这里存下这次点击建好的项目与选中路径。
   const [videoStart, setVideoStart] = useState<{ projectId: string; path: string } | null>(null);
-  /** 一次选了多个视频（多选或整个文件夹）时的候选清单：逐个发起抽帧，不做队列调度。 */
-  const [videoPicks, setVideoPicks] = useState<{ projectId: string; files: string[] } | null>(null);
   const drop = useChatFileDrop();
   // 欢迎页还没有会话，选择模型与深度即写入默认值：新建会话与任务都以它为初值。
   const choice = { providerId: prefs.chatProviderId, model: prefs.chatModel, depth: prefs.chatThinkingDepth ?? 'standard' };
@@ -49,7 +35,7 @@ export default function ChatHome() {
   const recentProjects = [...projects].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? ''))).slice(0, 3);
   // 首行前 40 字就是项目名。把它先算出来显示在输入框旁：用户才知道这句话会落到哪个项目，而不是发完才发现多了一个项目。
   const pendingName = input.trim().split('\n')[0].slice(0, 40).trim();
-  const sameNameProject = pendingName ? projects.find(item => item.name === pendingName) : undefined;
+  const pendingExisting = pendingName ? sameNameProject(projects, pendingName) : undefined;
 
   /**
    * 同名项目默认复用而不是再建一个。
@@ -57,10 +43,9 @@ export default function ChatHome() {
    * 助手又会落在空的那个上——复用是这个问题的源头修复。
    */
   async function resolveProject(name: string, description?: string): Promise<{ project: Project; reused: boolean }> {
-    const trimmed = name.trim().slice(0, 80);
-    const existing = projects.find(item => item.name === trimmed);
+    const existing = sameNameProject(projects, name);
     if (existing) return { project: existing, reused: true };
-    return { project: await request<Project>('project.create', { name: trimmed, description, taskType: 'detect' }), reused: false };
+    return { project: await request<Project>('project.create', { name: name.trim().slice(0, 80), description, taskType: 'detect' }), reused: false };
   }
 
   /** 建项目 → 进入该项目的会话 → 首条消息自动发出。同名项目已存在时接入它，不再新建。 */
@@ -117,7 +102,7 @@ export default function ChatHome() {
       if (reused) notify(`已接入同名项目「${target.name}」，抽帧素材会并入其中。`);
       // 多个视频先给清单：同时起多个抽帧任务既慢又难查，交给用户一个个来。
       if (paths.length === 1) setVideoStart({ projectId: target.id, path: paths[0] });
-      else setVideoPicks({ projectId: target.id, files: paths });
+      else drop.openPicks({ projectId: target.id, files: paths });
     } catch (e) { notify(errorMessage(e), true); }
     finally { setBusy(false); }
   }
@@ -164,7 +149,7 @@ export default function ChatHome() {
       }
       const { project: target } = await resolveProject(directoryName(directory));
       await refreshProjects();
-      setVideoPicks({ projectId: target.id, files: scanned.files });
+      drop.openPicks({ projectId: target.id, files: scanned.files });
     } catch (e) { notify(errorMessage(e), true); }
     finally { setBusy(false); }
   }
@@ -191,8 +176,8 @@ export default function ChatHome() {
           <FlowPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
           {/* 把落点写在发送之前：新建还是并入同名项目，用户发之前就能看到。 */}
           {pendingName
-            ? <span className="composer-hint">{sameNameProject
-              ? `将并入已有项目「${sameNameProject.name}」（现有 ${sameNameProject.assetCount} 张素材）`
+            ? <span className="composer-hint">{pendingExisting
+              ? `将并入已有项目「${pendingExisting.name}」（现有 ${pendingExisting.assetCount} 张素材）`
               : `将新建项目「${pendingName}」`} · Ctrl + Enter 发送</span>
             : <span className="composer-hint">Ctrl + Enter 发送 · 会按这句话建好项目并开始第一条对话</span>}
         </div>
@@ -203,17 +188,8 @@ export default function ChatHome() {
         <span className="muted tiny">这里的默认值用于新建的对话与任务</span>
       </div>
     </footer>
-    {/* 一次选了多个视频（多选或整个文件夹）时的候选清单：一次起一个抽帧任务，抽完再点下一个。 */}
-    {videoPicks && <Modal title="选择要抽帧的视频" onClose={() => setVideoPicks(null)}>
-      <div className="form-stack">
-        <p className="muted tiny">共 {videoPicks.files.length} 个候选，一次处理一个：抽完一个再点下一个，避免多个抽帧任务同时跑。</p>
-        <div className="board-list">{videoPicks.files.map(file => <article className="board-row" key={file}>
-          <div className="board-main"><strong>{baseName(file)}</strong><span className="muted tiny break-word">{file}</span></div>
-          <Button onClick={() => { const target = videoPicks.projectId; setVideoPicks(null); setVideoStart({ projectId: target, path: file }); }}>抽帧</Button>
-        </article>)}</div>
-        <div className="modal-actions"><Button onClick={() => setVideoPicks(null)}>关闭</Button></div>
-      </div>
-    </Modal>}
+    {/* 多选视频或视频文件夹选出来的候选清单：与拖入多个视频共用同一个组件。 */}
+    <VideoPickList picks={drop.picks} onChoose={path => { const target = drop.picks?.projectId; drop.closePicks(); if (target) setVideoStart({ projectId: target, path }); }} onClose={drop.closePicks} />
     {/* 拖入视频与点击「选择视频抽帧」都走同一个抽帧面板：区别只在于项目是拖放时建的还是按钮提前建好的。 */}
     {(drop.video ?? videoStart) && (() => {
       const source = drop.video ?? videoStart!;

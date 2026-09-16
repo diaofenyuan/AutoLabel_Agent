@@ -81,6 +81,22 @@ export async function checkDesktopDirectoryImport(window: BrowserWindow, output:
     const notice = await js<string>(`document.querySelector('.toast')?.innerText ?? ''`);
     checks.push({ check: 'image-folder-import', assets: listed.total, unsupported: scan.unsupported, noticeCaptured: notice.includes('不是 JPG') });
 
+    // ===== 拖入契约：拒绝要带原因，超量要说上限与本次数量，不抛内部错误码 =====
+    const notAnImage = path.join(imageFolder, 'README.txt');
+    const webp = path.join(imageFolder, 'c.webp');
+    const grantedRun = await js<{ granted: string[]; rejected: Array<{ name: string; reason: string }>; overLimit?: { limit: number; received: number } }>(
+      `window.autoLabel.grantDroppedFiles(${json([path.join(imageFolder, 'a.jpg'), notAnImage, webp, videoFolder])})`);
+    assert.equal(grantedRun.granted.length, 2, `单张图片与文件夹都应被接受，实际：${json(grantedRun.granted)}`);
+    const reasons = Object.fromEntries(grantedRun.rejected.map(item => [item.name, item.reason]));
+    assert.equal(reasons['README.txt'], 'unsupported_extension', `txt 应给出扩展名原因，实际：${json(grantedRun.rejected)}`);
+    assert.equal(reasons['c.webp'], 'unsupported_extension', `webp 不在引擎能力内，应被拒绝，实际：${json(grantedRun.rejected)}`);
+    assert.equal(grantedRun.overLimit, undefined, '未超量时不应回落上限信息');
+    const overLimit = await js<{ granted: string[]; overLimit?: { limit: number; received: number } }>(
+      `window.autoLabel.grantDroppedFiles(Array.from({length:501},(_,i)=>'C:/tmp/f'+i+'.jpg'))`);
+    assert.equal(overLimit.granted.length, 0, '超量时不应放行任何路径');
+    assert.deepEqual(overLimit.overLimit, { limit: 500, received: 501 }, `超量应回落上限与本次数量，实际：${json(overLimit.overLimit)}`);
+    checks.push({ check: 'drop-contract', declared: grantedRun.granted.length, extensionReasons: 2, overLimit: overLimit.overLimit });
+
     // ===== 视频文件夹：先列候选，再逐个发起 =====
     await js(`[...document.querySelectorAll('.sidebar-scroll .nav-item')].find(b=>b.innerText.trim()==='新对话').click()`);
     await waitFor(`!!document.querySelector('.chat-suggestions')`);

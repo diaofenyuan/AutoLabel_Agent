@@ -71,8 +71,11 @@ export interface DesktopBridge {
   windowAction(action: 'minimize' | 'maximize' | 'close'): Promise<void>;
   /** 拖入的 File 拿不到磁盘路径（Electron 32 起已移除 File.path），必须由 preload 解析。 */
   pathForFile?(file: File): string;
-  /** 拖入等于用户显式选择：把文件登记进桌面授权表，否则后续命令会以「路径未授权」被拒。 */
-  grantDroppedFiles?(paths: string[]): Promise<{ granted: string[]; rejected: string[] }>;
+  /**
+   * 拖入等于用户显式选择：把文件与文件夹登记进桌面授权表，否则后续命令会以「路径未授权」被拒。
+   * 拒绝项带原因是刻意的：界面要能分清「格式不支持」「路径失效」「一次拖太多」并分别给出下一步。
+   */
+  grantDroppedFiles?(paths: string[]): Promise<{ granted: string[]; rejected: Array<{ name: string; reason: string }>; overLimit?: { limit: number; received: number } }>;
 }
 
 declare global { interface Window { autoLabel?: DesktopBridge } }
