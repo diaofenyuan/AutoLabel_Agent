@@ -23,7 +23,7 @@ const versionStatusNames: Record<string, string> = { draft: '草稿', building: 
  * 这里不放任何编辑表单——标注修正、建版本、导出都在对话里发起；页面只聚合已经存在的结果。
  */
 export default function ProjectOverview() {
-  const { project, notify, navigate, assetTotal, openProject } = useApp();
+  const { project, notify, navigate, assetTotal, openProject, selectedAssetIds, setSelectedAssetIds } = useApp();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -58,6 +58,19 @@ export default function ProjectOverview() {
   if (!project) return <div className="content"><Empty icon={<FolderOpen size={28} />} title="还没有打开项目"
     description="从对话开始描述要标注什么，助手会建好项目；也可以直接打开侧栏里的项目。">
     <Button onClick={() => void navigate('chat')}><MessageSquare size={14} />去对话</Button></Empty></div>;
+
+  /**
+   * 勾选是「这次要让助手处理哪些素材」的唯一入口：工作台退场后，对话里的「已勾选（跨页）」
+   * 只能靠这里填充。改成未按住多选 keys，保持逐个点选足够。
+   */
+  function toggleAsset(id: string) {
+    setSelectedAssetIds(list => list.includes(id) ? list.filter(item => item !== id) : [...list, id]);
+  }
+  /** 全选只合并当前已加载的素材，不清掉之前跨页选中的那些。 */
+  function selectLoaded() {
+    setSelectedAssetIds(list => [...new Set([...list, ...assets.map(item => item.id)])]);
+  }
+  const selectedCount = selectedAssetIds.length;
 
   const distribution = project.classes.map(label => ({ ...label,
     count: assets.reduce((sum, asset) => sum + asset.annotations.filter(annotation => annotation.classId === label.id).length, 0) })).filter(item => item.count > 0);
@@ -108,21 +121,37 @@ export default function ProjectOverview() {
       <div className="result-card-head">
         <div>
           <h3>只读抽查</h3>
-          <p className="muted tiny">已加载 {assets.length} / 共 {assetTotal || total} 张 · 点开图片可以看到框与类别，修改请在对话里说明。</p>
+          <p className="muted tiny">已加载 {assets.length} / 共 {assetTotal || total} 张 · 勾选想要的素材，再去对话里让助手只处理这些；点开图片可以看到框与类别，修改请在对话里说明。</p>
         </div>
         <div className="actions"><Button busy={loading} disabled={loading} onClick={() => void loadAssets(0)}><RefreshCw size={14} />刷新</Button></div>
       </div>
       {distribution.length > 0 && <div className="result-stats">{distribution.map(item => <span key={item.id}><i style={{ background: item.color }} />{item.name} <strong>{item.count}</strong></span>)}</div>}
       {loading && !assets.length ? <Loading label="正在读取素材…" />
-        : assets.length ? <div className="result-grid">{assets.map(asset => <div className="result-thumb-wrap" key={asset.id}>
-          <button className="result-thumb" title={`${asset.name} · ${statusNames[asset.status] ?? asset.status}`} onClick={() => setPreview(asset)}>
-            <img loading="lazy" src={asset.thumbnailUrl || asset.mediaUrl} alt={asset.name} />
-            <span className="truncate">{asset.name}</span>
-            <small>{statusNames[asset.status] ?? asset.status} · {asset.annotations.length} 个</small>
-          </button>
-          {/* 版本记录、标签导入、效果图与文件位置这些命令不属于画布编辑，留在素材上，工作台退场后仍有入口。 */}
-          <IconButton label={`${asset.name} 的素材与标注操作`} className="result-thumb-more" onClick={() => setActions(asset)}><MoreHorizontal size={14} /></IconButton>
-        </div>)}</div>
+        : assets.length ? <>
+          <div className="asset-selection" role="region" aria-label="素材选择">
+            <span className="asset-selection-count">{selectedCount ? `已选 ${selectedCount} 张` : '未选中素材'}</span>
+            <div className="actions">
+              <Button disabled={!loading && !assets.length} onClick={selectLoaded}>全选已加载</Button>
+              <Button disabled={!selectedCount} onClick={() => setSelectedAssetIds([])}>清空选择</Button>
+              {/* 勾完之后下一步就是到对话里说要标什么，直接把人送到那里，并在提示里说明范围该怎么选。 */}
+              <Button className="primary" disabled={!selectedCount} onClick={() => void openProject(project)
+                .then(() => notify('已进入对话：把助手处理范围改成「已勾选（跨页）」，再说明要标注的目标。'))
+                .catch(e => notify(errorMessage(e), true))}><MessageSquare size={14} />在对话里处理这些素材</Button>
+            </div>
+          </div>
+          <div className="result-grid">{assets.map(asset => <div className={`result-thumb-wrap ${selectedAssetIds.includes(asset.id) ? 'selected' : ''}`} key={asset.id}>
+            <button className="result-thumb" title={`${asset.name} · ${statusNames[asset.status] ?? asset.status}`} onClick={() => setPreview(asset)}>
+              <img loading="lazy" src={asset.thumbnailUrl || asset.mediaUrl} alt={asset.name} />
+              <span className="truncate">{asset.name}</span>
+              <small>{statusNames[asset.status] ?? asset.status} · {asset.annotations.length} 个</small>
+            </button>
+            {/* 勾选放在缩略图内部左侧，冒泡到外层 card 之上，点它不会误开预览。 */}
+            <label className="result-thumb-check" aria-label={`选择 ${asset.name}`} onClick={event => event.stopPropagation()}>
+              <input type="checkbox" checked={selectedAssetIds.includes(asset.id)} onChange={() => toggleAsset(asset.id)} />
+            </label>
+            {/* 版本记录、标签导入、效果图与文件位置这些命令不属于画布编辑，留在素材上，工作台退场后仍有入口。 */}
+            <IconButton label={`${asset.name} 的素材与标注操作`} className="result-thumb-more" onClick={() => setActions(asset)}><MoreHorizontal size={14} /></IconButton>
+          </div>)}</div></>
         : <p className="quiet-empty">这个项目还没有素材，先在对话里说明要导入什么。</p>}
       {assets.length < (assetTotal || total) && <Button busy={loading} onClick={() => void loadAssets(assets.length)}>加载更多（还有 {(assetTotal || total) - assets.length} 张）</Button>}
     </section>

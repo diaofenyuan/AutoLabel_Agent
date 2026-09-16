@@ -97,6 +97,11 @@ export default function ChatHome() {
       </div>
     </footer>
     {drop.video && <VideoImport key={drop.video.path} projectId={drop.video.projectId} initialSourcePath={drop.video.path} onClose={drop.closeVideo}
-      onCreated={(job, temporarySource) => { setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource }); drop.closeVideo(); notify('已创建抽帧任务，进度在任务里查看。'); }} />}
+      onCreated={(job, temporarySource) => {
+        setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource }); drop.closeVideo();
+        // 欢迎页拖入视频后同样送到概览：抽帧在后台跑，用户先看到素材落点，再回对话说要标什么。
+        notify('已创建抽帧任务，素材入库后出现在这里；进度可在侧栏「任务」里查看。');
+        void navigate('overview');
+      }} />}
   </div>;
 }

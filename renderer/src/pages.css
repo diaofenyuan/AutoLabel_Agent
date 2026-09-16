@@ -320,6 +320,15 @@
 .result-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px;margin:12px 0}
 .result-thumb-wrap{position:relative;min-width:0}
 .result-thumb-more{position:absolute;top:8px;right:8px;width:22px;height:22px;background:color-mix(in srgb,var(--bg) 82%,transparent)}
+/* 素材勾选：静止时半透明白底，选中后才显色，避免每张图都顶着一方白块干扰看图。 */
+.result-thumb-check{position:absolute;top:6px;left:6px;display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:color-mix(in srgb,var(--bg) 78%,transparent);cursor:pointer}
+.result-thumb-check input{width:13px;height:13px;margin:0;accent-color:var(--accent);cursor:pointer}
+.result-thumb-wrap.selected .result-thumb{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.result-thumb-wrap.selected .result-thumb-check{background:var(--accent)}
+/* 选择条：勾选后才出现操作，未勾选时只有一行计数，不占视觉重心。 */
+.asset-selection{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:10px 0 0}
+.asset-selection-count{font-size:12px;color:var(--soft)}
+.asset-selection .actions{display:flex;gap:8px;flex-wrap:wrap}
 .result-thumb{display:flex;flex-direction:column;gap:3px;padding:5px;border:1px solid var(--border);border-radius:8px;background:var(--bg);text-align:left;min-width:0}
 .result-thumb:hover{border-color:var(--accent)}
 .result-thumb img{width:100%;height:66px;object-fit:cover;border-radius:4px;background:var(--surface)}

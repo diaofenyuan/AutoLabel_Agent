@@ -81,12 +81,12 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     // 模型校验按本次实际使用的接口来，配置里的其它问题（并发、请求上限）照旧拦下。
     const configIssue = chatConfig.issues.find(issue => issue.field !== 'model');
     if (configIssue) { notify(configIssue.message, true); return; }
-    if (session.scope === 'current' && !assetId) { notify('请先在项目里打开要处理的图片。', true); return; }
-    const assetIds = session.scope === 'current' ? [assetId!] : session.scope === 'page' ? assets.map(a => a.id) : session.scope === 'selected' ? [...selectedAssetIds] : undefined;
+    if (effectiveScope === 'current' && !assetId) { notify('请先在项目里打开要处理的图片。', true); return; }
+    const assetIds = effectiveScope === 'current' ? [assetId!] : effectiveScope === 'page' ? assets.map(a => a.id) : effectiveScope === 'selected' ? [...selectedAssetIds] : undefined;
     if (assetIds && !assetIds.length) { notify('当前处理范围没有素材，请先选择图片。', true); return; }
     const next = [...session.messages, { role: 'user' as const, content: text }];
     const streamSinceSequence = events.at(-1)?.sequence ?? -1;
-    const scopeLabel = session.scope === 'current' ? assets.find(a => a.id === assetId)?.name ?? '当前图片' : session.scope === 'project' ? `全项目 · ${assetTotal} 张` : `${session.scope === 'page' ? '当前页' : '已勾选（跨页）'} · ${assetIds!.length} 张`;
+    const scopeLabel = effectiveScope === 'current' ? assets.find(a => a.id === assetId)?.name ?? '当前图片' : effectiveScope === 'project' ? `全项目 · ${assetTotal} 张` : `${effectiveScope === 'page' ? '当前页' : '已勾选（跨页）'} · ${assetIds!.length} 张`;
     update({ messages: next, input: '', busy: true, cancelRequested: false, runningScope: scopeLabel, streamingText: '', streamSinceSequence, planned: undefined });
     try {
       const result = await request<{ content: string; status: string; actions?: AgentStep[] }>('agent.chat', {
@@ -112,6 +112,13 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     });
   }, [events, key, session?.busy, session?.streamSinceSequence, setChats]);
   if (!session) return null;
+  /**
+   * 范围下拉只列当前真的选得出来的项：没有勾选素材时不显示「已勾选」，没有素材时不显示「当前页」，
+   * 免得用户对着一个永远 0 张的选项猜。「全项目」是唯一始终有效的口径，也是无从选择时的回退。
+   */
+  const effectiveScope = session.scope === 'selected' && !selectedAssetIds.length ? 'project'
+    : session.scope === 'page' && !assets.length ? 'project'
+    : session.scope === 'current' && !assetId ? 'project' : session.scope;
   return <div className={`chat-panel ${compact ? 'compact' : ''} ${dropActive ? 'drop-active' : ''}`} {...(compact ? {} : drop.handlers)}>
     {!compact && <DropOverlay visible={dropActive} />}
     <div className="chat-messages" aria-live="polite">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><Button onClick={() => void navigate('settings', 'ai')}><Settings2 size={14} />配置对话模型</Button></Empty> : session.messages.map((message,i) => <div className={`chat-message ${message.role}`} key={i}><div className="chat-message-head"><span className={`chat-avatar ${message.role}`} aria-hidden="true">{message.role === 'assistant' ? <Sparkles size={12} /> : '你'}</span><small>{message.role === 'user' ? '你' : '标注助手'}</small></div><p>{message.content}</p></div>)}{session.busy && session.streamingText && <div className="chat-message assistant streaming"><div className="chat-message-head"><span className="chat-avatar assistant" aria-hidden="true"><Sparkles size={12} /></span><small>标注助手</small></div><p>{session.streamingText}</p></div>}{session.busy && <div className="chat-wait"><span className="waiting-dots">•••</span>{session.cancelRequested ? '正在请求停止 · 已发送请求的结果仍需核对' : chatStatus(events, session.id)} · {session.runningScope}</div>}
@@ -137,7 +144,7 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
       <Composer value={session.input} onChange={input => update({ input })} onSend={() => void send()} placeholder="描述你的标注任务…" busy={session.busy} onCancel={() => { if (session.cancelRequested) return; update({ cancelRequested: true }); void request('agent.cancel', { sessionId: session.id }).catch(e => { update({ cancelRequested: false }); notify(errorMessage(e), true); }); }}>
         <div className="chat-options">
           <FlowPicker disabled={session.busy} onPick={prompt => { update({ input: prompt }); document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus(); }} />
-          <select aria-label="助手处理范围" disabled={session.busy} value={session.scope} onChange={e => update({ scope: e.target.value as ChatSession['scope'] })}>{assetId && <option value="current">当前图片</option>}<option value="project">全项目 · {assetTotal} 张</option><option value="page">当前页 · {assets.length} 张</option><option value="selected">已勾选（跨页）· {selectedAssetIds.length} 张</option></select>
+          <select aria-label="助手处理范围" disabled={session.busy} value={effectiveScope} onChange={e => update({ scope: e.target.value as ChatSession['scope'] })}>{assetId && <option value="current">当前图片</option>}<option value="project">全项目 · {assetTotal} 张</option>{!!assets.length && <option value="page">当前页 · {assets.length} 张</option>}{!!selectedAssetIds.length && <option value="selected">已勾选（跨页）· {selectedAssetIds.length} 张</option>}</select>
           <select aria-label="助手执行方式" disabled={session.busy} value={String(session.autoExecute)} onChange={e => update({ autoExecute: e.target.value === 'true' })}><option value="true">直接执行</option><option value="false">先看方案</option></select>
           <button title={session.exportDir || '授权本次对话的导出目录'} onClick={() => void getBridge().then(b => b.chooseFiles({ kind: 'directory' })).then(paths => { if (paths[0]) update({ exportDir: paths[0] }); }).catch(e => notify(errorMessage(e), true))}><FolderOpen size={12} />{session.exportDir ? '已选目录' : '导出目录'}</button>
         </div>
@@ -151,7 +158,12 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
       </div>
     </footer>
     {drop.video && <VideoImport key={drop.video.path} projectId={drop.video.projectId} initialSourcePath={drop.video.path} onClose={drop.closeVideo}
-      onCreated={(job, temporarySource) => { setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource }); drop.closeVideo(); notify('已创建抽帧任务，进度在任务里查看。'); }} />}
+      onCreated={(job, temporarySource) => {
+        setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource }); drop.closeVideo();
+        // 抽帧是异步的，留在对话里只会盯着一句提示干等；直接送到概览，素材进来就能看见、能勾选。
+        notify('已创建抽帧任务，素材入库后出现在这里；进度可在侧栏「任务」里查看。');
+        void navigate('overview');
+      }} />}
   </div>;
 }
 

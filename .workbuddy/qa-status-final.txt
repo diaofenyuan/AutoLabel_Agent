@@ -1,0 +1,26 @@
+﻿ M COORDINATION.md
+ M desktop/engine.ts
+ M desktop/main.ts
+ M desktop/security.ts
+ M desktop/validation.ts
+ M engine/src/main/java/cn/autolabel/engine/Engine.java
+ M engine/src/main/java/cn/autolabel/engine/LocalModels.java
+ M engine/src/main/java/cn/autolabel/engine/Store.java
+ M engine/src/test/java/cn/autolabel/engine/EngineTest.java
+ M renderer/src/App.tsx
+ M renderer/src/Projects.tsx
+ M renderer/src/context.tsx
+ M renderer/src/pages.css
+ M scripts/engine-build.ps1
+?? .commandcode/
+?? .workbuddy/
+?? engine/src/main/java/cn/autolabel/engine/DatasetVersions.java
+?? engine/src/main/java/cn/autolabel/engine/TrainingDatasets.java
+?? engine/src/main/java/cn/autolabel/engine/TrainingJobs.java
+?? engine/src/main/java/cn/autolabel/engine/TrainingParameters.java
+?? engine/src/main/java/cn/autolabel/engine/TrainingRuntime.java
+?? engine/src/test/java/cn/autolabel/engine/TrainingDatasetsTest.java
+?? inference/train_worker.py
+?? renderer/src/DatasetVersions.tsx
+?? renderer/src/Training.tsx
+?? shared/training.ts
