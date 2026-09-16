@@ -12,7 +12,6 @@ import ChatHome from './ChatHome';
 import ChatPanel from './ChatPanel';
 import ProjectOverview from './ProjectOverview';
 const Tasks = lazy(() => import('./Tasks'));
-const Models = lazy(() => import('./Models'));
 const Settings = lazy(() => import('./Settings'));
 export default function App() {
   const [page, setPage] = useState<Page>(() => { const hash = location.hash.slice(1); return navAll.some(entry => entry.key === hash) ? hash as Page : 'chat'; });
@@ -226,7 +225,7 @@ export default function App() {
         {!isDemo && engine.state !== 'ready' && <div className="connection-banner" role={engine.state === 'error' ? 'alert' : 'status'} aria-live="polite" aria-busy={reconnecting}><AlertCircle size={14} />{reconnecting ? '正在重新连接本地引擎…' : engine.message || '本地引擎尚未就绪，数据操作暂不可用。'}<button disabled={reconnecting} onClick={() => void reconnect()}>{reconnecting ? '连接中…' : '重新连接'}</button></div>}
         <main className={`page page-${page}`} key={page} aria-busy={loading || assetsLoading}>
           {loading ? <div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作空间…</div> : <Suspense fallback={<div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作区…</div>}>
-            {page === 'chat' ? (activeSessionId ? <ChatPanel /> : <ChatHome />) : page === 'overview' ? <ProjectOverview /> : page === 'tasks' ? <Tasks /> : page === 'models' ? <Models /> : <Settings />}
+            {page === 'chat' ? (activeSessionId ? <ChatPanel /> : <ChatHome />) : page === 'overview' ? <ProjectOverview /> : page === 'tasks' ? <Tasks /> : <Settings />}
           </Suspense>}
         </main>
       </section>

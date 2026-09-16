@@ -489,7 +489,7 @@ test('本地缺项由实际预检说明，误报可启动不能绕过未加载�
   f.state.localRuntime.slots = [];
   await tool('preflight_flow').execute(start([local()]), f.environment);
   f.state.canStart = true;
-  await assert.rejects(tool('start_flow').execute(start([local()]), f.environment), /模型中心加载/);
+  await assert.rejects(tool('start_flow').execute(start([local()]), f.environment), /软件 AI 配置里加载/);
   await assert.rejects(tool('start_flow').execute(start([local({ classMap: null })]), f.environment), /完整类别映射/);
   assert.equal(f.mutations().length, 0);
   const inactive = fixture();

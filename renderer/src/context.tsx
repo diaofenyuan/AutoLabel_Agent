@@ -1,14 +1,14 @@
 import { createContext, useContext } from 'react';
-import { Box, LayoutGrid, ListTodo, MessageSquare, Settings, type LucideIcon } from 'lucide-react';
+import { LayoutGrid, ListTodo, MessageSquare, Settings, type LucideIcon } from 'lucide-react';
 import type { ChatSessionSummary } from '../../shared/chat';
 import type { Asset, EngineEvent, EngineStatus, Preferences, Project, Provider } from './types';
 
-export type Page = 'chat' | 'overview' | 'tasks' | 'models' | 'settings';
+export type Page = 'chat' | 'overview' | 'tasks' | 'settings';
 /**
  * 设置页的区块键，与 `Settings.tsx` 的标签栏一一对应。
  * 单独抽出来是为了让「深链到指定区块」有类型约束：媒体错误里的「打开媒体运行时设置」靠它落到视频工具。
  */
-export type SettingsSection = 'appearance' | 'workspace' | 'storage' | 'chats' | 'execution' | 'local' | 'media' | 'samples' | 'shortcuts' | 'updates' | 'diagnostics';
+export type SettingsSection = 'appearance' | 'ai' | 'workspace' | 'storage' | 'chats' | 'execution' | 'local' | 'media' | 'samples' | 'shortcuts' | 'updates' | 'diagnostics';
 
 /** 扁平导航注册表：侧栏主入口与 Ctrl+K 快速跳转共用同一份页面清单，避免两处各自维护而漂移。 */
 export interface NavEntry { key: Page; label: string; icon: LucideIcon }
@@ -22,12 +22,8 @@ export const navRegistry: NavEntry[] = [
 export const navViews: NavEntry[] = [
   { key: 'overview', label: '项目概览', icon: LayoutGrid },
 ];
-/** 过渡期仍可从快速跳转直接进入的视图：模型中心的配置能力在「软件 AI 配置」完成后一并移除。 */
-export const navLegacy: NavEntry[] = [
-  { key: 'models', label: '模型中心', icon: Box },
-];
-/** 快速跳转与顶栏标题共用的完整清单：主导航在前，项目视图与过渡期视图在后。 */
-export const navAll: NavEntry[] = [...navRegistry, ...navViews, ...navLegacy];
+/** 快速跳转与顶栏标题共用的完整清单：主导航在前，项目概览在后。 */
+export const navAll: NavEntry[] = [...navRegistry, ...navViews];
 export function navLabel(page: Page): string {
   return navAll.find(entry => entry.key === page)?.label ?? '';
 }

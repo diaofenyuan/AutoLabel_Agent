@@ -173,7 +173,7 @@ async function localParameters(value: Record<string, unknown>, env: ToolEnvironm
       const slot = runtime.slots.find(slot => slot.device === (result.device ?? 'cpu') && slot.modelId === registered.id && slot.modelVersion === registered.version);
       // available 来自上次环境探测；已加载的固定版本仍以实际槽与引擎预检为准。
       if (requireReady && (!runtime.configured || !runtime.workerAvailable || !slot?.classes))
-        throw new AgentError('LOCAL_MODEL_NOT_LOADED', '请在模型中心加载所选固定版本并读取完整类别');
+        throw new AgentError('LOCAL_MODEL_NOT_LOADED', '请在设置 · 软件 AI 配置里加载所选固定版本并读取完整类别');
       if (slot?.classes && result.classMap != null) {
         const mapping = object(result.classMap);
         if (slot.classes.length !== Object.keys(mapping).length || slot.classes.some(entry => !Object.hasOwn(mapping, entry.id)))
@@ -475,7 +475,7 @@ async function normalizeDefinition(raw: unknown, env: ToolEnvironment, execution
       const providerId = selectedProvider == null ? undefined : id(selectedProvider, '标注接口');
       if (providerId && !providers) providers = (await env.engine.request<unknown[]>('provider.list')).map(raw => object(raw, '模型配置'));
       const provider = providers?.find(item => item.id === providerId);
-      if (providerId && !provider) throw new AgentError('MODEL_REQUIRED', '请从模型中心已有接口中选择');
+      if (providerId && !provider) throw new AgentError('MODEL_REQUIRED', '请从已配置的接口中选择');
       const selectedModel = value.model ?? (providerId === current?.providerId ? current?.model : provider?.model);
       const model = selectedModel == null ? undefined : text(selectedModel, '标注模型', 200);
       if (model && provider && !(providerId === current?.providerId && model === current?.model) && !configuredModels(provider).has(model))

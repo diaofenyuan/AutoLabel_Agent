@@ -85,7 +85,7 @@ export const LOCAL_TOOL_DEFINITIONS: ToolDefinition[] = [
         throw new AgentError('LOCAL_RESPONSE_INVALID', '本地模型分页重复或任务类型不匹配');
       return { total, offset, limit, nextOffset: offset + items.length < total ? offset + items.length : null, items };
     } },
-  { name: 'get_local_runtime', description: '只读查看本地环境、设备槽、已加载模型的固定版本和完整类别，不启动 Python。缺少环境或类别时请用户在模型中心配置并加载；不会代替用户授权模型文件。',
+  { name: 'get_local_runtime', description: '只读查看本地环境、设备槽、已加载模型的固定版本和完整类别，不启动 Python。缺少环境或类别时请用户在设置 · 软件 AI 配置里加载；不会代替用户授权模型文件。',
     parameters: schema({}), mutation: false,
     async execute(args, env) { fields(args, []); return localRuntime(env); } },
 ];

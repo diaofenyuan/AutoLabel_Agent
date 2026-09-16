@@ -194,7 +194,7 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   await settle();
   await captureSecondary('secondary-overview.png', 'overview');
   await openPage(pageLabels.settings, 'settings');
-  for (const [index, label] of ['工作空间', '本地推理', '视频工具', '示例', '快捷键', '应用更新', '诊断'].entries()) {
+  for (const [index, label] of ['软件 AI 配置', '工作空间', '本地推理', '视频工具', '示例', '快捷键', '应用更新', '诊断'].entries()) {
     await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.settings-tabs button')].find(item=>item.innerText.trim()===${JSON.stringify(label)})?.click())()`);
     await window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     await settle();

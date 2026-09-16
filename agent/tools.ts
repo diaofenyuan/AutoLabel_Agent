@@ -153,7 +153,7 @@ async function freshComparisonPayload(args: Record<string, unknown>, env: ToolEn
     fields(scheme, ['name', 'providerId', 'model', 'prompt', 'referenceAssetIds', 'concurrency']);
     const providerId = id(scheme.providerId ?? selectedProvider, '方案接口');
     const provider = providers.find(value => value.id === providerId);
-    if (!provider) throw new AgentError('MODEL_REQUIRED', '该接口尚未配置，请从模型中心已有接口中选择');
+    if (!provider) throw new AgentError('MODEL_REQUIRED', '该接口尚未配置，请从设置里已保存的接口中选择');
     const model = text(scheme.model ?? (providerId === selectedProvider ? selectedModel : provider.model), '方案模型', 200);
     if (!(providerId === selectedProvider && model === selectedModel) && !providerModels(provider).some(value => value.model === model))
       throw new AgentError('MODEL_REQUIRED', '该模型尚未在所选接口中配置或验证，不能猜测模型名称');

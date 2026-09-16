@@ -33,10 +33,10 @@ export default function TrackTools({ timeline, track, frame, tracks, onChanged }
     if (timeline.taskType !== 'detect' || disabled) return;
     setLocalSequence({ state: 'running' }); setError('');
     try {
-      // 只把模型中心已加载且空闲的槽位交给引擎；路径、模型摘要和帧文件由引擎从固定时间轴重新组装。
+      // 只把设置里已加载且空闲的本地模型槽位交给引擎；路径、模型摘要和帧文件由引擎从固定时间轴重新组装。
       const runtime = await request<LocalRuntimeState>('local.runtime.get');
       const slot = runtime.slots.find(value => !value.busy && value.modelId && value.classes?.length);
-      if (!slot?.modelId || !slot.classes?.length) throw new Error('请先在模型中心加载 Detect 模型并读取类别。');
+      if (!slot?.modelId || !slot.classes?.length) throw new Error('请先在设置 · 软件 AI 配置里加载 Detect 模型并读取类别。');
       const targets = timeline.template.classes;
       const classMap: Record<string, string | null> = {};
       for (const source of slot.classes) {
