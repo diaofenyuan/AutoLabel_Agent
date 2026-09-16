@@ -114,9 +114,9 @@ export default function App() {
   }, [notify, beginTransition, endTransition]);
   /**
    * 打开项目 = 进入该项目的会话上下文，而不是落到某个页面上。
-   * 一个会话只属于一个项目：优先接着这个项目最近的会话，没有就开一条新的，避免上下文串味。
+   * 会话必须属于项目：优先接着这个项目最近的会话，没有就开一条新的；带 firstMessage 时新会话会把这条消息自动发出去。
    */
-  const openProject = useCallback(async (selected: Project) => {
+  const openProject = useCallback(async (selected: Project, firstMessage?: string) => {
     if (transitionOwner.current) throw new Error('素材正在切换，请稍后。');
     const token = beginTransition(); setAssetsLoading(true); ++assetRevision.current;
     try {
@@ -128,30 +128,27 @@ export default function App() {
       // 换项目等同于换上下文：视图与当前素材必须重置，否则会带着上一个项目的选择进来。
       setWorkbenchView('images'); setActiveAssetId(null); setMediaJob(null);
       clearTimeout(toastTimer.current); setToast(null); setProject(opened);
-      const recent = chatSessions.filter(session => session.projectId === opened.id)
+      const recent = firstMessage ? undefined : chatSessions.filter(session => session.projectId === opened.id)
         .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))[0];
       if (recent) setActiveSessionId(recent.id);
       else {
         const id = crypto.randomUUID();
-        setChats(state => ({ ...state, [id]: blankChatSession(id, 'project') }));
+        setChats(state => ({ ...state, [id]: { ...blankChatSession(id, 'project'), ...(firstMessage ? { input: firstMessage, sendOnOpen: true } : {}) } }));
         setActiveSessionId(id);
-        await request('chat.history.ensure', { sessionId: id, projectId: opened.id, projectName: opened.name, title: '新对话' });
+        await request('chat.history.ensure', { sessionId: id, projectId: opened.id, projectName: opened.name, title: firstMessage ?? '新对话' });
       }
       await refreshChatSessions();
       setPage('chat'); history.replaceState(null, '', '#chat');
     } finally { endTransition(token); setAssetsLoading(false); }
   }, [chatSessions, refreshChatSessions, beginTransition, endTransition]);
-  const newChatSession = useCallback(async () => {
-    const id = crypto.randomUUID();
-    // 先落下内存里的空会话，会话页才能立刻渲染，而不是在 ensure 往返期间显示空白。
-    setChats(state => ({ ...state, [id]: blankChatSession(id, project ? 'project' : 'current') }));
-    setActiveSessionId(id);
+  /**
+   * 新建对话只能发生在项目内：这里只是把界面交回欢迎页，由用户描述要标注什么，
+   * 再由欢迎页建好项目并开会话（会话不脱离项目存在）。
+   */
+  const startProjectChat = useCallback(async () => {
+    setActiveSessionId('');
     await navigate('chat');
-    try {
-      await request('chat.history.ensure', { sessionId: id, ...(project ? { projectId: project.id, projectName: project.name } : {}), title: '新对话' });
-      await refreshChatSessions();
-    } catch (e) { notify(errorMessage(e), true); }
-  }, [navigate, project, refreshChatSessions, notify]);
+  }, [navigate]);
   const requestDeleteProject = useCallback((target: Project) => setDeletion(target), []);
   /** 删除完成后清理状态：被删除的项目不再保持打开，工作台回到对话主页；对话历史仍保留。 */
   const projectDeleted = useCallback(async (projectId: string) => {
@@ -224,7 +221,7 @@ export default function App() {
     catch (e) { notify(errorMessage(e), true); }
     finally { setReconnecting(false); }
   }
-  return <Context.Provider value={{ page, navigate, settingsSection, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, workbenchView, setWorkbenchView, activeAssetId, setActiveAssetId, mediaJob, setMediaJob, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, newChatSession, openJumper, openHelp, requestDeleteProject }}>
+  return <Context.Provider value={{ page, navigate, settingsSection, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, workbenchView, setWorkbenchView, activeAssetId, setActiveAssetId, mediaJob, setMediaJob, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, openJumper, openHelp, requestDeleteProject }}>
     <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <Sidebar />
       {deletion && <ProjectDeletionDialog project={deletion} onClose={() => setDeletion(null)} onDeleted={projectId => void projectDeleted(projectId)} />}

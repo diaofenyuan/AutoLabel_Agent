@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Eraser, FolderOpen, ListTodo, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Pin, PinOff, Plus, Scan, Search,
+  Eraser, FolderOpen, ListTodo, MessageSquare, MoreHorizontal, Pencil, Pin, PinOff, Plus, Scan, Search,
   Settings as SettingsIcon, Trash2,
 } from 'lucide-react';
 import type { ChatSessionSummary } from '../../shared/chat';
@@ -9,19 +9,21 @@ import { errorMessage, isDemo, request } from './bridge';
 import { Button, Field, IconButton, Modal } from './ui';
 
 /**
- * 主入口只有两项：新建对话与任务；设置固定在底部。
- * 其余视图不再占导航位，避免「工具型多页结构」回到界面里。
+ * 会话挂在项目下，导航里不再有「新建对话」：新对话由欢迎页按描述建项目后开始。
+ * 主导航只剩任务，设置固定在底部。
  */
 const mainEntries = [
-  { key: 'chat', label: '新建对话', icon: MessageSquarePlus },
   { key: 'tasks', label: '任务', icon: ListTodo },
 ] as const;
+
+/** 单个项目在侧栏里最多展开的会话数，超出的在项目页里看，避免侧栏被历史会话淹掉。 */
+const SESSIONS_PER_PROJECT = 5;
 
 type RenameTarget = { kind: 'session' | 'project'; id: string; value: string };
 
 /** Codex 式侧栏：顶部 / 主入口 / 置顶 / 项目 / 最近 / 底部六段，会话来自 chat.history.list。 */
 export function Sidebar() {
-  const { page, navigate, project, projects, openProject, refreshProjects, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, newChatSession, openJumper, requestDeleteProject, notify, engine } = useApp();
+  const { page, navigate, project, projects, openProject, refreshProjects, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, openJumper, requestDeleteProject, notify, engine } = useApp();
   const [rename, setRename] = useState<RenameTarget | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [headerMenu, setHeaderMenu] = useState(false);
@@ -34,8 +36,13 @@ export function Sidebar() {
     return b.lastMessageAt.localeCompare(a.lastMessageAt);
   }), [chatSessions]);
   const pinned = ordered.filter(item => item.pinned);
-  const currentProjectSessions = ordered.filter(item => !item.pinned && !!project && item.projectId === project.id);
-  const recent = ordered.filter(item => !item.pinned && !(project && item.projectId === project.id));
+  // 会话按项目归组：项目行下面直接列出该项目的会话，进对话一律从项目走。
+  const grouped = useMemo(() => projects.map(item => ({
+    project: item,
+    sessions: ordered.filter(session => session.projectId === item.id).slice(0, SESSIONS_PER_PROJECT),
+  })), [projects, ordered]);
+  // 来源项目已被删除的历史会话仍要能看到，单独成组；判据用会话自身状态，不靠项目列表是否已刷新。
+  const orphaned = ordered.filter(session => session.status === 'deleted-project');
   /** Ctrl+1…9 的序号与 `ordered` 一致；把它显示出来，这条既有能力才不用靠帮助文档才发现。 */
   const shortcutOf = useMemo(() => new Map(ordered.slice(0, 9).map((item, index) => [item.id, index + 1])), [ordered]);
 
@@ -114,31 +121,35 @@ export function Sidebar() {
       <IconButton label="搜索" onClick={openJumper}><Search size={16} /></IconButton>
     </div>
     <div className="sidebar-scroll">
-      <nav aria-label="主导航">{mainEntries.map(entry => <button key={entry.key} className={`nav-item ${page === entry.key ? 'selected' : ''}`} aria-current={page === entry.key ? 'page' : undefined} title={entry.label} onClick={() => entry.key === 'chat' ? void newChatSession() : void navigate(entry.key)}><entry.icon size={18} strokeWidth={1.65} /><span>{entry.label}</span></button>)}</nav>
+      <nav aria-label="主导航">{mainEntries.map(entry => <button key={entry.key} className={`nav-item ${page === entry.key ? 'selected' : ''}`} aria-current={page === entry.key ? 'page' : undefined} title={entry.label} onClick={() => void navigate(entry.key)}><entry.icon size={18} strokeWidth={1.65} /><span>{entry.label}</span></button>)}</nav>
       {pinned.length > 0 && <div className="sidebar-group"><div className="sidebar-group-head"><span className="sidebar-group-title">置顶</span></div>{pinned.map(sessionRow)}</div>}
       <div className="sidebar-group">
-        <div className="sidebar-group-head"><span className="sidebar-group-title">项目</span><button className="sidebar-group-more" title="新建项目" aria-label="新建项目" onClick={() => void navigate('chat')}><Plus size={15} /></button></div>
-        {projects.length
-          ? projects.map(item => <div key={item.id} className={`sidebar-project ${project?.id === item.id ? 'selected' : ''}`}>
-            <button className="sidebar-row" title={item.name} onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><FolderOpen size={15} /><span className="sidebar-row-title truncate">{item.name}</span></button>
-            <span className="sidebar-actions">
-              <button title="重命名" onClick={() => setRename({ kind: 'project', id: item.id, value: item.name })}><Pencil size={13} /></button>
-              <button title="删除项目…" onClick={() => requestDeleteProject(item)}><Trash2 size={13} /></button>
-            </span>
-          </div>)
-          : <p className="sidebar-empty">还没有项目，点击右侧 ＋ 新建。</p>}
-        {currentProjectSessions.length > 0 && <div className="sidebar-sublist">{currentProjectSessions.map(sessionRow)}</div>}
-      </div>
-      <div className="sidebar-group">
-        <div className="sidebar-group-head"><span className="sidebar-group-title">最近</span>
+        {/* 「＋」回到欢迎页：新对话要先有项目，由欢迎页按描述建好项目再开始。 */}
+        <div className="sidebar-group-head"><span className="sidebar-group-title">项目</span>
+          <button className="sidebar-group-more" title="新建项目" aria-label="新建项目" onClick={() => void startProjectChat()}><Plus size={15} /></button>
           <button className="sidebar-group-more" title="会话管理" aria-label="会话管理" aria-haspopup="menu" aria-expanded={headerMenu} onClick={() => setHeaderMenu(v => !v)}><MoreHorizontal size={15} /></button>
           {headerMenu && <div className="sidebar-menu" role="menu">
             <button role="menuitem" disabled={!chatSessions.length} onClick={() => { setHeaderMenu(false); setConfirmClear(true); }}><Eraser size={14} />清空全部对话…</button>
             <button role="menuitem" onClick={() => { setHeaderMenu(false); void navigate('settings'); }}><SettingsIcon size={14} />对话记录设置…</button>
           </div>}
         </div>
-        {recent.length ? recent.map(sessionRow) : <p className="sidebar-empty">还没有对话记录。</p>}
+        {projects.length
+          ? grouped.map(({ project: item, sessions }) => <div key={item.id} className="sidebar-project-group">
+            <div className={`sidebar-project ${project?.id === item.id ? 'selected' : ''}`}>
+              <button className="sidebar-row" title={item.name} onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><FolderOpen size={15} /><span className="sidebar-row-title truncate">{item.name}</span></button>
+              <span className="sidebar-actions">
+                <button title="重命名" onClick={() => setRename({ kind: 'project', id: item.id, value: item.name })}><Pencil size={13} /></button>
+                <button title="删除项目…" onClick={() => requestDeleteProject(item)}><Trash2 size={13} /></button>
+              </span>
+            </div>
+            {sessions.length > 0 && <div className="sidebar-sublist">{sessions.map(sessionRow)}</div>}
+          </div>)
+          : <p className="sidebar-empty">还没有项目，用一句话描述要标注什么就会建好。</p>}
       </div>
+      {orphaned.length > 0 && <div className="sidebar-group">
+        <div className="sidebar-group-head"><span className="sidebar-group-title">项目已删除</span></div>
+        {orphaned.map(sessionRow)}
+      </div>}
     </div>
     <div className="sidebar-bottom">
       {/* 顶栏已经有一个引擎状态 chip，侧栏不再重复两行文案，只留一条能看清「本地 / 状态」的行。 */}

@@ -54,12 +54,14 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     return () => { active = false; };
   }, [key, setChats]);
   // 欢迎页把首条消息随会话交过来：挂载后自动发出一次，用户不必再按一次发送。
+  // 条件还没就绪（例如打开项目时素材仍在切换）就先留着，等条件满足再发，不能白白把这次发送丢掉。
   useEffect(() => {
     if (!key || !session?.sendOnOpen || autoSentKey.current === key) return;
+    if (session.busy || assetsLoading || !session.input.trim()) return;
     autoSentKey.current = key;
     update({ sendOnOpen: false });
     void send();
-  }, [key, session?.sendOnOpen]);
+  }, [key, session?.sendOnOpen, session?.busy, session?.input, assetsLoading]);
   async function send() {
     if (!session?.input.trim() || session.busy || assetsLoading) return;
     if (!selectedProviderId || !selectedModel) { notify('请先在设置里选择对话接口与对话模型。', true); return; }

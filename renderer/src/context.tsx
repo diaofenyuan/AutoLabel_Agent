@@ -78,7 +78,8 @@ export interface AppState {
   setMediaJob: React.Dispatch<React.SetStateAction<{ id: string; temporarySource?: string; timelineId?: string } | null>>;
   setAssets: React.Dispatch<React.SetStateAction<Asset[]>>;
   setProject: React.Dispatch<React.SetStateAction<Project | null>>;
-  openProject: (project: Project) => Promise<void>;
+  /** 第二个参数是随项目一起发出的首条消息：用于「描述即建项目」后立刻开始第一条对话。 */
+  openProject: (project: Project, firstMessage?: string) => Promise<void>;
   refreshProjects: () => Promise<void>; refreshAssets: () => Promise<void>;
   prefs: Preferences; setPrefs: React.Dispatch<React.SetStateAction<Preferences>>; savePrefs: (prefs: Preferences) => Promise<void>;
   providers: Provider[]; refreshProviders: () => Promise<void>;
@@ -92,7 +93,8 @@ export interface AppState {
   refreshChatSessions: (projectId?: string) => Promise<void>;
   activeSessionId: string;
   setActiveSessionId: (id: string) => void;
-  newChatSession: () => Promise<void>;
+  /** 新建对话：会话必须挂在项目下，这里把界面交回欢迎页，由描述建好项目后再开会话。 */
+  startProjectChat: () => Promise<void>;
   openJumper: () => void;
   openHelp: () => void;
   /** 侧栏项目项的「删除…」入口：只触发回调，三步确认弹窗由阶段 4 接入。 */

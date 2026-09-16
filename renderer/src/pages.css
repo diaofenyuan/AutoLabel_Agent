@@ -256,8 +256,6 @@
 .chat-suggestions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
 .chat-suggestions button{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 13px;border:1px solid var(--border);border-radius:999px;background:var(--bg);color:var(--muted);font-size:12px}
 .chat-suggestions button:hover:not(:disabled){border-color:var(--soft);background:var(--surface);color:var(--text)}
-.chat-home-recent{width:100%;max-width:1540px;margin:0 auto;padding:0 4px 18px}
-.chat-home-recent .sidebar-group-title{display:block;margin-bottom:9px}
 /* 对话结果卡片：统计 + 缩略图网格 + 抽查/导出/继续修正。 */
 .result-card{border:1px solid var(--border);border-radius:11px;padding:14px;margin:0 0 14px;background:var(--surface)}
 .result-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
@@ -278,10 +276,3 @@
 .result-viewer{position:relative;width:100%;overflow:auto;background:var(--surface-soft);border:1px solid var(--border);border-radius:9px}
 .result-canvas{display:block;width:100%;height:auto}
 .result-canvas image,.result-shape{pointer-events:none}
-.chat-session-strip{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
-.chat-session-card{display:flex;align-items:center;gap:7px;max-width:238px;min-width:0;height:32px;padding:0 11px;border:1px solid var(--border);border-radius:999px;background:var(--bg);color:var(--muted);font-size:12px}
-.chat-session-card .truncate{max-width:150px}
-.chat-session-card small{flex:none;font-size:9px;color:var(--soft)}
-.chat-session-card:hover{border-color:var(--soft);color:var(--text)}
-.chat-session-card.selected{border-color:color-mix(in srgb,var(--accent) 40%,var(--border));background:var(--accent-bg);color:var(--accent)}
-@media(max-width:540px){.chat-session-card{max-width:100%}}
