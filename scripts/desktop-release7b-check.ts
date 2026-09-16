@@ -62,9 +62,18 @@ export async function checkRelease7b(window: BrowserWindow, output: string, engi
   assert.ok(frames.items.every((item: any) => item.assetId && typeof item.sourcePts === 'string' && item.width === 384 && item.height === 288));
   const plan = await api('media.screening.result', { jobId: screening.id, section: 'items', limit: 20 });
   assert.equal(plan.summary.status, 'incomplete'); assert.equal(plan.summary.nearCheck.unexaminedContentPairs, 6);
-  // 项目列表已收进侧栏，按名称从侧栏打开。
+  // 打开项目现在进入该项目的会话；素材编辑仍在工作台，脚本显式再进一次。
   await wait(`[...document.querySelectorAll('.sidebar-project .sidebar-row')].some(e=>e.innerText.includes(${JSON.stringify(project.name)}))`);
   await js(`[...document.querySelectorAll('.sidebar-project .sidebar-row')].find(e=>e.innerText.includes(${JSON.stringify(project.name)})).click()`);
+  await js(`(async()=>{
+    window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true}));
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    const input=document.querySelector('.command-search input');
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,'标注工作台');
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+  })()`);
   await wait(`!!document.querySelector('.workbench')`);
   const assetPreview = await js(`new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve({width:image.naturalWidth,height:image.naturalHeight});image.onerror=()=>reject(new Error('已导入帧不可读'));image.src='autolabel-media://asset/${frames.items[0].assetId}';})`);
   assert.deepEqual(assetPreview, { width: 384, height: 288 });

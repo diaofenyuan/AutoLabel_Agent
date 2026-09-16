@@ -36,7 +36,13 @@ export default function App() {
   const [mediaJob, setMediaJob] = useState<{ id: string; temporarySource?: string } | null>(null);
   const assetLocation = useRef({ projectId: '', offset: 0 });
   const assetRevision = useRef(0);
-  const transitioning = useRef(false);
+  /**
+   * 页面切换 / 打开项目的互斥锁。用令牌而不是布尔值：只有持锁的那次操作才能释放它，
+   * 否则「先发起、后结束」的导航会把另一次操作刚上的锁清掉，两条流程叠着跑，页面最终落在谁那里就不确定了。
+   */
+  const transitionOwner = useRef<symbol | null>(null);
+  const beginTransition = useCallback(() => { const token = Symbol('transition'); transitionOwner.current = token; return token; }, []);
+  const endTransition = useCallback((token: symbol) => { if (transitionOwner.current === token) transitionOwner.current = null; }, []);
   const [prefs, setPrefs] = useState<Preferences>(defaultPreferences);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [chats, setChats] = useState<Record<string, ChatSession>>({});
@@ -71,7 +77,7 @@ export default function App() {
   const openHelp = useCallback(() => setHelp(true), []);
   const refreshAssets = useCallback(async () => {
     const { projectId, offset } = assetLocation.current;
-    if (!projectId || transitioning.current) return;
+    if (!projectId || transitionOwner.current) return;
     const revision = ++assetRevision.current;
     let result = await request<{ items: Asset[]; total: number }>('asset.list', { projectId, offset, limit: assetPageSize });
     const nextOffset = Math.min(offset, Math.max(0, Math.ceil(result.total / assetPageSize) - 1) * assetPageSize);
@@ -81,10 +87,10 @@ export default function App() {
     setAssets(result.items); setAssetOffset(nextOffset); setAssetTotal(result.total);
   }, []);
   const loadAssetPage = useCallback(async (offset: number) => {
-    if (transitioning.current) throw new Error('素材正在切换，请稍后。');
+    if (transitionOwner.current) throw new Error('素材正在切换，请稍后。');
     const { projectId } = assetLocation.current;
     if (!projectId) return [];
-    transitioning.current = true; setAssetsLoading(true); ++assetRevision.current;
+    const token = beginTransition(); setAssetsLoading(true); ++assetRevision.current;
     try {
       // 先封住新的编辑，再排空当前草稿；读取失败时保留原页和选中图片。
       await guard.current?.();
@@ -95,31 +101,46 @@ export default function App() {
       assetLocation.current = { projectId, offset: nextOffset };
       setAssets(result.items); setAssetOffset(nextOffset); setAssetTotal(result.total);
       return result.items;
-    } finally { transitioning.current = false; setAssetsLoading(false); }
-  }, []);
+    } finally { endTransition(token); setAssetsLoading(false); }
+  }, [beginTransition, endTransition]);
   // 设置页每次进入都会重挂载，落点区块只能由这里记住；`section` 由调用方按需指定，未指定即回到默认区块。
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('appearance');
   const navigate = useCallback(async (next: Page, section?: SettingsSection) => {
-    if (transitioning.current) return;
-    transitioning.current = true; setAssetsLoading(true);
+    if (transitionOwner.current) return;
+    const token = beginTransition(); setAssetsLoading(true);
     try { await guard.current?.(); clearTimeout(toastTimer.current); setToast(null); setPage(next); setSettingsSection(section ?? 'appearance'); history.replaceState(null, '', `#${next}`); }
     catch (e) { notify(`草稿未保存，已保留当前页面。${errorMessage(e)}`, true); }
-    finally { transitioning.current = false; setAssetsLoading(false); }
-  }, [notify]);
+    finally { endTransition(token); setAssetsLoading(false); }
+  }, [notify, beginTransition, endTransition]);
+  /**
+   * 打开项目 = 进入该项目的会话上下文，而不是落到某个页面上。
+   * 一个会话只属于一个项目：优先接着这个项目最近的会话，没有就开一条新的，避免上下文串味。
+   */
   const openProject = useCallback(async (selected: Project) => {
-    if (transitioning.current) throw new Error('素材正在切换，请稍后。');
-    transitioning.current = true; setAssetsLoading(true); ++assetRevision.current;
+    if (transitionOwner.current) throw new Error('素材正在切换，请稍后。');
+    const token = beginTransition(); setAssetsLoading(true); ++assetRevision.current;
     try {
       await guard.current?.();
       const opened = await request<Project>('project.open', { projectId: selected.id });
       const data = await request<{ items: Asset[]; total: number }>('asset.list', { projectId: selected.id, offset: 0, limit: assetPageSize });
       assetLocation.current = { projectId: selected.id, offset: 0 };
-      setSelectedAssetIds([]); setAssetOffset(0); setAssetTotal(data.total);
+      setSelectedAssetIds([]); setAssetOffset(0); setAssetTotal(data.total); setAssets(data.items);
       // 换项目等同于换上下文：视图与当前素材必须重置，否则会带着上一个项目的选择进来。
       setWorkbenchView('images'); setActiveAssetId(null); setMediaJob(null);
-      clearTimeout(toastTimer.current); setToast(null); setProject(opened); setAssets(data.items); setPage('workbench'); history.replaceState(null, '', '#workbench');
-    } finally { transitioning.current = false; setAssetsLoading(false); }
-  }, []);
+      clearTimeout(toastTimer.current); setToast(null); setProject(opened);
+      const recent = chatSessions.filter(session => session.projectId === opened.id)
+        .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))[0];
+      if (recent) setActiveSessionId(recent.id);
+      else {
+        const id = crypto.randomUUID();
+        setChats(state => ({ ...state, [id]: blankChatSession(id, 'project') }));
+        setActiveSessionId(id);
+        await request('chat.history.ensure', { sessionId: id, projectId: opened.id, projectName: opened.name, title: '新对话' });
+      }
+      await refreshChatSessions();
+      setPage('chat'); history.replaceState(null, '', '#chat');
+    } finally { endTransition(token); setAssetsLoading(false); }
+  }, [chatSessions, refreshChatSessions, beginTransition, endTransition]);
   const newChatSession = useCallback(async () => {
     const id = crypto.randomUUID();
     // 先落下内存里的空会话，会话页才能立刻渲染，而不是在 ensure 往返期间显示空白。

@@ -17,13 +17,29 @@ export async function checkRelease6b(window: BrowserWindow, output: string, engi
     await wait(`window.autoLabel.request('run.get',{runId:${JSON.stringify(runId)}}).then(run=>run.status==='completed')`);
     return request('run.get', { runId });
   };
-  // 示例只从「设置 → 示例」载入：首屏不再有示例横幅。
+  /** 工作台已不占导航位，走快速跳转进入。 */
+  const openWorkbench = async () => {
+    await js(`(async()=>{
+      window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true}));
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      const input=document.querySelector('.command-search input');
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,'标注工作台');
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+    })()`);
+    await wait(`!!document.querySelector('.page-workbench') && !document.querySelector('.page-loading')`);
+  };
+  // 示例只从「设置 → 示例」载入；载入后落到该项目的会话，素材编辑仍在工作台。
   const loadExample = async () => {
     await js(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');item.click();})()`);
     await wait(`!!document.querySelector('.settings-tabs')`);
     await js(`[...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()==='示例').click()`);
     await wait(`!!document.querySelector('[aria-label="载入示例"]')`);
     await js(`document.querySelector('[aria-label="载入示例"]').click()`);
+    // 载入示例自己会跳到该项目的会话：等它落定再导航，否则后面的跳转会被它覆盖。
+    await wait(`!!document.querySelector('.page-chat') && !document.querySelector('.page-loading')`);
+    await openWorkbench();
   };
   let requests = 0; let asset: any;
   // 安装包只检查一组本地协议调用及复用读取，完整策略和竞态已由专项覆盖。

@@ -11,13 +11,29 @@ export async function checkRelease6a(window: BrowserWindow, output: string, engi
     throw new Error('6A 页面入口未就绪');
   };
   const request = (command: string, payload: Record<string, unknown> = {}) => window.webContents.executeJavaScript(`window.autoLabel.request(${JSON.stringify(command)},${JSON.stringify(payload)})`);
-  // 示例只从「设置 → 示例」载入：首屏不再有示例横幅。
+  /** 工作台已不占导航位，走快速跳转进入。 */
+  const openWorkbench = async () => {
+    await window.webContents.executeJavaScript(`(async()=>{
+      window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true}));
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      const input=document.querySelector('.command-search input');
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,'标注工作台');
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+    })()`);
+    await waitFor(`!!document.querySelector('.page-workbench') && !document.querySelector('.page-loading')`);
+  };
+  // 示例只从「设置 → 示例」载入；载入后落到该项目的会话，素材编辑仍在工作台。
   const loadExample = async () => {
     await window.webContents.executeJavaScript(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');item.click();})()`);
     await waitFor(`!!document.querySelector('.settings-tabs')`);
     await window.webContents.executeJavaScript(`[...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()==='示例').click()`);
     await waitFor(`!!document.querySelector('[aria-label="载入示例"]')`);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="载入示例"]').click()`);
+    // 载入示例自己会跳到该项目的会话：等它落定再导航，否则后面的跳转会被它覆盖。
+    await waitFor(`!!document.querySelector('.page-chat') && !document.querySelector('.page-loading')`);
+    await openWorkbench();
   };
   const waitRun = async (flowRunId: string, expected: string[]) => {
     const deadline = Date.now() + 10000; let run: any;

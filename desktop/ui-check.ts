@@ -67,6 +67,9 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
     await window.webContents.executeJavaScript(`[...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()==='示例').click()`);
     await waitFor(`!!document.querySelector('[aria-label="载入示例"]')`);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="载入示例"]').click()`);
+    // 载入示例自己会把界面带到该项目的会话：必须等它落定再导航，否则后面的跳转会被它覆盖。
+    await waitFor(`!!document.querySelector('.page-chat') && !document.querySelector('.page-loading')`);
+    await settle();
   };
   /** 用快速跳转打开任意视图：主导航之外的页面同样可达，也不会被侧栏次序变化带崩。 */
   const openPage = async (label: string, page: string) => {
@@ -88,7 +91,9 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
     canvasObjects:document.querySelectorAll('.annotation-shape').length,heading:document.querySelector('.page h1,.page h2')?.textContent??null,bridge:!!window.autoLabel})`);
   window.show();
   await waitFor(`!!document.querySelector('.chat-home') && !document.querySelector('.skeleton-list')`);
+  stage('ui:home');
   await waitFor(`!!document.querySelector('.sidebar-status .status-dot.ready') && !document.querySelector('.connection-banner')`);
+  stage('ui:engine-ready');
   const palette = await window.webContents.executeJavaScript(`(async()=>{
         window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true}));
         await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
@@ -112,13 +117,28 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   if (!palette.trigger || !palette.opened || !palette.keyboardClosed || !palette.entries.includes('设置')) throw new Error('快速跳转命令面板未通过桌面检查');
   if (!palette.entries.includes('对话') || !palette.entries.includes('任务')) throw new Error(`主导航未收敛为对话 / 任务 / 设置：${palette.entries.join('、')}`);
   results.push({ check: 'command-palette', ...palette });
+  stage('ui:palette');
   await openPage('对话', 'chat');
   await loadExample();
-      await waitFor(`!!document.querySelector('.annotation-canvas image') && !document.querySelector('.image-failure')`);
+  stage('ui:example-loaded');
+  // 载入示例后按新导航落到该项目的会话，素材编辑仍在工作台，脚本显式再进一次。
+  await openPage('标注工作台', 'workbench');
+  stage('ui:workbench');
+  // 超时不能只说「没加载完」：把工作台当时的失败原因与页面文本一起报出来，便于区分是素材没读到还是画布没挂载。
+  await waitFor(`!!document.querySelector('.annotation-canvas image') && !document.querySelector('.image-failure')`).catch(async () => {
+    const state = await window.webContents.executeJavaScript(`({main:document.querySelector('main')?.className??null,
+      loading:!!document.querySelector('.page-loading'),failure:document.querySelector('.image-failure')?.innerText??null,
+      hash:location.hash,text:document.querySelector('.page')?.innerText?.slice(0,500)??''})`);
+    stage(`ui:workbench-missing ${JSON.stringify(state)}`);
+    throw new Error(`工作台未显示示例素材：${JSON.stringify(state)}`);
+  });
       const image = await window.webContents.executeJavaScript(`new Promise(resolve=>{
-        const source=document.querySelector('.annotation-canvas image').getAttribute('href');
-        const img=new Image();img.onload=()=>resolve({loaded:true,width:img.naturalWidth,height:img.naturalHeight,source});img.onerror=()=>resolve({loaded:false});img.src=source;
+        const node=document.querySelector('.annotation-canvas image');
+        const source=node?.getAttribute('href')??null;
+        if(!source){resolve({loaded:false,source:null,page:document.querySelector('main')?.className??null,text:document.querySelector('.page')?.innerText?.slice(0,300)??''});return;}
+        const img=new Image();img.onload=()=>resolve({loaded:true,width:img.naturalWidth,height:img.naturalHeight,source});img.onerror=()=>resolve({loaded:false,source});img.src=source;
       })`);
+      if (!image.source) throw new Error(`画布素材在读取前消失了：page=${image.page} text=${image.text}`);
       if (!image.loaded || !image.source.startsWith('autolabel-media://asset/')) throw new Error('手工示例未通过真实桌面素材协议加载');
       results.push({ check: 'manual-example', ...image });
       await waitFor(`!!document.querySelector('[aria-label="对象x"]')`);
@@ -139,8 +159,10 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
       results.push({ check: 'manual-edit', assetId, originalX: selected.value, expectedX, originalVersion: original.version });
   // 工作台仍是只读结果预览之外唯一能打开素材的页面，示例载入后顺手记一条页面样本。
   results.push(await samplePage('workbench'));
+  stage('ui:example-edited');
   for (let i = 0; i < pages.length; i++) {
     await openPage(pageLabels[pages[i]], pages[i]);
+    stage(`ui:page-${pages[i]}`);
     const view = await samplePage(pages[i]);
     results.push(view);
     await writeFile(path.join(folder, `${i + 1}-${pages[i]}.png`), (await window.webContents.capturePage()).toPNG());
@@ -161,13 +183,7 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
       const darkPages: Record<string, unknown>[] = [];
       // 深色主题覆盖三项主导航与示例工作台，页面清单变化时不必再改这段。
       for (const darkPageName of [...pages, 'workbench']) {
-        if (darkPageName === 'workbench') {
-          await window.webContents.executeJavaScript(`(()=>{const row=[...document.querySelectorAll('.sidebar-project .sidebar-row')][0];
-            if(!row)throw new Error('侧栏没有可打开的项目');row.click();})()`);
-          await waitFor(`!!document.querySelector('.page-workbench') && !document.querySelector('.page-loading')`);
-        } else {
-          await openPage(pageLabels[darkPageName], darkPageName);
-        }
+        await openPage(darkPageName === 'workbench' ? '标注工作台' : pageLabels[darkPageName], darkPageName);
         await settle();
         const darkPage = await window.webContents.executeJavaScript(`({page:${JSON.stringify(darkPageName)},theme:document.documentElement.dataset.theme,error:document.querySelector('.toast.error')?.innerText??null,bodyLength:document.querySelector('.page').innerText.length})`);
         if (darkPage.theme !== 'dark' || darkPage.error) throw new Error(`深色主题页面检查失败：${darkPageName}`);
@@ -175,6 +191,7 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
         await writeFile(path.join(folder, `dark-${darkPageName}.png`), (await window.webContents.capturePage()).toPNG());
       }
       results.push({check:'dark-theme', ...darkTheme, saved:save===undefined, pages:darkPages});
+      stage('ui:dark-theme');
     }
   }
   // 主导航之内的页签也必须保持同一套层级、过渡和错误边界，避免只验收首页空态。
@@ -247,6 +264,7 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
     [...(dialog?.querySelectorAll('button')??[])].find(node=>node.innerText.trim()==='取消')?.click();})()`);
   await waitFor(`!document.querySelector('dialog[open]')`);
   results.push({ check: 'secondary-ui', views: secondary });
+  stage('ui:secondary');
   await writeFile(output, JSON.stringify({ pages: results, screenshots: folder }, null, 2));
 }
 
