@@ -10,6 +10,7 @@ import { Sidebar } from './Sidebar';
 import { ProjectDeletionDialog } from './ProjectDeletion';
 import ChatHome from './ChatHome';
 import ChatPanel from './ChatPanel';
+import ProjectOverview from './ProjectOverview';
 const Workbench = lazy(() => import('./Workbench'));
 const Workflow = lazy(() => import('./Workflow'));
 const Tasks = lazy(() => import('./Tasks'));
@@ -229,7 +230,7 @@ export default function App() {
         {!isDemo && engine.state !== 'ready' && <div className="connection-banner" role={engine.state === 'error' ? 'alert' : 'status'} aria-live="polite" aria-busy={reconnecting}><AlertCircle size={14} />{reconnecting ? '正在重新连接本地引擎…' : engine.message || '本地引擎尚未就绪，数据操作暂不可用。'}<button disabled={reconnecting} onClick={() => void reconnect()}>{reconnecting ? '连接中…' : '重新连接'}</button></div>}
         <main className={`page page-${page}`} key={page} aria-busy={loading || assetsLoading}>
           {loading ? <div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作空间…</div> : <Suspense fallback={<div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作区…</div>}>
-            {page === 'chat' ? (activeSessionId ? <ChatPanel /> : <ChatHome />) : page === 'workbench' ? <Workbench /> : page === 'workflow' ? <Workflow /> : page === 'tasks' ? <Tasks /> : page === 'resources' ? <Resources /> : page === 'models' ? <Models /> : page === 'training' ? <Training /> : <Settings />}
+            {page === 'chat' ? (activeSessionId ? <ChatPanel /> : <ChatHome />) : page === 'overview' ? <ProjectOverview /> : page === 'workbench' ? <Workbench /> : page === 'workflow' ? <Workflow /> : page === 'tasks' ? <Tasks /> : page === 'resources' ? <Resources /> : page === 'models' ? <Models /> : page === 'training' ? <Training /> : <Settings />}
           </Suspense>}
         </main>
       </section>

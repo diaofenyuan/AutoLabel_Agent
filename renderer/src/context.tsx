@@ -1,9 +1,9 @@
 import { createContext, useContext } from 'react';
-import { Box, FlaskConical, Library, ListTodo, MessageSquare, Scan, Settings, Workflow, type LucideIcon } from 'lucide-react';
+import { Box, FlaskConical, LayoutGrid, Library, ListTodo, MessageSquare, Scan, Settings, Workflow, type LucideIcon } from 'lucide-react';
 import type { ChatSessionSummary } from '../../shared/chat';
 import type { Asset, EngineEvent, EngineStatus, Preferences, Project, Provider } from './types';
 
-export type Page = 'chat' | 'workbench' | 'workflow' | 'tasks' | 'resources' | 'models' | 'training' | 'settings';
+export type Page = 'chat' | 'overview' | 'workbench' | 'workflow' | 'tasks' | 'resources' | 'models' | 'training' | 'settings';
 /**
  * 设置页的区块键，与 `Settings.tsx` 的标签栏一一对应。
  * 单独抽出来是为了让「深链到指定区块」有类型约束：媒体错误里的「打开媒体运行时设置」靠它落到视频工具。
@@ -18,6 +18,10 @@ export const navRegistry: NavEntry[] = [
   { key: 'tasks', label: '任务', icon: ListTodo },
   { key: 'settings', label: '设置', icon: Settings },
 ];
+/** 不占导航位、但由项目入口打开的视图：项目概览聚合素材、数据集版本与导出记录。 */
+export const navViews: NavEntry[] = [
+  { key: 'overview', label: '项目概览', icon: LayoutGrid },
+];
 /** 过渡期仍可从快速跳转直接进入的视图：随页面本身一起在「模块退场」阶段移除。 */
 export const navLegacy: NavEntry[] = [
   { key: 'workbench', label: '标注工作台', icon: Scan },
@@ -26,8 +30,8 @@ export const navLegacy: NavEntry[] = [
   { key: 'models', label: '模型中心', icon: Box },
   { key: 'training', label: '模型训练', icon: FlaskConical },
 ];
-/** 快速跳转与顶栏标题共用的完整清单：主导航在前，过渡期视图在后。 */
-export const navAll: NavEntry[] = [...navRegistry, ...navLegacy];
+/** 快速跳转与顶栏标题共用的完整清单：主导航在前，项目视图与过渡期视图在后。 */
+export const navAll: NavEntry[] = [...navRegistry, ...navViews, ...navLegacy];
 export function navLabel(page: Page): string {
   return navAll.find(entry => entry.key === page)?.label ?? '';
 }

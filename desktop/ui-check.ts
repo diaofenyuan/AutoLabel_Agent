@@ -209,6 +209,11 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
     await settle();
     await captureSecondary(`secondary-tasks-${index + 1}.png`, `tasks-${label}`);
   }
+  // 项目概览不占导航位，由项目入口与快速跳转进入；这里走快速跳转验证它能独立打开并渲染出数据面卡片。
+  await openPage('项目概览', 'overview');
+  await waitFor(`!!document.querySelector('.page-overview') && document.querySelectorAll('.overview-card').length === 3 && !document.querySelector('.page-loading')`);
+  await settle();
+  await captureSecondary('secondary-overview.png', 'overview');
   await openPage(pageLabels.settings, 'settings');
   for (const [index, label] of ['工作空间', '本地推理', '视频工具', '示例', '快捷键', '应用更新', '诊断'].entries()) {
     await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.settings-tabs button')].find(item=>item.innerText.trim()===${JSON.stringify(label)})?.click())()`);

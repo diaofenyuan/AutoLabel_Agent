@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Eraser, FolderOpen, ListTodo, MessageSquare, MoreHorizontal, Pencil, Pin, PinOff, Plus, Scan, Search,
+  Eraser, FolderOpen, LayoutGrid, ListTodo, MessageSquare, MoreHorizontal, Pencil, Pin, PinOff, Plus, Scan, Search,
   Settings as SettingsIcon, Trash2,
 } from 'lucide-react';
 import type { ChatSessionSummary } from '../../shared/chat';
+import type { Project } from './types';
 import { useApp } from './context';
 import { useActiveTaskCount } from './activeTasks';
 import { errorMessage, isDemo, request } from './bridge';
@@ -29,7 +30,7 @@ type RenameTarget = { kind: 'session' | 'project'; id: string; value: string };
 
 /** Codex 式侧栏：顶部 / 主入口 / 置顶 / 项目 / 最近 / 底部六段，会话来自 chat.history.list。 */
 export function Sidebar() {
-  const { page, navigate, project, projects, openProject, refreshProjects, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, openJumper, requestDeleteProject, notify, engine } = useApp();
+  const { page, navigate, project, projects, openProject, refreshProjects, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, openJumper, requestDeleteProject, notify, engine, setProject } = useApp();
   // 侧栏「任务」徽标：进行中的长任务数量，切页也能看见还有多少在跑。
   const activeTasks = useActiveTaskCount();
   const [rename, setRename] = useState<RenameTarget | null>(null);
@@ -60,6 +61,13 @@ export function Sidebar() {
   const shortcutOf = useMemo(() => new Map(ordered.slice(0, 9).map((item, index) => [item.id, index + 1])), [ordered]);
 
   async function openSession(id: string) { setActiveSessionId(id); setHeaderMenu(false); await navigate('chat'); }
+  /** 项目概览需要先把这个项目设为当前上下文，否则概览页拿不到数据。 */
+  async function openOverview(target: Project) {
+    await run(async () => {
+      setProject(await request<Project>('project.open', { projectId: target.id }));
+      await navigate('overview');
+    });
+  }
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
@@ -152,6 +160,7 @@ export function Sidebar() {
               <div className={`sidebar-project ${project?.id === item.id ? 'selected' : ''}`}>
                 <button className="sidebar-row" title={item.name} onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><FolderOpen size={15} /><span className="sidebar-row-title truncate">{item.name}</span></button>
                 <span className="sidebar-actions">
+                  <button title="项目概览" onClick={() => void openOverview(item)}><LayoutGrid size={13} /></button>
                   <button title="重命名" onClick={() => setRename({ kind: 'project', id: item.id, value: item.name })}><Pencil size={13} /></button>
                   <button title="删除项目…" onClick={() => requestDeleteProject(item)}><Trash2 size={13} /></button>
                 </span>
