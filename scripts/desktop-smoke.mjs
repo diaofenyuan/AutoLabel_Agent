@@ -21,14 +21,15 @@ const runControlOnly = process.argv.includes('--run-controls');
 const mediaOnly = process.argv.includes('--media');
 const reasonOnly = process.argv.includes('--reason');
 const annotateOnly = process.argv.includes('--annotate');
+const unknownRetryOnly = process.argv.includes('--unknown-retry');
 const trainingUiOnly = process.argv.includes('--training-ui');
-if ((manualOnly || mediaOnly || reasonOnly || annotateOnly) && packaged) throw new Error('手工开发验收不能在稳定安装包中运行');
-const label = trainingUiOnly ? 'training-ui-check' : annotateOnly ? 'annotate-check' : mediaOnly ? 'media-check' : reasonOnly ? 'reason-check' : runControlOnly ? 'run-control-check' : updateUiOnly ? 'update-ui-check' : connectionOnly ? 'connection-ui-check' : release7bOnly ? 'release7b-check' : release7aOnly ? 'release7a-check' : release6bOnly ? 'release6b-check' : release6aOnly ? 'release6a-check' : release5Only ? 'release5-check' : releaseOnly ? 'release-check' : manualOnly ? 'manual-check' : uiOnly ? 'ui-check' : windowOnly ? 'window-check' : packaged ? 'packaged-smoke' : 'desktop-smoke';
+if ((manualOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly) && packaged) throw new Error('手工开发验收不能在稳定安装包中运行');
+const label = trainingUiOnly ? 'training-ui-check' : unknownRetryOnly ? 'unknown-retry-check' : annotateOnly ? 'annotate-check' : mediaOnly ? 'media-check' : reasonOnly ? 'reason-check' : runControlOnly ? 'run-control-check' : updateUiOnly ? 'update-ui-check' : connectionOnly ? 'connection-ui-check' : release7bOnly ? 'release7b-check' : release7aOnly ? 'release7a-check' : release6bOnly ? 'release6b-check' : release6aOnly ? 'release6a-check' : release5Only ? 'release5-check' : releaseOnly ? 'release-check' : manualOnly ? 'manual-check' : uiOnly ? 'ui-check' : windowOnly ? 'window-check' : packaged ? 'packaged-smoke' : 'desktop-smoke';
 const output = path.join(root, 'build', label + '.json');
 await mkdir(path.dirname(output), { recursive: true });
 const testUserData = process.env.AUTOLABEL_TEST_USER_DATA
   ? path.resolve(root, process.env.AUTOLABEL_TEST_USER_DATA)
-  : path.join(root, 'build', label + ((updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || trainingUiOnly) ? `-user-data-${Date.now()}` : '-user-data'));
+  : path.join(root, 'build', label + ((updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || trainingUiOnly) ? `-user-data-${Date.now()}` : '-user-data'));
 const env = { ...process.env, AUTOLABEL_TEST_USER_DATA: testUserData, AUTOLABEL_SMOKE_OUTPUT: output };
 delete env.ELECTRON_RUN_AS_NODE;
 if (packaged) { env.JAVA_HOME = 'C:\\nonexistent'; env.AUTOLABEL_JAVA_HOME = 'C:\\nonexistent'; }
@@ -37,6 +38,7 @@ if (runControlOnly) env.AUTOLABEL_RUN_CONTROL_UI_CHECK = '1';
 if (mediaOnly) env.AUTOLABEL_MEDIA_UI_CHECK = '1';
 if (reasonOnly) env.AUTOLABEL_REASON_UI_CHECK = '1';
 if (annotateOnly) env.AUTOLABEL_ANNOTATE_UI_CHECK = '1';
+if (unknownRetryOnly) env.AUTOLABEL_UNKNOWN_RETRY_UI_CHECK = '1';
 const releaseDirectory = path.resolve(root, process.env.AUTOLABEL_RELEASE_DIR || 'build/release');
 const executable = packaged ? path.join(releaseDirectory, 'win-unpacked/自动标注小助手.exe') : createRequire(import.meta.url)('electron');
 const args = packaged ? ['--desktop-smoke'] : [root, '--desktop-smoke'];
@@ -48,10 +50,10 @@ if (release6aOnly) args.push('--desktop-release6a-check');
 if (release6bOnly) args.push('--desktop-release6b-check');
 if (release7aOnly) args.push('--desktop-release7a-check');
 if (release7bOnly) args.push('--desktop-release7b-check');
-if (updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly) args.push('--desktop-manual-check');
+if (updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly) args.push('--desktop-manual-check');
 if (connectionOnly) args.push('--desktop-connection-check');
 if (trainingUiOnly) args.push('--desktop-training-check');
-if (manualOnly || updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly) {
+if (manualOnly || updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly) {
   const { build } = await import('esbuild');
   await build({ entryPoints: [path.join(root, 'renderer/tests/desktop-manual-check.ts')], bundle: true, platform: 'node', format: 'cjs',
     external: ['electron'], outfile: path.join(root, 'desktop/dist/manual.test.cjs'), logLevel: 'warning' });
@@ -160,6 +162,18 @@ if (reasonOnly) {
   assert.equal(byCheck.get('export-exclude-unlabeled')?.restorable, true);
   assert.equal(byCheck.get('export-exclude-unlabeled')?.exportReady, true);
   console.log(`数据集与导出的原因呈现检查通过：${output}`); process.exit(0);
+}
+if (unknownRetryOnly) {
+  assert.equal(result.passed, true);
+  const byCheck = new Map(result.checks.map(check => [check.check, check]));
+  // failed=0 / unknown>0 时必须有可用出口，且「需要处理」给出三个下一步。
+  assert.equal(byCheck.get('unknown-retry-entry')?.failed, 0);
+  assert.ok(byCheck.get('unknown-retry-entry')?.unknown > 0);
+  assert.equal(byCheck.get('unknown-retry-entry')?.nextSteps, 3);
+  // 确认前零请求，确认后引擎收到 retryUnknown: true。
+  assert.equal(byCheck.get('unknown-retry-needs-confirmation')?.callsBeforeConfirm, byCheck.get('unknown-retry-needs-confirmation')?.callsAfterCancel);
+  assert.equal(byCheck.get('unknown-retry-dispatched')?.retryUnknown, true);
+  console.log(`结果未知的补救出口检查通过：${output}`); process.exit(0);
 }
 if (annotateOnly) {
   assert.equal(result.passed, true);

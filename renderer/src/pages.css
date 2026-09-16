@@ -421,3 +421,8 @@
 .asset-annotator>.result-viewer{margin-bottom:10px}
 .asset-annotator .quality-canvas{margin-top:8px}
 .asset-annotator .notice{margin:12px 0 0}
+/* 终态为「需要处理」时的下一步：把三个可选动作摆在状态旁边，用户不必读文档才知道往哪走。 */
+.run-next-steps{margin:14px 0 4px;padding:12px 14px;border:1px solid color-mix(in srgb,var(--accent) 28%,var(--border));border-radius:10px;background:color-mix(in srgb,var(--accent) 6%,var(--bg))}
+.run-next-steps>h3{font-size:12px;font-weight:550;margin:0 0 9px}
+.run-next-steps>.actions{display:flex;gap:7px;flex-wrap:wrap}
+.run-next-steps>p{margin:9px 0 0;line-height:1.7}
