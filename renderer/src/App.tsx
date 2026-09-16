@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { PanelLeftClose, PanelLeftOpen, CircleHelp, ChevronRight, X, Minus, Square, Check, AlertCircle, Keyboard, LoaderCircle, Search, ArrowRight } from 'lucide-react';
-import { Context, blankChatSession, navLabel, navRegistry, type Page, type ChatSession, type SettingsSection } from './context';
+import { Context, blankChatSession, navAll, navLabel, navRegistry, type Page, type ChatSession, type SettingsSection } from './context';
 import { getBridge, isDemo, request, errorMessage } from './bridge';
 import type { Project, Asset, Preferences, Provider, EngineEvent, EngineStatus } from './types';
 import { defaultPreferences } from './types';
@@ -183,7 +183,7 @@ export default function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
-  const commandItems = navRegistry.filter(entry => !commandQuery.trim() || entry.label.includes(commandQuery.trim()));
+  const commandItems = navAll.filter(entry => !commandQuery.trim() || entry.label.includes(commandQuery.trim()));
   useEffect(() => {
     if (!commandPalette) return;
     const onKeyDown = (event: KeyboardEvent) => {

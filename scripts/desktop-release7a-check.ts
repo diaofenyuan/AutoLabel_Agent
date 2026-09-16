@@ -49,7 +49,9 @@ export async function checkRelease7a(window: BrowserWindow, output: string, engi
     assert.equal(source.sourceResultId, '55a99813-56cc-4a14-826a-a79389819b68');
     assert.equal(source.sourceModelVersion, 1); assert.equal(source.sourceObservedBackend.kind, 'pytorch');
     assert.equal(source.sourceObservedBackend.device, 'cpu'); assert.equal(source.sourceAttemptId, undefined);
-    await js(`document.querySelectorAll('.nav-item')[3].click()`); await clickButton('标注任务');
+    await js(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='任务');
+      if(!item)throw new Error('缺少任务导航项');item.click();})()`);
+    await wait(`!!document.querySelector('.page-tasks') && !document.querySelector('.page-loading')`); await clickButton('标注任务');
     await wait(`!!document.querySelector('.run-list .run-row')`); await js(`document.querySelector('.run-list .run-row').click()`);
     await clickButton('查看输入与结果');
     await wait(`document.querySelector('.actual-input-preview img')?.complete && document.querySelector('.actual-input-preview img')?.naturalWidth > 0 && document.querySelectorAll('.actual-input-preview svg circle').length > 0`);
@@ -85,7 +87,9 @@ export async function checkRelease7a(window: BrowserWindow, output: string, engi
   const finished = await request('flow.get', { flowRunId: created.id });
   const artifact = await request('flow.artifact', { artifactId: finished.steps[0].outputArtifactId, limit: 1 });
   report.flow = { status: finished.status, requestsUsed: finished.statistics.requestsUsed, artifactKind: artifact.kind, inputCount: artifact.total, inputId: artifact.items[0]?.inputId };
-  await js(`document.querySelectorAll('.nav-item')[3].click()`);
+  await js(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='任务');
+    if(!item)throw new Error('缺少任务导航项');item.click();})()`);
+  await wait(`!!document.querySelector('.page-tasks') && !document.querySelector('.page-loading')`);
   await clickButton('自动流程');
   await wait(`[...document.querySelectorAll('.flow-run-list button')].some(button=>button.innerText.includes('7A 安装包固定输入预览'))`);
   await js(`[...document.querySelectorAll('.flow-run-list button')].find(button=>button.innerText.includes('7A 安装包固定输入预览')).click()`);

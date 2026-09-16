@@ -39,7 +39,9 @@ export async function checkRelease7b(window: BrowserWindow, output: string, engi
     runtime, localRuntime: local, toolVersions, bundledThirdParty: JSON.parse(await readFile(path.join(process.resourcesPath, 'third-party/ffmpeg/source.json'), 'utf8')) };
   if (process.env.AUTOLABEL_RELEASE_MEDIA_DISPLAY !== '1') {
     assert.equal((await api('media.job.list')).total, 0);
-    await js(`document.querySelectorAll('.nav-item')[6].click()`);
+    await js(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');
+      if(!item)throw new Error('缺少设置导航项');item.click();})()`);
+    await wait(`!!document.querySelector('.settings-tabs')`);
     await button('视频工具');
     await wait(`document.querySelector('.media-runtime-settings')?.innerText.includes('FFmpeg：已配置')&&document.querySelector('.media-runtime-settings')?.innerText.includes('FFprobe：已配置')`);
     await capture('.png', '.media-runtime-settings'); report.passed = true;
@@ -66,7 +68,9 @@ export async function checkRelease7b(window: BrowserWindow, output: string, engi
   await wait(`!!document.querySelector('.workbench')`);
   const assetPreview = await js(`new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve({width:image.naturalWidth,height:image.naturalHeight});image.onerror=()=>reject(new Error('已导入帧不可读'));image.src='autolabel-media://asset/${frames.items[0].assetId}';})`);
   assert.deepEqual(assetPreview, { width: 384, height: 288 });
-  await js(`document.querySelectorAll('.nav-item')[3].click()`); await button('素材任务');
+  await js(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='任务');
+    if(!item)throw new Error('缺少任务导航项');item.click();})()`);
+  await wait(`!!document.querySelector('.page-tasks') && !document.querySelector('.page-loading')`); await button('素材任务');
   await wait(`!!document.querySelector('.media-job-list>button')`);
   await js(`[...document.querySelectorAll('.media-job-list>button')].find(b=>b.innerText.includes('素材筛选分析')).click()`);
   await wait(`!!document.querySelector('.screening-results')`);
@@ -75,7 +79,17 @@ export async function checkRelease7b(window: BrowserWindow, output: string, engi
     await wait(`!!document.querySelector('.screening-results')&&!document.querySelector('.screening-results').innerText.includes('正在读取已保存的分析结果')`);
   }
   await capture('-screening.png', '.screening-summary');
-  await js(`document.querySelectorAll('.nav-item')[2].click()`); await button('运行记录');
+  // 流程编辑器已不占导航位，运行记录从快速跳转进入。
+  await js(`(async()=>{
+    window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true}));
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    const input=document.querySelector('.command-search input');
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,'流程编辑器');
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+  })()`);
+  await wait(`!!document.querySelector('.page-workflow') && !document.querySelector('.page-loading')`); await button('运行记录');
   await wait(`!!document.querySelector('.flow-run-list>button')`); await js(`document.querySelector('.flow-run-list>button').click()`);
   await wait(`!!document.querySelector('.flow-run-detail h3')`); await button('查看固定产物');
   await wait(`!!document.querySelector('.flow-artifact-table')`);

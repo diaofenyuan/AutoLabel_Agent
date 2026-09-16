@@ -31,12 +31,22 @@ export async function checkRelease5(window: BrowserWindow, output: string, engin
     await waitFor(`!!document.querySelector('.annotation-canvas image') && !!document.querySelector('[aria-label="素材页码"]')`);
     report.paginationControls = await window.webContents.executeJavaScript(`!!document.querySelector('[aria-label="上一页素材"]') && !!document.querySelector('[aria-label="下一页素材"]')`);
     await capture('workbench');
-    await window.webContents.executeJavaScript(`document.querySelectorAll('.nav-item')[4].click()`);
+    // 资源库已不占导航位，改用快速跳转进入，命令面照旧验证。
+    await window.webContents.executeJavaScript(`(async()=>{
+      window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true}));
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      const input=document.querySelector('.command-search input');
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,'资源库');
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+    })()`);
     await waitFor(`document.body.innerText.includes('人工参考') && document.body.innerText.includes('提示词')`);
     report.resourceCommand = await window.webContents.executeJavaScript(`(async()=>{const r=await window.autoLabel.request('resource.save',{kind:'prompt',name:'新安装包资源检查',content:'仅用于隔离启动验收'});const v=await window.autoLabel.request('resource.get',{resourceId:r.id,version:r.version});return {kind:v.kind,version:v.version};})()`);
     report.resourcesEntry = true;
     await capture('resources');
-    await window.webContents.executeJavaScript(`document.querySelectorAll('.nav-item')[6].click()`);
+    await window.webContents.executeJavaScript(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');
+      if(!item)throw new Error('缺少设置导航项');item.click();})()`);
     await waitFor(`[...document.querySelectorAll('button')].some(b=>b.innerText.trim()==='工作空间')`);
     await window.webContents.executeJavaScript(`[...document.querySelectorAll('button')].find(b=>b.innerText.trim()==='工作空间').click()`);
     await waitFor(`!!document.querySelector('.storage-settings') && !!document.querySelector('[aria-label="当前数据目录"]') && !document.querySelector('.storage-state')?.innerText.includes('正在读取')`);

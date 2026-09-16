@@ -43,7 +43,16 @@ export async function checkRelease6b(window: BrowserWindow, output: string, engi
     const project = (await request('project.list'))[0];
     const assets = await request('asset.list', { projectId: project.id, limit: 1 });
     asset = await request('asset.get', { assetId: assets.items[0].id });
-    await js(`document.querySelectorAll('.nav-item')[2].click()`);
+    // 流程编辑器已不占导航位，改用快速跳转进入。
+    await js(`(async()=>{
+      window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true}));
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      const input=document.querySelector('.command-search input');
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,'流程编辑器');
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+    })()`);
     await wait(`!!document.querySelector('.flow-node')`);
     await js(`[...document.querySelectorAll('.flow-node')].find(node=>node.innerText.includes('API 标注')).click()`);
     await wait(`!!document.querySelector('.flow-inspector .reuse-policy')`);
@@ -59,7 +68,9 @@ export async function checkRelease6b(window: BrowserWindow, output: string, engi
     report.firstRunId = first.id; report.requests = requests;
     report.reused = { requestsUsed: reused.requestsUsed, reused: reused.statistics.reused,
       sourceRunId: reused.samples[0].reusedFrom?.sourceRunId, attempts: (await request('run.attempts', { runId: reused.id })).length };
-    await js(`document.querySelectorAll('.nav-item')[3].click()`);
+    await js(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='任务');
+      if(!item)throw new Error('缺少任务导航项');item.click();})()`);
+    await wait(`!!document.querySelector('.page-tasks') && !document.querySelector('.page-loading')`);
     await wait(`[...document.querySelectorAll('button')].some(b=>b.innerText.trim()==='标注任务')`);
     await js(`[...document.querySelectorAll('button')].find(b=>b.innerText.trim()==='标注任务').click()`);
     await wait(`!!document.querySelector('.run-list .run-row')`);

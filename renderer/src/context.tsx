@@ -12,17 +12,25 @@ export type SettingsSection = 'appearance' | 'workspace' | 'storage' | 'chats' |
 
 /** 扁平导航注册表：侧栏主入口与 Ctrl+K 快速跳转共用同一份页面清单，避免两处各自维护而漂移。 */
 export interface NavEntry { key: Page; label: string; icon: LucideIcon }
+/** 主导航只有对话、任务、设置三项；其余视图不再占导航位（见实施计划 §3.2）。 */
 export const navRegistry: NavEntry[] = [
   { key: 'chat', label: '对话', icon: MessageSquare },
+  { key: 'tasks', label: '任务', icon: ListTodo },
+  { key: 'settings', label: '设置', icon: Settings },
+];
+/** 过渡期仍可从快速跳转直接进入的视图：随页面本身一起在「模块退场」阶段移除。 */
+export const navLegacy: NavEntry[] = [
   { key: 'workbench', label: '标注工作台', icon: Scan },
   { key: 'workflow', label: '流程编辑器', icon: Workflow },
-  { key: 'tasks', label: '任务中心', icon: ListTodo },
   { key: 'resources', label: '资源库', icon: Library },
   { key: 'models', label: '模型中心', icon: Box },
   { key: 'training', label: '模型训练', icon: FlaskConical },
-  { key: 'settings', label: '设置', icon: Settings },
 ];
-export function navLabel(page: Page): string { return navRegistry.find(entry => entry.key === page)?.label ?? ''; }
+/** 快速跳转与顶栏标题共用的完整清单：主导航在前，过渡期视图在后。 */
+export const navAll: NavEntry[] = [...navRegistry, ...navLegacy];
+export function navLabel(page: Page): string {
+  return navAll.find(entry => entry.key === page)?.label ?? '';
+}
 
 export interface ChatSession {
   id: string; messages: Array<{ role: 'user'|'assistant'; content: string }>;

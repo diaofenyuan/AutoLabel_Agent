@@ -42,7 +42,9 @@ export async function checkDesktopConnection(window: BrowserWindow, output: stri
 // 固定的桌面验收流程，仅由显式测试启动参数调用，不接受界面传入脚本。
 export async function checkDesktopUi(window: BrowserWindow, output: string): Promise<void> {
   const folder = path.join(path.dirname(output), 'ui-screens'); await mkdir(folder, { recursive: true });
-  const pages = ['chat', 'workbench', 'workflow', 'tasks', 'resources', 'models', 'training', 'settings'];
+  // 主导航收敛为对话 / 任务 / 设置三项；其余视图走快速跳转进入，脚本不再绑定侧栏次序。
+  const pages = ['chat', 'tasks', 'settings'];
+  const pageLabels: Record<string, string> = { chat: '对话', tasks: '任务', settings: '设置' };
   const results: Record<string, unknown>[] = [];
   const waitFor = async (expression: string) => {
     const deadline = Date.now() + 8000;
@@ -66,12 +68,28 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
     await waitFor(`!!document.querySelector('[aria-label="载入示例"]')`);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="载入示例"]').click()`);
   };
+  /** 用快速跳转打开任意视图：主导航之外的页面同样可达，也不会被侧栏次序变化带崩。 */
+  const openPage = async (label: string, page: string) => {
+    await window.webContents.executeJavaScript(`(async()=>{
+      window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true}));
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      const input=document.querySelector('.command-search input');
+      if(!input)throw new Error('快速跳转未打开');
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(label)});
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+    })()`);
+    await waitFor(`!!document.querySelector('.page-${page}') && !document.querySelector('.page-loading')`);
+    await settle();
+  };
+  const samplePage = async (page: string) => window.webContents.executeJavaScript(`({page:${JSON.stringify(page)},
+    bodyLength:document.querySelector('.page').innerText.length,error:document.querySelector('.toast.error')?.innerText??null,
+    canvasObjects:document.querySelectorAll('.annotation-shape').length,heading:document.querySelector('.page h1,.page h2')?.textContent??null,bridge:!!window.autoLabel})`);
   window.show();
   await waitFor(`!!document.querySelector('.chat-home') && !document.querySelector('.skeleton-list')`);
   await waitFor(`!!document.querySelector('.sidebar-status .status-dot.ready') && !document.querySelector('.connection-banner')`);
-  for (let i = 0; i < pages.length; i++) {
-    if (i === 0) {
-      const palette = await window.webContents.executeJavaScript(`(async()=>{
+  const palette = await window.webContents.executeJavaScript(`(async()=>{
         window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true}));
         await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
         const dialog=document.querySelector('dialog[open]');
@@ -80,13 +98,22 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
         window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));
         window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
         await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-        return {trigger,opened:!!dialog,entries,keyboardClosed:!document.querySelector('dialog[open]')};
+        const closed=!document.querySelector('dialog[open]');
+        // 键盘选择会跳到第二项，回到欢迎页再做后面的页面检查。
+        window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true}));
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        const back=document.querySelector('.command-search input');
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(back,'对话');
+        back.dispatchEvent(new Event('input',{bubbles:true}));
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+        return {trigger,opened:!!dialog,entries,keyboardClosed:closed};
       })()`);
-      if (!palette.trigger || !palette.opened || !palette.keyboardClosed || !palette.entries.includes('设置')) throw new Error('快速跳转命令面板未通过桌面检查');
-      results.push({ check: 'command-palette', ...palette });
-    }
-    if (i === 1) {
-      await loadExample();
+  if (!palette.trigger || !palette.opened || !palette.keyboardClosed || !palette.entries.includes('设置')) throw new Error('快速跳转命令面板未通过桌面检查');
+  if (!palette.entries.includes('对话') || !palette.entries.includes('任务')) throw new Error(`主导航未收敛为对话 / 任务 / 设置：${palette.entries.join('、')}`);
+  results.push({ check: 'command-palette', ...palette });
+  await openPage('对话', 'chat');
+  await loadExample();
       await waitFor(`!!document.querySelector('.annotation-canvas image') && !document.querySelector('.image-failure')`);
       const image = await window.webContents.executeJavaScript(`new Promise(resolve=>{
         const source=document.querySelector('.annotation-canvas image').getAttribute('href');
@@ -110,14 +137,11 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
       window.webContents.sendInputEvent({ type: 'mouseUp', x: save.x, y: save.y, button: 'left', clickCount: 1 });
       await waitFor(`window.autoLabel.request('asset.get',{assetId:${JSON.stringify(assetId)}}).then(a=>a.version>${original.version}&&a.annotations[0].bbox.x===${expectedX})`);
       results.push({ check: 'manual-edit', assetId, originalX: selected.value, expectedX, originalVersion: original.version });
-    } else {
-      await window.webContents.executeJavaScript(`document.querySelectorAll('.nav-item')[${i}].click()`);
-    }
-    await waitFor(`!!document.querySelector('.page-${pages[i]}') && !document.querySelector('.page-loading')`);
-    await settle();
-    const view = await window.webContents.executeJavaScript(`({page:${JSON.stringify(pages[i])},bodyLength:document.querySelector('.page').innerText.length,
-      error:document.querySelector('.toast.error')?.innerText??null,canvasObjects:document.querySelectorAll('.annotation-shape').length,
-      heading:document.querySelector('.page h1,.page h2')?.textContent??null,bridge:!!window.autoLabel})`);
+  // 工作台仍是只读结果预览之外唯一能打开素材的页面，示例载入后顺手记一条页面样本。
+  results.push(await samplePage('workbench'));
+  for (let i = 0; i < pages.length; i++) {
+    await openPage(pageLabels[pages[i]], pages[i]);
+    const view = await samplePage(pages[i]);
     results.push(view);
     await writeFile(path.join(folder, `${i + 1}-${pages[i]}.png`), (await window.webContents.capturePage()).toPNG());
     if (pages[i] === 'settings') {
@@ -135,56 +159,41 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
       const save = await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('button')].find(item=>item.innerText.trim()==='保存设置')?.click())()`);
       await new Promise(resolve=>setTimeout(resolve, 180));
       const darkPages: Record<string, unknown>[] = [];
-      for (let darkIndex = 0; darkIndex < pages.length; darkIndex++) {
-        await window.webContents.executeJavaScript(`document.querySelectorAll('.nav-item')[${darkIndex}].click()`);
-        await waitFor(`!!document.querySelector('.page-${pages[darkIndex]}') && !document.querySelector('.page-loading')`);
+      // 深色主题覆盖三项主导航与示例工作台，页面清单变化时不必再改这段。
+      for (const darkPageName of [...pages, 'workbench']) {
+        if (darkPageName === 'workbench') {
+          await window.webContents.executeJavaScript(`(()=>{const row=[...document.querySelectorAll('.sidebar-project .sidebar-row')][0];
+            if(!row)throw new Error('侧栏没有可打开的项目');row.click();})()`);
+          await waitFor(`!!document.querySelector('.page-workbench') && !document.querySelector('.page-loading')`);
+        } else {
+          await openPage(pageLabels[darkPageName], darkPageName);
+        }
         await settle();
-        const darkPage = await window.webContents.executeJavaScript(`({page:${JSON.stringify(pages[darkIndex])},theme:document.documentElement.dataset.theme,error:document.querySelector('.toast.error')?.innerText??null,bodyLength:document.querySelector('.page').innerText.length})`);
-        if (darkPage.theme !== 'dark' || darkPage.error) throw new Error(`深色主题页面检查失败：${pages[darkIndex]}`);
+        const darkPage = await window.webContents.executeJavaScript(`({page:${JSON.stringify(darkPageName)},theme:document.documentElement.dataset.theme,error:document.querySelector('.toast.error')?.innerText??null,bodyLength:document.querySelector('.page').innerText.length})`);
+        if (darkPage.theme !== 'dark' || darkPage.error) throw new Error(`深色主题页面检查失败：${darkPageName}`);
         darkPages.push(darkPage);
-        await writeFile(path.join(folder, `dark-${darkIndex + 1}-${pages[darkIndex]}.png`), (await window.webContents.capturePage()).toPNG());
+        await writeFile(path.join(folder, `dark-${darkPageName}.png`), (await window.webContents.capturePage()).toPNG());
       }
       results.push({check:'dark-theme', ...darkTheme, saved:save===undefined, pages:darkPages});
     }
   }
-  // 主导航之外的页签也必须保持同一套层级、过渡和错误边界，避免只验收首页空态。
+  // 主导航之内的页签也必须保持同一套层级、过渡和错误边界，避免只验收首页空态。
   const secondary: Record<string, unknown>[] = [];
-  const openPage = async (index: number) => {
-    await window.webContents.executeJavaScript(`document.querySelectorAll('.nav-item')[${index}].click()`);
-    await waitFor(`!!document.querySelector('.page-${pages[index]}') && !document.querySelector('.page-loading')`);
-    await settle();
-  };
   const captureSecondary = async (name: string, view: string) => {
     const state = await window.webContents.executeJavaScript(`({view:${JSON.stringify(view)},bodyLength:document.querySelector('.page').innerText.length,error:document.querySelector('.toast.error')?.innerText??null})`);
     if (state.error || state.bodyLength <= 40) throw new Error(`二级界面检查失败：${view}`);
     secondary.push(state);
     await writeFile(path.join(folder, name), (await window.webContents.capturePage()).toPNG());
   };
-  await openPage(2);
-  await window.webContents.executeJavaScript(`document.querySelectorAll('.flow-view-tabs button')[1]?.click()`);
-  await waitFor(`!!document.querySelector('.flow-runs')`);
-  await settle();
-  await captureSecondary('secondary-workflow-runs.png', 'workflow-runs');
-  await openPage(3);
+  await openPage(pageLabels.tasks, 'tasks');
   for (const [index, label] of ['标注任务', '素材任务', '轨迹标注'].entries()) {
     await window.webContents.executeJavaScript(`(()=>{const b=[...document.querySelectorAll('.task-kind-tabs button')].find(item=>item.innerText.trim()===${JSON.stringify(label)});if(b&&!b.disabled)b.click()})()`);
     await waitFor(`!!document.querySelector('.page-tasks') && !document.querySelector('.page-loading')`);
     await settle();
     await captureSecondary(`secondary-tasks-${index + 1}.png`, `tasks-${label}`);
   }
-  await openPage(4);
-  await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.resources-page button')].find(item=>item.innerText.trim()==='新建资源')?.click())()`);
-  await waitFor(`!!document.querySelector('.resource-editor')`);
-  await settle();
-  await captureSecondary('secondary-resource-editor.png', 'resource-editor');
-  await window.webContents.executeJavaScript(`document.querySelector('.resource-editor button')?.click()`);
-  await openPage(5);
-  await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.model-kind-tabs button')].find(item=>item.innerText.trim()==='本地模型')?.click())()`);
-  await waitFor(`!!document.querySelector('.local-models')`);
-  await settle();
-  await captureSecondary('secondary-models-local.png', 'models-local');
-  await openPage(7);
-  for (const [index, label] of ['工作空间', '本地推理', '视频工具', '快捷键', '应用更新', '诊断'].entries()) {
+  await openPage(pageLabels.settings, 'settings');
+  for (const [index, label] of ['工作空间', '本地推理', '视频工具', '示例', '快捷键', '应用更新', '诊断'].entries()) {
     await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.settings-tabs button')].find(item=>item.innerText.trim()===${JSON.stringify(label)})?.click())()`);
     await window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     await settle();

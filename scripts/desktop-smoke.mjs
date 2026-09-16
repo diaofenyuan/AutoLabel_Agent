@@ -116,13 +116,14 @@ if (mediaOnly) { assert.equal(result.passed, true); assert.equal(result.timeline
 if (trainingUiOnly) { assert.equal(result.passed, true); assert.ok(['ready', 'invalid'].includes(result.dataset.status)); assert.equal(result.wizard.tabs.length, 3); console.log(`训练页向导与真实快照界面检查通过：${output}`); process.exit(0); }
 if (connectionOnly) { assert.equal(result.before.ready, true); assert.equal(result.before.banner, false); assert.equal(result.disconnected.visible, true); assert.equal(result.disconnected.buttonEnabled, true); assert.equal(result.restored.ready, true); assert.equal(result.restored.banner, false); console.log(`断线重连桌面界面检查通过：${output}`); process.exit(0); }
 if (uiOnly) {
+  // 主导航收敛后验收覆盖三项主导航 + 示例工作台。
   const pages = result.pages.filter(page => page.page);
-  assert.equal(pages.length, 8); assert.ok(pages.every(page => page.bridge && page.bodyLength > 40 && !page.error));
+  assert.equal(pages.length, 4); assert.ok(pages.every(page => page.bridge && page.bodyLength > 40 && !page.error));
   assert.ok(result.pages.find(page => page.check === 'manual-example')?.loaded);
   assert.ok(pages.find(page => page.page === 'workbench').canvasObjects > 0);
   assert.equal(await run(args.map(arg => arg === '--desktop-ui-check' ? '--desktop-ui-resume' : arg)), 0);
   result = JSON.parse(await readFile(output, 'utf8')); assert.equal(result.restartPersistence.restored, true);
-  console.log(`八页桌面与人工示例检查通过：${output}`); process.exit(0);
+  console.log(`主导航与人工示例检查通过：${output}`); process.exit(0);
 }
 if (windowOnly) {
   for (const view of [result.ui, result.fallback]) {

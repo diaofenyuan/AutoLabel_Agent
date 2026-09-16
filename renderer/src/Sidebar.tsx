@@ -1,23 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Box, Eraser, FlaskConical, FolderOpen, Library, ListTodo,
-  MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Pin, PinOff, Plus, Scan, Search,
-  Settings as SettingsIcon, Trash2, Workflow as WorkflowIcon,
+  Eraser, FolderOpen, ListTodo, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Pin, PinOff, Plus, Scan, Search,
+  Settings as SettingsIcon, Trash2,
 } from 'lucide-react';
 import type { ChatSessionSummary } from '../../shared/chat';
 import { useApp } from './context';
 import { errorMessage, isDemo, request } from './bridge';
 import { Button, Field, IconButton, Modal } from './ui';
 
-/** 主入口与 navRegistry 保持同一顺序，`.nav-item` 的 DOM 次序即页面次序。 */
+/**
+ * 主入口只有两项：新建对话与任务；设置固定在底部。
+ * 其余视图不再占导航位，避免「工具型多页结构」回到界面里。
+ */
 const mainEntries = [
   { key: 'chat', label: '新建对话', icon: MessageSquarePlus },
-  { key: 'workbench', label: '标注工作台', icon: Scan },
-  { key: 'workflow', label: '流程编辑器', icon: WorkflowIcon },
-  { key: 'tasks', label: '任务中心', icon: ListTodo },
-  { key: 'resources', label: '资源库', icon: Library },
-  { key: 'models', label: '模型中心', icon: Box },
-  { key: 'training', label: '模型训练', icon: FlaskConical },
+  { key: 'tasks', label: '任务', icon: ListTodo },
 ] as const;
 
 type RenameTarget = { kind: 'session' | 'project'; id: string; value: string };
