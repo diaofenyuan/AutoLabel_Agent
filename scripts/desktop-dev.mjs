@@ -18,7 +18,10 @@ for (let attempt = 0; attempt < 100 && vite.exitCode === null; attempt++) {
 }
 if (!ready) { vite.kill(); throw new Error('开发界面启动失败，请先安装 renderer 依赖'); }
 const env = { ...process.env, AUTOLABEL_RENDERER_URL: origin }; delete env.ELECTRON_RUN_AS_NODE;
-const electron = spawn(require('electron'), [root], { cwd: root, stdio: 'inherit', windowsHide: true, env });
+// 显卡不可用或受限环境（Chromium GPU 进程起不来）需要显式追加开关，与 desktop-smoke.mjs 同一约定：
+// AUTOLABEL_EXTRA_LAUNCH_ARGS="--no-sandbox --in-process-gpu --disable-gpu"
+const extraLaunchArgs = (process.env.AUTOLABEL_EXTRA_LAUNCH_ARGS || '').split(/\s+/).filter(Boolean);
+const electron = spawn(require('electron'), [root, ...extraLaunchArgs], { cwd: root, stdio: 'inherit', windowsHide: true, env });
 const stop = () => { electron.kill(); vite.kill(); };
 process.once('SIGINT', stop); process.once('SIGTERM', stop);
 electron.once('exit', code => { vite.kill(); process.exitCode = code ?? 0; });

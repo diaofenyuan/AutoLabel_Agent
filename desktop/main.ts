@@ -105,7 +105,10 @@ if (!app.isPackaged && process.env.AUTOLABEL_RENDERER_URL) {
   if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(url.hostname) || url.username || url.password) throw new Error('开发服务器必须为本机 HTTP 地址');
   devOrigin = url.origin;
 }
-const csp = `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' autolabel-media: data: blob:; font-src 'self' data:; connect-src 'self'${devOrigin ? ` ${devOrigin.replace('http:', 'ws:')}` : ''}; media-src autolabel-media: blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`;
+// 开发态需要额外放宽两项，且只在 devOrigin 存在（仅本机 Vite）时生效：
+// 1) Vite 在 index.html 顶部内联注入 react-refresh 预置脚本，被 `script-src 'self'` 拦下会让 $RefreshSig$ 未定义、
+//    整个界面挂载失败并停在白屏；2) HMR 走 WebSocket。
+const csp = `default-src 'none'; script-src 'self'${devOrigin ? " 'unsafe-inline'" : ''}; style-src 'self' 'unsafe-inline'; img-src 'self' autolabel-media: data: blob:; font-src 'self' data:; connect-src 'self'${devOrigin ? ` ${devOrigin.replace('http:', 'ws:')}` : ''}; media-src autolabel-media: blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`;
 
 function send(channel: string, value: unknown): void { if (window && !window.isDestroyed()) window.webContents.send(channel, value); }
 function createBackend(location: StorageLocation): ActiveStorage {
