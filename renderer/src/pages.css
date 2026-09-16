@@ -395,3 +395,21 @@
 .overview-list li{display:flex;flex-direction:column;gap:2px}
 .overview-list strong{font-size:11px}
 .overview-list span{font-size:10px;color:var(--soft)}
+/* 原因码呈现区：把「原始码 + 张数」换成可读中文，并把体检问题按严重度分组列出。
+   建议动作去重后单独一行，避免同一动作随多条问题重复渲染成一排相同按钮。 */
+.version-preview-block{margin-top:12px}
+.version-preview-block>p{font-size:11px;font-weight:500;margin-bottom:6px}
+.reason-summary{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.reason-summary>li{display:flex;align-items:baseline;justify-content:space-between;gap:14px;font-size:11px;line-height:1.6}
+.reason-summary>li>span{color:var(--muted);min-width:0;overflow-wrap:anywhere}
+.reason-summary>li>strong{color:var(--text);font-weight:550;font-variant-numeric:tabular-nums;white-space:nowrap}
+.reason-issues{margin-top:14px;border-top:1px solid var(--border);padding-top:12px}
+.reason-issues-head{font-size:11px;font-weight:550;margin-bottom:7px}
+.reason-issues>ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.reason-issues>ul>li{display:flex;align-items:flex-start;gap:7px;font-size:11px;line-height:1.65;overflow-wrap:anywhere}
+.reason-issues>ul>li>svg{margin-top:2px;flex-shrink:0}
+.reason-error{color:var(--error)}
+.reason-warning{color:var(--muted)}
+.reason-issues-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px}
+.issue-diagnostics{margin-top:6px}
+.issue-diagnostics>p{font-family:Consolas,monospace;font-size:10px}

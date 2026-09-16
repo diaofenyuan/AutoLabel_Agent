@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, Check, GitCompare, Layers, LoaderCircle, Plus, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react';
 import { useApp } from './context';
-import { request, errorMessage } from './bridge';
+import { request } from './bridge';
 import { Button, Empty, Field, Modal } from './ui';
+import { ReasonIssueList, ReasonSummary, readableError, reasonLabel } from './reasonCodes';
 import type { Project } from './types';
 
 interface Count { outcome: string; split: string; count: number }
@@ -29,6 +30,11 @@ const statusText: Record<string, string> = { draft: '草稿', building: '生成�
 const stageText: Record<string, string> = { queued: '排队中', scanning: '解析原始数据集', splitting: '计算划分', copying: '复制与校验副本', publishing: '发布版本', done: '已完成', failed: '已失败', cancelled: '已取消' };
 const scopeLabels: Array<[string, string]> = [['labeled', '有正式标注（候选 / 已修改 / 已确认）'], ['confirmed', '仅人工已确认']];
 const size = (value?: number) => value === undefined ? '—' : `${(value / 1024 / 1024).toFixed(1)} MB`;
+/** 预检返回的问题是体检（Exporter.inspect）的原始结构，界面只读不改造，因此这里做一次收窄访问。 */
+const preflightIssues = (preflight: Record<string, unknown> | null): VersionIssue[] =>
+  (preflight?.inspection as { issues?: VersionIssue[] } | undefined)?.issues ?? [];
+const preflightReasons = (preflight: Record<string, unknown> | null): Record<string, number> =>
+  (preflight?.excludedByReason as Record<string, number> | undefined) ?? {};
 
 // 配方表单：空值表示"跟随引擎默认"。只有用户实际改动的字段才会写进版本清单，
 // 这样不配置配方的版本与阶段 A 的最简配方保持一致，历史版本对比也不会因空值而失真。
@@ -88,8 +94,13 @@ function recipePayload(current: Recipe) {
   return { selection, transform, split };
 }
 
-export function DatasetVersionDialog({ project, onClose }: { project: Project; onClose: () => void }) {
+export function DatasetVersionDialog({ project, onClose, onOpenTemplate, onOpenChat, onOpenExport }: {
+  project: Project; onClose: () => void; onOpenTemplate?: () => void; onOpenChat?: () => void; onOpenExport?: () => void;
+}) {
   const { notify } = useApp();
+  // 预检问题的直达动作：把「知道卡在哪」直接接到「能去哪里修」，缺 handler 的动作不渲染。
+  const issueHandlers = { ...(onOpenTemplate ? { openTemplate: onOpenTemplate } : {}),
+    ...(onOpenChat ? { openChat: onOpenChat } : {}), ...(onOpenExport ? { openExport: onOpenExport } : {}) };
   const [versions, setVersions] = useState<DatasetVersion[]>([]);
   const [loading, setLoading] = useState(true);
   const [detailId, setDetailId] = useState('');
@@ -109,7 +120,7 @@ export function DatasetVersionDialog({ project, onClose }: { project: Project; o
 
   const refresh = useCallback(async () => {
     try { setVersions((await request<{ items: DatasetVersion[] }>('dataset.version.list', { projectId: project.id })).items); }
-    catch (e) { notify(errorMessage(e), true); }
+    catch (e) { notify(readableError(e), true); }
     finally { setLoading(false); }
   }, [project.id, notify]);
 
@@ -124,7 +135,7 @@ export function DatasetVersionDialog({ project, onClose }: { project: Project; o
 
   useEffect(() => {
     if (!detailId) { setDetail(null); return; }
-    void request<DatasetVersion>('dataset.version.get', { versionId: detailId }).then(setDetail).catch(e => notify(errorMessage(e), true));
+    void request<DatasetVersion>('dataset.version.get', { versionId: detailId }).then(setDetail).catch(e => notify(readableError(e), true));
   }, [detailId, versions, notify]);
 
   function recipeFields() {
@@ -139,7 +150,7 @@ export function DatasetVersionDialog({ project, onClose }: { project: Project; o
   async function preflightCurrent() {
     setBusy(true);
     try { setPreflight(await request('dataset.version.preflight', { projectId: project.id, annotationScope, ...recipeFields() })); }
-    catch (e) { notify(errorMessage(e), true); }
+    catch (e) { notify(readableError(e), true); }
     finally { setBusy(false); }
   }
   async function submit() {
@@ -152,7 +163,7 @@ export function DatasetVersionDialog({ project, onClose }: { project: Project; o
       setBase(created.id); setDetailId(created.id);
       await refresh();
       notify('版本已开始生成，进度在下方实时更新。');
-    } catch (e) { notify(errorMessage(e), true); }
+    } catch (e) { notify(readableError(e), true); }
     finally { setBusy(false); }
   }
   async function act(action: string, versionId: string, extra: Record<string, unknown> = {}) {
@@ -164,7 +175,7 @@ export function DatasetVersionDialog({ project, onClose }: { project: Project; o
       if (action === 'verify') notify('复核完成。');
       if (action === 'delete') { setDetailId(''); setCompared(null); setVerified(null); notify('版本已删除（副本保留，可由生命周期清理）。'); }
       await refresh();
-    } catch (e) { notify(errorMessage(e), true); }
+    } catch (e) { notify(readableError(e), true); }
     finally { setBusy(false); }
   }
   return <Modal title={`数据集版本 · ${project.name}`} onClose={onClose} wide>
@@ -233,9 +244,12 @@ export function DatasetVersionDialog({ project, onClose }: { project: Project; o
           {!!preflight.transformPreview && (preflight.transformPreview as Record<string, unknown>).enabled === true
             && <p>按当前转换预计 {String((preflight.transformPreview as Record<string, unknown>).estimatedItems ?? '—')} 个版本项（含变体）</p>}
           {!!preflight.splitPreview && <p>预计划分：{(['train', 'val', 'test'] as const).map(key => `${key} ${String(((preflight.splitPreview as { actualGroups?: Record<string, unknown> }).actualGroups ?? {})[key] ?? '—')} 组`).join(' · ')}</p>}
-          {Object.keys((preflight.excludedByReason as Record<string, unknown> | undefined) ?? {}).length > 0
-            && <p>遗漏范围：{Object.entries(preflight.excludedByReason as Record<string, unknown>).slice(0, 6).map(([code, count]) => `${code} ${String(count)}`).join(' · ')}</p>}
-          {Number(preflight.blocking ?? 0) > 0 && <p className="inline-error">存在 {String(preflight.blocking)} 个阻断问题，需先处理才能生成版本。</p>}</div>}
+          {/* 遗漏范围给中文标签，问题清单给引擎原文 + 直达动作：只报数量的写法用户无法据此行动。 */}
+          {Object.keys(preflightReasons(preflight)).length > 0 && <div className="version-preview-block">
+            <p>遗漏范围（{String(preflight.excludedTotal ?? preflight.excluded ?? 0)} 张）</p>
+            <ReasonSummary reasons={preflightReasons(preflight)} />
+          </div>}
+          <ReasonIssueList issues={preflightIssues(preflight)} handlers={issueHandlers} /></div>}
       </form>}
       {loading ? <div className="page-loading" role="status"><LoaderCircle className="spin" size={18} />读取版本…</div>
         : versions.length ? <div className="training-cards">{versions.map(version => {
@@ -285,7 +299,7 @@ function DetailView({ version, onClose, notify }: { version: DatasetVersion; onC
   const [items, setItems] = useState<{ items: Array<Record<string, unknown>>; total: number } | null>(null);
   useEffect(() => {
     void request<{ items: Array<Record<string, unknown>>; total: number }>('dataset.version.items', { versionId: version.id, outcome: 'filtered_out', limit: 50 })
-      .then(setItems).catch(e => notify(errorMessage(e), true));
+      .then(setItems).catch(e => notify(readableError(e), true));
   }, [version.id, notify]);
   const issues = version.inspection?.issues ?? [];
   const reasons = version.selection?.excludedByReason ?? {};
@@ -298,14 +312,15 @@ function DetailView({ version, onClose, notify }: { version: DatasetVersion; onC
       <p>配方哈希：<code>{version.recipeHash}</code></p>
       <p>划分种子：<code>{version.split?.seed ?? version.recipe?.split?.seed ?? '—'}</code></p>
       {!!version.split?.actual?.length && <p>实际划分：{version.split.actual.map(entry => `${entry.split} ${entry.images} 张 / ${entry.objects} 目标`).join(' · ')}</p>}
-      {!!Object.keys(reasons).length && <p>遗漏范围：{Object.entries(reasons).map(([code, count]) => `${code} ${count}`).join(' · ')}</p>}
+      {!!Object.keys(reasons).length && <div className="version-preview-block"><p>遗漏范围</p><ReasonSummary reasons={reasons} limit={12} /></div>}
     </div>
     {version.failure && <p className="inline-error">{version.failure.message}（{version.failure.code}）</p>}
     {!!issues.length && <div className="operation-issues"><h3 style={{ fontSize: 12, marginBottom: 8 }}>体检问题（{issues.length}）</h3>
       <div className="label-pairs">{issues.slice(0, 50).map((issue, index) => <div className="issue-detail" key={index}>
-        <strong>{issue.code}</strong><small>{issue.severity}{issue.assetId ? ` · ${issue.assetId}` : ''}</small><p>{issue.message}</p></div>)}</div></div>}
+        <strong>{issue.message}</strong><small>{issue.severity === 'error' ? '需要先处理' : '提示'}{issue.assetId ? ` · 素材 ${issue.assetId}` : ''}</small>
+        <details className="issue-diagnostics"><summary>诊断详情</summary><p>原因码：{issue.code}</p></details></div>)}</div></div>}
     {!!items?.items.length && <div className="operation-issues"><h3 style={{ fontSize: 12, marginBottom: 8 }}>被排除的素材（{items.total}）</h3>
       <div className="label-pairs">{items.items.slice(0, 50).map(item => <div className="issue-detail" key={String(item.assetId)}>
-        <strong>{String(item.name ?? item.assetId)}</strong><small>{String(item.reasonCode ?? '')} · {String(item.status ?? '')}</small></div>)}</div></div>}
+        <strong>{String(item.name ?? item.assetId)}</strong><small>{reasonLabel(String(item.reasonCode ?? ''))} · {statusText[String(item.status ?? '')] ?? String(item.status ?? '')}</small></div>)}</div></div>}
   </section>;
 }

@@ -25,6 +25,20 @@ test('Agent 原生工具消息与有单位配置通过合法协议', () => {
   assert.equal(validateCommand('provider.save', provider).payload.maxImages, 64);
   assert.throws(() => validateCommand('provider.save', { ...provider, maxImages: 65 }), /格式不正确/);
 });
+test('导出格式标识接受内置前缀，导出预检不因默认格式被拦下', () => {
+  // 导出对话框在挂载时就会回填 builtin:yolo。若 formatId 只允许 [A-Za-z0-9_-]，
+  // 导出预检与导出提交都会在参数校验阶段失败，用户看到的是「参数格式不正确」而不是真实的导出检查结果。
+  const fields = { projectId: 'p', taskType: 'detect' as const };
+  assert.doesNotThrow(() => validateCommand('export.preflight', { ...fields, formatId: 'builtin:yolo', formatVersion: 1 }));
+  assert.doesNotThrow(() => validateCommand('export.create', { ...fields, formatId: 'builtin:yolo', formatVersion: 1 }));
+  assert.doesNotThrow(() => validateCommand('export.format.get', { formatId: 'builtin:coco' }));
+  assert.doesNotThrow(() => validateCommand('export.format.delete', { formatId: 'builtin:csv', baseVersion: 1 }));
+  // 用户保存的模板使用引擎生成的普通标识，同样必须通过。
+  assert.doesNotThrow(() => validateCommand('export.preflight', { ...fields, formatId: 'format-abc_123' }));
+  // 前缀之外仍限定安全字符集：内置前缀不能被用来夹带路径或地址。
+  assert.throws(() => validateCommand('export.preflight', { ...fields, formatId: 'builtin:../etc' }), /格式不正确/);
+  assert.throws(() => validateCommand('export.preflight', { ...fields, formatId: 'http://example.com/x' }), /格式不正确/);
+});
 test('4C 人工真值需要显式来源和基线，Agent 只开放查询与既有运行比较', () => {
   assert.doesNotThrow(() => validateCommand('evaluationSet.create', { projectId: 'p', name: '人工评测集', assetIds: ['a', 'b'] }));
   assert.throws(() => validateCommand('evaluationSet.create', { projectId: 'p', name: '人工评测集', assetIds: ['a', 'a'] }), /格式不正确/);

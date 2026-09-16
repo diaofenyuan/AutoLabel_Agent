@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
+/**
+ * 内置资源的标识带 `builtin:` 前缀（导出格式、抽帧配方）。对内置项的读取、删除与覆盖必须交给引擎
+ * 给出可读的 403，不能在这里退化成「参数格式不正确」：导出格式选择器在挂载时就会回填
+ * `builtin:yolo`，若 formatId 不接受该前缀，导出预检与导出提交会双双失败，整条导出链路不可用。
+ */
+const builtinId = z.string().min(1).max(128).regex(/^(builtin:)?[A-Za-z0-9_-]+$/);
 const text = z.string().max(32000);
 const name = z.string().trim().min(1).max(256);
 const count = z.number().int().min(0).max(1000000);
@@ -60,8 +66,8 @@ const mediaPath = z.string().min(1).max(32767);
 const mediaPage = { offset: z.number().int().min(0).max(2147483647).optional(), limit: z.number().int().min(1).max(500).optional() };
 const mediaJob = z.strictObject({ jobId: id });
 const mediaStream = z.number().int().min(0).max(65535);
-// 配方标识允许内置前缀（builtin:xxx）：删除内置配方由引擎给出可读的 403，不在这里退化成格式错误。
-const recipeId = z.string().min(1).max(128).regex(/^(builtin:)?[A-Za-z0-9_-]+$/);
+// 配方标识与导出格式标识同形，共用内置前缀规则。
+const recipeId = builtinId;
 const videoRanges = z.array(z.strictObject({ start: finite.min(0).max(604800), end: finite.min(0).max(604800) })
   .refine(value => value.start < value.end, '时间段结束值须大于开始值')).min(1).max(32)
   .refine(values => values.every((value, index) => index === 0 || value.start >= values[index - 1].end), '时间段须按时间排序且不能重叠');
@@ -170,7 +176,7 @@ const trackGenerationParameters = z.strictObject({ maxGapSeconds: finite.gt(0).m
   maxKeypointSpeedPixelsPerSecond: finite.gt(0).max(1e12).optional(), maxScaleFactor: finite.min(1).max(1e12).optional() });
 const trackGeneratePreview = trackWrite.extend({ parameters: trackGenerationParameters.optional(), scope: z.enum(['affected', 'all']).optional() });
 const exportFields = { projectId: id, taskType: taskType.optional(), assetIds,
-  formatId: id.optional(), formatVersion: resourceVersion.optional() };
+  formatId: builtinId.optional(), formatVersion: resourceVersion.optional() };
 // 导出格式规范由引擎做语义校验（任务兼容、路径与扩展名），这里只限制结构与体积。
 const exportLayout = z.strictObject({ image: z.string().max(400).optional(), classifyImage: z.string().max(400).optional(),
   label: z.string().max(400).optional(), index: z.string().max(400).optional() });
@@ -324,11 +330,11 @@ const schemas: Record<string, z.ZodType> = {
     onlyConfirmed: z.boolean().optional(), format: exportFormatSpec.optional(), datasetVersionId: id.optional() }),
   'export.list': z.strictObject({ projectId: id }),
   'export.format.list': z.strictObject({ taskType: taskType.optional() }),
-  'export.format.get': z.strictObject({ formatId: id, version: resourceVersion.optional() }),
+  'export.format.get': z.strictObject({ formatId: builtinId, version: resourceVersion.optional() }),
   // 定义与规范同为扁平结构：名称等元数据与格式字段在同一层，避免保存与读取出现两套形状。
   'export.format.save': z.strictObject({ id: id.optional(), baseVersion: resourceVersion.optional(), taskType, name,
     category: z.string().max(100).optional(), note: text.optional(), ...exportFormatFields }),
-  'export.format.delete': z.strictObject({ formatId: id, baseVersion: resourceVersion.optional() }),
+  'export.format.delete': z.strictObject({ formatId: builtinId, baseVersion: resourceVersion.optional() }),
   'export.reproduce': z.strictObject({ exportId: id, outputDir: z.string().min(1).max(32767) }),
   'export.compare': z.strictObject({ exportId: id, otherExportId: id }),
   // 训练参数边界与引擎 TrainingParameters 一一对应；这里只做结构与区间前置校验，语义由引擎复核。

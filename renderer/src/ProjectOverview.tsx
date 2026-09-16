@@ -160,8 +160,11 @@ export default function ProjectOverview() {
       <ResultViewer asset={preview} classes={project.classes} connectionTemplate={project.settings?.keypointConnections as string[] | undefined} maxHeight="60vh" />
       <p className="muted tiny">只读预览。要改标注就在对话里说明，例如「把第 2 张图的第二个框改成行人」。</p>
     </Modal>}
-    {dialog === 'versions' && <DatasetVersionDialog project={project} onClose={() => setDialog(null)} />}
-    {dialog === 'export' && <ExportDialog onClose={() => setDialog(null)} />}
+    {dialog === 'versions' && <DatasetVersionDialog project={project} onClose={() => setDialog(null)}
+      onOpenTemplate={() => setDialog('template')}
+      onOpenExport={() => setDialog('export')}
+      onOpenChat={() => { setDialog(null); void openProject(project).catch(e => notify(errorMessage(e), true)); }} />}
+    {dialog === 'export' && <ExportDialog onClose={() => setDialog(null)} onOpenTemplate={() => setDialog('template')} />}
     {dialog === 'template' && <TemplateDialog onClose={() => setDialog(null)} />}
     {dialog === 'resources' && <ResourceHub onClose={() => setDialog(null)} />}
     {actions && <AssetActions asset={actions} onClose={() => setActions(null)}
