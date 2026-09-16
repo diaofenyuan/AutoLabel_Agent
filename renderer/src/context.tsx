@@ -59,18 +59,9 @@ export interface AppState {
   loadAssetPage: (offset: number) => Promise<Asset[]>;
   selectedAssetIds: string[]; setSelectedAssetIds: React.Dispatch<React.SetStateAction<string[]>>;
   /**
-   * 工作台的视图与当前素材提升到应用层：切页会卸载工作台，这两项若留在页面内，
-   * 从任务中心回来就会丢失，用户只能重新找刚才那张图。
-   */
-  workbenchView: 'images' | 'video';
-  setWorkbenchView: React.Dispatch<React.SetStateAction<'images' | 'video'>>;
-  activeAssetId: string | null;
-  setActiveAssetId: React.Dispatch<React.SetStateAction<string | null>>;
-  /**
-   * 正在跟踪的抽帧任务。放在应用层而不是工作台内部：抽帧常常要等几十秒，
-   * 用户中途去任务中心看一眼再回来，卡片与自动导入都不该丢。
-   * timelineId 记录这批帧对应的时间轴：导入后自动建轴，用户点「进入视频轨迹」时直接落到这一条，
-   * 而不是在一串历史时间轴里重新找。
+   * 正在跟踪的抽帧任务。放在应用层：抽帧常常要等几十秒，用户切页再回来时进度与自动导入都不该丢。
+   * 消费者是对话区的抽帧进度条（FrameJobStrip）：产物就绪即自动导入，并把 timelineId 记回来，
+   * 用户点「去视频轨迹」直接落到这一条，而不是在一串历史时间轴里重新找。
    */
   mediaJob: { id: string; temporarySource?: string; timelineId?: string } | null;
   setMediaJob: React.Dispatch<React.SetStateAction<{ id: string; temporarySource?: string; timelineId?: string } | null>>;

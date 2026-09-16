@@ -5,6 +5,7 @@ import { getBridge, request, errorMessage, isDemo } from './bridge';
 import { useApp } from './context';
 import { Button, Field, IconButton, Modal, Notice } from './ui';
 import { MediaError } from './mediaUi';
+import { FrameAutoImportOption } from './FrameJobStrip';
 import type { MediaErrorActionHandlers } from './mediaErrorMap';
 import { listRecipes, recipeScopeNote, recipeSummary, removeRecipe, saveRecipe } from './videoRecipes';
 
@@ -256,6 +257,7 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
     {transcoding && <Notice>正在用本机 FFmpeg 生成转码副本（已用时 {elapsed} 秒）。转码完成后会自动重新检查这段视频。</Notice>}
     <MediaError error={error} handlers={errorHandlers} busy={blocked} />
     {command && <textarea className="transcode-command" aria-label="转码命令" readOnly value={command} />}
+    <FrameAutoImportOption disabled={busy} />
     <div className="modal-actions"><Button disabled={blocked} onClick={onClose}>取消</Button>{inspection && <Button className="primary" disabled={isDemo} busy={busy} onClick={() => void create()}>开始抽帧</Button>}</div>
   </div></Modal>;
 }

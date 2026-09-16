@@ -68,25 +68,27 @@ export async function checkDesktopFrameScope(window: BrowserWindow, output: stri
     const projects = await api<Array<{ id: string; name: string }>>('project.list');
     const project = projects.find(item => item.name === batch);
     assert.ok(project, `抽帧应建立名为 ${batch} 的项目，实际：${json(projects.map(item => item.name))}`);
-    await waitFor(`window.autoLabel.request('media.job.list',{projectId:${json(project!.id)},limit:50}).then(r=>r.items.some(j=>j.status==='completed'&&j.stage==='ready'&&j.artifactCommitted&&!j.assetsCommitted))`, 120000);
-    const job = (await api<{ items: Array<{ id: string; completedFrames?: number }> }>('media.job.list', { projectId: project!.id, limit: 50 })).items[0];
-    checks.push({ check: 'frames-extracted', jobId: job.id, projectId: project!.id });
+    // ===== 自动导入：不进任务页、不点第二次，素材就该可用 =====
+    await waitFor(`!!document.querySelector('.frame-job-strip')`, 20000);
+    await waitFor(`window.autoLabel.request('asset.list',{projectId:${json(project!.id)},limit:100}).then(r=>r.total>0)`, 180000);
+    const job = (await api<{ items: Array<{ id: string; assetsCommitted: boolean }> }>('media.job.list', { projectId: project!.id, limit: 50 })).items[0];
+    assert.equal(job.assetsCommitted, true, '抽帧产物应被自动导入，而不是等用户去任务页点一次');
+    // 进度条自己也在轮询任务状态，刷新比素材入库晚一拍；等它追上来再断言。
+    await waitFor(`document.querySelector('.frame-job-strip')?.innerText.includes('素材已入库')`, 20000);
+    const stripText = await js<string>(`document.querySelector('.frame-job-strip').innerText`);
+    const imported = await api<{ total: number }>('asset.list', { projectId: project!.id, limit: 100 });
+    checks.push({ check: 'frames-auto-imported', jobId: job.id, projectId: project!.id, assets: imported.total, stripVisible: true });
 
     // ===== 入库那一刻的告知：能导出、不进数据集版本、原因 =====
     await js(`[...document.querySelectorAll('.sidebar-bottom .nav-item')].find(b=>b.innerText.trim()==='任务').click()`);
     await waitFor(`!!document.querySelector('.task-kind-tabs')`);
     await button('素材任务');
-    await waitFor(`!!document.querySelector('.media-job-list>button')`);
-    await js(`[...document.querySelectorAll('.media-job-list>button')].find(b=>b.innerText.includes('vtest')).click()`);
-    await waitFor(`!!document.querySelector('.media-job-detail')`);
-    await button('将抽帧导入项目');
-    await waitFor(`window.autoLabel.request('media.job.get',{jobId:${json(job.id)}}).then(j=>j.assetsCommitted)`, 120000);
+    await waitFor(`!!document.querySelector('.media-job-row')`);
+    await js(`[...document.querySelectorAll('.media-job-row .media-job-open')].find(b=>b.innerText.includes('vtest')).click()`);
     await waitFor(`document.querySelector('.media-job-detail')?.innerText.includes('不会进入「数据集版本」')`, 30000);
     const detailText = await js<string>(`document.querySelector('.media-job-detail').innerText`);
     assert.ok(detailText.includes('数据导出'), `入库告知应写明可以走导出，实际：${detailText.slice(0, 500)}`);
     assert.ok(detailText.includes('同一个视频抽出的所有帧属于同一个来源组'), `入库告知应给出原因，实际：${detailText.slice(0, 500)}`);
-    const imported = await api<{ total: number }>('asset.list', { projectId: project!.id, limit: 100 });
-    assert.ok(imported.total > 0, '抽帧素材应真的落库');
     checks.push({ check: 'import-states-usable-scope', assets: imported.total, noticeVisible: true });
 
     // ===== 数据集版本预检：中文原因 + 真实出路，不出现原始码 =====

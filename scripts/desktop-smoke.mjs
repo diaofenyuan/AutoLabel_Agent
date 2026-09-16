@@ -198,6 +198,9 @@ if (frameScopeOnly) {
   assert.equal(result.passed, true);
   const byCheck = new Map(result.checks.map(check => [check.check, check]));
   // 抽帧入库即告知可用范围，且数据集版本预检给出中文原因与真实出路。
+  // 抽帧产物必须自动入库：这是「抽帧完成 ≠ 素材可用」那条断链的修复点。
+  assert.equal(byCheck.get('frames-auto-imported')?.stripVisible, true);
+  assert.ok(byCheck.get('frames-auto-imported')?.assets > 0);
   assert.equal(byCheck.get('import-states-usable-scope')?.noticeVisible, true);
   assert.ok(byCheck.get('import-states-usable-scope')?.assets > 0);
   assert.equal(byCheck.get('dataset-preflight-video-frame-reason')?.reasonReadable, true);

@@ -7,14 +7,29 @@ import { MediaError, MediaProgressView, mediaJobName, mediaStatuses, videoFrameS
 import ScreeningResults from './ScreeningResults';
 
 export default function MediaJobs({ initialJobId }: { initialJobId?: string }) {
-  const { project, events } = useApp();
+  const { project, events, refreshAssets, refreshProjects } = useApp();
   const [list, setList] = useState<MediaJob[]>([]), [total, setTotal] = useState(0), [offset, setOffset] = useState(0), [selected, setSelected] = useState(initialJobId ?? ''), [error, setError] = useState(''), [loading, setLoading] = useState(false), [revision, setRevision] = useState(0);
   useEffect(() => { if (initialJobId) setSelected(initialJobId); }, [initialJobId]);
   const mediaEvent = [...events].reverse().find(e => e.mediaJobId)?.sequence;
   useEffect(() => { if (mediaEvent === undefined) return; const timer = setTimeout(() => setRevision(n => n + 1), 180); return () => clearTimeout(timer); }, [mediaEvent]);
+  /**
+   * 列表里直接导入：与详情页按钮是同一条命令，避免「先点开任务、再点导入」这一跳。
+   * 自动导入默认开启时这一步通常已经由对话区的进度条代劳，这里保留给手动关掉自动导入的用户。
+   */
+  async function importRow(jobId: string) {
+    try {
+      await request<MediaJob>('media.video.import', { jobId });
+      await Promise.all([refreshAssets(), refreshProjects()]);
+      setRevision(n => n + 1);
+    } catch (e) { setError(errorMessage(e)); }
+  }
   useEffect(() => { if (isDemo) return; let live = true; setLoading(true); void request<MediaJobList>('media.job.list', { ...(project ? { projectId: project.id } : {}), offset, limit: 50 }).then(r => { if (live) { setList(r.items); setTotal(r.total); setError(''); } }).catch(e => { if (live) setError(errorMessage(e)); }).finally(() => { if (live) setLoading(false); }); return () => { live = false; }; }, [project?.id, offset, revision]);
   if (isDemo) return <Notice>视频与素材分析任务需要桌面引擎，演示模式不生成任务。</Notice>;
-  return <div className="media-jobs"><div className="section-toolbar"><h2>素材任务</h2><Button busy={loading} onClick={() => setRevision(n => n + 1)}>刷新素材任务</Button></div><div className="media-jobs-layout"><aside className="media-job-list">{list.map(job => <button key={job.id} className={job.id === selected ? 'selected' : ''} onClick={() => setSelected(job.id)}><strong>{mediaJobName(job)}</strong><span>{mediaStatuses[job.status]}{job.kind === 'video_extract' && ` · ${job.assetsCommitted ? '已入库' : job.canImport ? '待导入' : '尚未入库'}`}</span><small>{new Date(job.createdAt).toLocaleString('zh-CN')}</small></button>)}{!list.length && <p className="quiet-empty">此范围尚无素材任务。</p>}<div className="pagination"><Button disabled={loading || offset === 0} onClick={() => setOffset(n => Math.max(0, n - 50))}>上一页任务</Button><span>{offset / 50 + 1}</span><Button disabled={loading || offset + list.length >= total} onClick={() => setOffset(n => n + 50)}>下一页任务</Button></div></aside>{selected ? <MediaJobDetail key={selected} jobId={selected} onRetry={setSelected}/> : <p className="quiet-empty">选择任务，查看真实进度和已提交结果。</p>}</div><MediaError error={error}/></div>;
+  return <div className="media-jobs"><div className="section-toolbar"><h2>素材任务</h2><Button busy={loading} onClick={() => setRevision(n => n + 1)}>刷新素材任务</Button></div><div className="media-jobs-layout"><aside className="media-job-list">{list.map(job => <div key={job.id} className={`media-job-row ${job.id === selected ? 'selected' : ''}`}>
+      {/* 待导入原先只是状态文字，用户得先点开详情才知道有这一步；这里把它变成列表里就能点的主行动。 */}
+      <button className="media-job-open" onClick={() => setSelected(job.id)}><strong>{mediaJobName(job)}</strong><span>{mediaStatuses[job.status]}{job.kind === 'video_extract' && ` · ${job.assetsCommitted ? '已入库' : job.canImport ? '待导入' : '尚未入库'}`}</span><small>{new Date(job.createdAt).toLocaleString('zh-CN')}</small></button>
+      {job.kind === 'video_extract' && job.canImport && !job.assetsCommitted && <Button className="primary" busy={loading} onClick={() => { setSelected(job.id); void importRow(job.id); }}>导入项目</Button>}
+    </div>)}{!list.length && <p className="quiet-empty">此范围尚无素材任务。</p>}<div className="pagination"><Button disabled={loading || offset === 0} onClick={() => setOffset(n => Math.max(0, n - 50))}>上一页任务</Button><span>{offset / 50 + 1}</span><Button disabled={loading || offset + list.length >= total} onClick={() => setOffset(n => n + 50)}>下一页任务</Button></div></aside>{selected ? <MediaJobDetail key={selected} jobId={selected} onRetry={setSelected}/> : <p className="quiet-empty">选择任务，查看真实进度和已提交结果。</p>}</div><MediaError error={error}/></div>;
 }
 export function MediaJobDetail({ jobId, onRetry, excludeIds, onApplyExclude }: { jobId: string; onRetry?: (id: string) => void; excludeIds?: string[]; onApplyExclude?: (ids: string[]) => void }) {
   const { openProject, refreshAssets, refreshProjects, navigate } = useApp();

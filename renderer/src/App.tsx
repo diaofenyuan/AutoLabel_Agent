@@ -9,6 +9,7 @@ import { IconButton, Modal } from './ui';
 import { Sidebar } from './Sidebar';
 import { ProjectDeletionDialog } from './ProjectDeletion';
 import ChatHome from './ChatHome';
+import { FrameJobStrip } from './FrameJobStrip';
 import ChatPanel from './ChatPanel';
 import ProjectOverview from './ProjectOverview';
 const Tasks = lazy(() => import('./Tasks'));
@@ -25,10 +26,7 @@ export default function App() {
   const [assetTotal, setAssetTotal] = useState(0);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
-  // 工作台视图与当前素材随会话存活：切页会卸载工作台，这两项留在页面里就会丢。
-  const [workbenchView, setWorkbenchView] = useState<'images' | 'video'>('images');
-  const [activeAssetId, setActiveAssetId] = useState<string | null>(null);
-  // 正在跟踪的抽帧任务同样随会话存活，用户中途离开工作台再回来不会丢掉进度卡与自动导入。
+  // 正在跟踪的抽帧任务随会话存活：对话区的抽帧进度条据此自动导入产物，切页回来也不会丢。
   const [mediaJob, setMediaJob] = useState<{ id: string; temporarySource?: string } | null>(null);
   const assetLocation = useRef({ projectId: '', offset: 0 });
   const assetRevision = useRef(0);
@@ -121,8 +119,8 @@ export default function App() {
       const data = await request<{ items: Asset[]; total: number }>('asset.list', { projectId: selected.id, offset: 0, limit: assetPageSize });
       assetLocation.current = { projectId: selected.id, offset: 0 };
       setSelectedAssetIds([]); setAssetOffset(0); setAssetTotal(data.total); setAssets(data.items);
-      // 换项目等同于换上下文：视图与当前素材必须重置，否则会带着上一个项目的选择进来。
-      setWorkbenchView('images'); setActiveAssetId(null); setMediaJob(null);
+      // 换项目等同于换上下文：上一个项目的抽帧跟踪不能带进来。
+      setMediaJob(null);
       clearTimeout(toastTimer.current); setToast(null); setProject(opened);
       const recent = firstMessage ? undefined : chatSessions.filter(session => session.projectId === opened.id)
         .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))[0];
@@ -217,11 +215,14 @@ export default function App() {
     catch (e) { notify(errorMessage(e), true); }
     finally { setReconnecting(false); }
   }
-  return <Context.Provider value={{ page, navigate, settingsSection, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, workbenchView, setWorkbenchView, activeAssetId, setActiveAssetId, mediaJob, setMediaJob, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, openJumper, openHelp, requestDeleteProject }}>
+  return <Context.Provider value={{ page, navigate, settingsSection, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, mediaJob, setMediaJob, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, openJumper, openHelp, requestDeleteProject }}>
     <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <Sidebar />
       {deletion && <ProjectDeletionDialog project={deletion} onClose={() => setDeletion(null)} onDeleted={projectId => void projectDeleted(projectId)} />}
       <section className="app-main"><header className="topbar" onDoubleClick={e => { if (!isDemo && !(e.target as HTMLElement).closest('button,input,select,textarea')) void getBridge().then(b => b.windowAction('maximize')); }}><div className="breadcrumb"><IconButton label={collapsed ? '展开侧栏' : '收起侧栏'} onClick={() => setCollapsed(v => !v)}>{collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</IconButton><span>{navLabel(page)}</span>{project && page !== 'chat' && <><ChevronRight size={13} /><span className="muted truncate">{project.name}</span></>}</div><div className="topbar-actions">{isDemo && <span className="demo-indicator">演示模式</span>}{!isDemo && <span className={`engine-chip ${engine.state}`} role={engine.state === 'error' ? 'alert' : 'status'} title={engine.message || '本地引擎状态'}><span className="status-dot" />{engine.state === 'ready' ? '引擎已连接' : engine.state === 'starting' ? '引擎启动中' : engine.state === 'disconnected' ? '引擎已中断' : engine.state === 'stopped' ? '引擎已停止' : '引擎异常'}</span>}<button className="command-trigger" onClick={openJumper}><Search size={14} /><span>快速跳转</span><kbd>Ctrl K</kbd></button><IconButton label="快捷键与帮助" onClick={openHelp}><CircleHelp size={17} /></IconButton>{!isDemo && <div className="window-actions">{(['minimize', 'maximize', 'close'] as const).map((action, index) => <button key={action} aria-label={['最小化窗口', '最大化窗口', '关闭窗口'][index]} onClick={() => void getBridge().then(b => b.windowAction(action)).catch(e => notify(errorMessage(e), true))}>{index === 0 ? <Minus size={13} /> : index === 1 ? <Square size={11} /> : <X size={14} />}</button>)}</div>}</div></header>
+        {/* 抽帧进度与自动导入挂在应用层：抽帧创建后会跳到概览页，进度条若只在对话页，
+            用户一离开就没人推进自动导入了。 */}
+        {!isDemo && <FrameJobStrip />}
         {!isDemo && engine.state !== 'ready' && <div className="connection-banner" role={engine.state === 'error' ? 'alert' : 'status'} aria-live="polite" aria-busy={reconnecting}><AlertCircle size={14} />{reconnecting ? '正在重新连接本地引擎…' : engine.message || '本地引擎尚未就绪，数据操作暂不可用。'}<button disabled={reconnecting} onClick={() => void reconnect()}>{reconnecting ? '连接中…' : '重新连接'}</button></div>}
         <main className={`page page-${page}`} key={page} aria-busy={loading || assetsLoading}>
           {loading ? <div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作空间…</div> : <Suspense fallback={<div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作区…</div>}>

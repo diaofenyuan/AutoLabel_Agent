@@ -28,12 +28,14 @@ export interface Preferences {
   chatThinkingDepth: ThinkingDepth;
   /** 未配置 AI 时的一次性引导是否已被用户关掉；凭据配好后引导由凭据状态直接隐藏，不看这个值。 */
   aiSetupDismissed?: boolean;
+  /** 抽帧产物就绪后是否自动导入项目：默认开，抽帧完成 ≠ 素材可用的那一步不该由人记着。 */
+  frameAutoImport?: boolean;
   [key: string]: unknown;
 }
 export const defaultPreferences: Preferences = {
   theme: 'light', reducedMotion: false, canvasBackground: '#eef0f3', closeBehavior: 'ask', concurrency: 4,
   maxRequests: null, timeout: 120, retries: 2, chatProviderId: '', chatModel: '',
-  annotationProviderId: '', annotationModel: '', chatThinkingDepth: 'standard', trainingDevice: 'gpu-auto', trainingWorkers: 8, trainingConcurrency: 1,
+  annotationProviderId: '', annotationModel: '', chatThinkingDepth: 'standard', frameAutoImport: true, trainingDevice: 'gpu-auto', trainingWorkers: 8, trainingConcurrency: 1,
   // 0 表示永久保留逐轮指标；非零时引擎只清理已结束任务超期的逐轮指标记录，产物与日志保留。
   trainingRetentionDays: 0,
 };

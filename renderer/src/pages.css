@@ -431,3 +431,13 @@
 /* 侧栏项目行的素材数：同名项目靠它区分，右对齐不挤占项目名。 */
 .sidebar-project-count{flex-shrink:0;margin-left:auto;padding-left:8px;font-size:10px;color:var(--muted)}
 .sidebar-project.selected .sidebar-project-count{color:var(--text)}
+/* 对话区的抽帧进度条：把「抽帧完成 ≠ 素材可用」这条断链接回用户当时所在的位置。 */
+.frame-job-strip{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 20px 0;padding:8px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);font-size:11px}
+.frame-job-name{max-width:30%;font-weight:550}
+.frame-job-state{color:var(--muted)}
+.frame-job-actions{display:flex;align-items:center;gap:7px;margin-left:auto;flex-wrap:wrap}
+.frame-job-actions .button{min-height:26px;padding:3px 9px;font-size:11px}
+/* 素材任务列表：待导入时行内直接给「导入项目」，不必先点开详情。 */
+.media-job-row{display:flex;align-items:center;gap:8px}
+.media-job-row>.media-job-open{flex:1;min-width:0}
+.media-job-row>.button{flex-shrink:0;min-height:26px;padding:3px 9px;font-size:11px}
