@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { PanelLeftClose, PanelLeftOpen, CircleHelp, ChevronRight, X, Minus, Square, Check, AlertCircle, Keyboard, LoaderCircle, Search, ArrowRight } from 'lucide-react';
-import { Context, blankChatSession, navAll, navLabel, navRegistry, type Page, type ChatSession, type SettingsSection } from './context';
+import { Context, blankChatSession, navAll, navLabel, type Page, type ChatSession, type SettingsSection } from './context';
 import { getBridge, isDemo, request, errorMessage } from './bridge';
 import type { Project, Asset, Preferences, Provider, EngineEvent, EngineStatus } from './types';
 import { defaultPreferences } from './types';
@@ -11,15 +11,11 @@ import { ProjectDeletionDialog } from './ProjectDeletion';
 import ChatHome from './ChatHome';
 import ChatPanel from './ChatPanel';
 import ProjectOverview from './ProjectOverview';
-const Workbench = lazy(() => import('./Workbench'));
-const Workflow = lazy(() => import('./Workflow'));
 const Tasks = lazy(() => import('./Tasks'));
-const Resources = lazy(() => import('./Resources'));
 const Models = lazy(() => import('./Models'));
-const Training = lazy(() => import('./Training'));
 const Settings = lazy(() => import('./Settings'));
 export default function App() {
-  const [page, setPage] = useState<Page>(() => { const hash = location.hash.slice(1); return navRegistry.some(entry => entry.key === hash) ? hash as Page : 'chat'; });
+  const [page, setPage] = useState<Page>(() => { const hash = location.hash.slice(1); return navAll.some(entry => entry.key === hash) ? hash as Page : 'chat'; });
   const [mediaTaskId, setMediaTaskId] = useState('');
   const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState<Project | null>(null);
@@ -230,7 +226,7 @@ export default function App() {
         {!isDemo && engine.state !== 'ready' && <div className="connection-banner" role={engine.state === 'error' ? 'alert' : 'status'} aria-live="polite" aria-busy={reconnecting}><AlertCircle size={14} />{reconnecting ? '正在重新连接本地引擎…' : engine.message || '本地引擎尚未就绪，数据操作暂不可用。'}<button disabled={reconnecting} onClick={() => void reconnect()}>{reconnecting ? '连接中…' : '重新连接'}</button></div>}
         <main className={`page page-${page}`} key={page} aria-busy={loading || assetsLoading}>
           {loading ? <div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作空间…</div> : <Suspense fallback={<div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作区…</div>}>
-            {page === 'chat' ? (activeSessionId ? <ChatPanel /> : <ChatHome />) : page === 'overview' ? <ProjectOverview /> : page === 'workbench' ? <Workbench /> : page === 'workflow' ? <Workflow /> : page === 'tasks' ? <Tasks /> : page === 'resources' ? <Resources /> : page === 'models' ? <Models /> : page === 'training' ? <Training /> : <Settings />}
+            {page === 'chat' ? (activeSessionId ? <ChatPanel /> : <ChatHome />) : page === 'overview' ? <ProjectOverview /> : page === 'tasks' ? <Tasks /> : page === 'models' ? <Models /> : <Settings />}
           </Suspense>}
         </main>
       </section>

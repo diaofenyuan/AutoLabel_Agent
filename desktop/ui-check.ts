@@ -121,45 +121,24 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   await openPage('对话', 'chat');
   await loadExample();
   stage('ui:example-loaded');
-  // 载入示例后按新导航落到该项目的会话，素材编辑仍在工作台，脚本显式再进一次。
-  await openPage('标注工作台', 'workbench');
-  stage('ui:workbench');
-  // 超时不能只说「没加载完」：把工作台当时的失败原因与页面文本一起报出来，便于区分是素材没读到还是画布没挂载。
-  await waitFor(`!!document.querySelector('.annotation-canvas image') && !document.querySelector('.image-failure')`).catch(async () => {
-    const state = await window.webContents.executeJavaScript(`({main:document.querySelector('main')?.className??null,
-      loading:!!document.querySelector('.page-loading'),failure:document.querySelector('.image-failure')?.innerText??null,
-      hash:location.hash,text:document.querySelector('.page')?.innerText?.slice(0,500)??''})`);
-    stage(`ui:workbench-missing ${JSON.stringify(state)}`);
-    throw new Error(`工作台未显示示例素材：${JSON.stringify(state)}`);
-  });
-      const image = await window.webContents.executeJavaScript(`new Promise(resolve=>{
-        const node=document.querySelector('.annotation-canvas image');
-        const source=node?.getAttribute('href')??null;
-        if(!source){resolve({loaded:false,source:null,page:document.querySelector('main')?.className??null,text:document.querySelector('.page')?.innerText?.slice(0,300)??''});return;}
-        const img=new Image();img.onload=()=>resolve({loaded:true,width:img.naturalWidth,height:img.naturalHeight,source});img.onerror=()=>resolve({loaded:false,source});img.src=source;
-      })`);
-      if (!image.source) throw new Error(`画布素材在读取前消失了：page=${image.page} text=${image.text}`);
-      if (!image.loaded || !image.source.startsWith('autolabel-media://asset/')) throw new Error('手工示例未通过真实桌面素材协议加载');
-      results.push({ check: 'manual-example', ...image });
-      await waitFor(`!!document.querySelector('[aria-label="对象x"]')`);
-      const selected = await window.webContents.executeJavaScript(`(()=>{const input=document.querySelector('[aria-label="对象x"]');const rect=input.getBoundingClientRect();return {x:Math.round(rect.x+rect.width/2),y:Math.round(rect.y+rect.height/2),value:Number(input.value)}})()`);
-      const assetId = new URL(image.source).pathname.slice(1);
-      const original = await window.webContents.executeJavaScript(`window.autoLabel.request('asset.get',{assetId:${JSON.stringify(assetId)}})`);
-      const expectedX = selected.value + 7;
-      window.webContents.sendInputEvent({ type: 'mouseDown', x: selected.x, y: selected.y, button: 'left', clickCount: 1 });
-      window.webContents.sendInputEvent({ type: 'mouseUp', x: selected.x, y: selected.y, button: 'left', clickCount: 1 });
-      window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'A', modifiers: ['control'] });
-      window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'A', modifiers: ['control'] });
-      await window.webContents.insertText(String(expectedX));
-      await waitFor(`Number(document.querySelector('[aria-label="对象x"]').value)===${expectedX}`);
-      const save = await window.webContents.executeJavaScript(`(()=>{const b=[...document.querySelectorAll('.editor-actionbar button')].find(b=>b.innerText.trim()==='保存');const r=b.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`);
-      window.webContents.sendInputEvent({ type: 'mouseDown', x: save.x, y: save.y, button: 'left', clickCount: 1 });
-      window.webContents.sendInputEvent({ type: 'mouseUp', x: save.x, y: save.y, button: 'left', clickCount: 1 });
-      await waitFor(`window.autoLabel.request('asset.get',{assetId:${JSON.stringify(assetId)}}).then(a=>a.version>${original.version}&&a.annotations[0].bbox.x===${expectedX})`);
-      results.push({ check: 'manual-edit', assetId, originalX: selected.value, expectedX, originalVersion: original.version });
-  // 工作台仍是只读结果预览之外唯一能打开素材的页面，示例载入后顺手记一条页面样本。
-  results.push(await samplePage('workbench'));
-  stage('ui:example-edited');
+  // 示例载入后直接落在该项目的会话：工作台已退场，素材与标注在对话与项目概览里查看。
+  await waitFor(`!!document.querySelector('.chat-panel') && !document.querySelector('.page-loading')`);
+  const example = await window.webContents.executeJavaScript(`(async()=>{
+    const projects=await window.autoLabel.request('project.list');
+    const project=projects[0];
+    const assets=await window.autoLabel.request('asset.list',{projectId:project.id,limit:1});
+    const asset=assets.items[0];
+    const image=await new Promise(resolve=>{const node=new Image();node.onload=()=>resolve({loaded:true,width:node.naturalWidth,height:node.naturalHeight});node.onerror=()=>resolve({loaded:false,width:0,height:0});node.src=asset.thumbnailUrl||asset.mediaUrl;});
+    return {projectId:project.id,assetId:asset.id,assetCount:assets.total,mediaUrl:asset.mediaUrl,image};
+  })()`);
+  if (!example.image.loaded || !String(example.mediaUrl).startsWith('autolabel-media://asset/')) throw new Error(`手工示例未通过真实桌面素材协议加载：${JSON.stringify(example)}`);
+  results.push({ check: 'manual-example', ...example });
+  // 只读抽查走项目概览：缩略图同样通过真实媒体协议渲染。
+  await openPage('项目概览', 'overview');
+  await waitFor(`!!document.querySelector('.overview-card') && !document.querySelector('.page-loading')`);
+  await settle();
+  results.push(await samplePage('overview'));
+  stage('ui:example-visible');
   for (let i = 0; i < pages.length; i++) {
     await openPage(pageLabels[pages[i]], pages[i]);
     stage(`ui:page-${pages[i]}`);
@@ -181,9 +160,9 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
       const save = await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('button')].find(item=>item.innerText.trim()==='保存设置')?.click())()`);
       await new Promise(resolve=>setTimeout(resolve, 180));
       const darkPages: Record<string, unknown>[] = [];
-      // 深色主题覆盖三项主导航与示例工作台，页面清单变化时不必再改这段。
-      for (const darkPageName of [...pages, 'workbench']) {
-        await openPage(darkPageName === 'workbench' ? '标注工作台' : pageLabels[darkPageName], darkPageName);
+      // 深色主题覆盖三项主导航与项目概览，页面清单变化时不必再改这段。
+      for (const darkPageName of [...pages, 'overview']) {
+        await openPage(pageLabels[darkPageName] ?? '项目概览', darkPageName);
         await settle();
         const darkPage = await window.webContents.executeJavaScript(`({page:${JSON.stringify(darkPageName)},theme:document.documentElement.dataset.theme,error:document.querySelector('.toast.error')?.innerText??null,bodyLength:document.querySelector('.page').innerText.length})`);
         if (darkPage.theme !== 'dark' || darkPage.error) throw new Error(`深色主题页面检查失败：${darkPageName}`);
@@ -275,11 +254,19 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
 
 export async function checkPersistedUiEdit(window: BrowserWindow, output: string): Promise<void> {
   const report = JSON.parse(await readFile(output, 'utf8'));
-  const edited = report.pages.find((item: { check?: string }) => item.check === 'manual-edit');
-  if (!edited) throw new Error('缺少表单保存记录');
-  const asset = await window.webContents.executeJavaScript(`window.autoLabel.request('asset.get',{assetId:${JSON.stringify(edited.assetId)}})`);
-  if (asset.annotations[0].bbox.x !== edited.expectedX || asset.version <= edited.originalVersion) throw new Error('应用重启后未恢复已保存坐标');
-  report.restartPersistence = { restored: true, assetId: asset.id, x: asset.annotations[0].bbox.x, version: asset.version };
+  const example = report.pages.find((item: { check?: string }) => item.check === 'manual-example');
+  if (!example) throw new Error('缺少示例载入记录');
+  // 工作台退场后不再有画布编辑，重启持久化改为核对数据面：示例素材、项目与会话在重启后仍然可读。
+  const state = await window.webContents.executeJavaScript(`(async()=>{
+    const asset=await window.autoLabel.request('asset.get',{assetId:${JSON.stringify(example.assetId)}});
+    const projects=await window.autoLabel.request('project.list');
+    const history=await window.autoLabel.request('chat.history.list',{});
+    return {assetId:asset.id,version:asset.version,annotations:asset.annotations.length,projects:projects.length,sessions:history.sessions.length};
+  })()`);
+  if (state.assetId !== example.assetId) throw new Error('应用重启后示例素材丢失');
+  if (!state.projects) throw new Error('应用重启后项目列表为空');
+  if (!state.sessions) throw new Error('应用重启后没有恢复任何会话');
+  report.restartPersistence = { restored: true, ...state };
   await writeFile(output, JSON.stringify(report, null, 2));
 }
 
@@ -298,8 +285,10 @@ export async function checkPackagedRelease(window: BrowserWindow, output: string
   await window.webContents.executeJavaScript(`[...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()==='示例').click()`);
   await waitFor(`!!document.querySelector('[aria-label="载入示例"]')`);
   await window.webContents.executeJavaScript(`document.querySelector('[aria-label="载入示例"]').click()`);
-  await waitFor(`!!document.querySelector('.annotation-canvas image')`);
-  await window.webContents.executeJavaScript(`document.querySelectorAll('.nav-item')[3].click()`);
+  await waitFor(`!!document.querySelector('.chat-panel') && !document.querySelector('.page-loading')`);
+  await window.webContents.executeJavaScript(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='任务');
+    if(!item)throw new Error('缺少任务导航项');item.click();})()`);
+  await waitFor(`!!document.querySelector('.page-tasks') && !document.querySelector('.page-loading')`);
   await waitFor(`[...document.querySelectorAll('button')].some(b=>b.innerText.trim()==='评测与复核')`);
   await window.webContents.executeJavaScript(`[...document.querySelectorAll('button')].find(b=>b.innerText.trim()==='评测与复核').click()`);
   await waitFor(`!!document.querySelector('.quality-body') && document.querySelector('.quality-body').innerText.includes('固定图片真实重跑')`);
@@ -320,8 +309,8 @@ export async function checkPackagedRelease(window: BrowserWindow, output: string
 }
 
 /**
- * 训练页界面检查：空态、真实数据集快照、向导步骤与诚实状态。
- * 数据集由主进程用真实引擎生成（示例项目 → 导出版本 → 训练快照），不伪造训练成功或进度。
+ * 训练能力检查：训练改由对话发起，界面只保留只读看板。
+ * 数据集快照由主进程用真实引擎生成（示例项目 → 数据集版本 → 训练快照），不伪造训练成功或进度。
  */
 export async function checkTrainingUi(window: BrowserWindow, output: string, hooks: { prepareDataset: () => Promise<Record<string, unknown>> }): Promise<void> {
   const folder = path.join(path.dirname(output), 'training-ui');
@@ -329,89 +318,51 @@ export async function checkTrainingUi(window: BrowserWindow, output: string, hoo
   const waitFor = async (expression: string) => {
     const deadline = Date.now() + 20000;
     while (Date.now() < deadline) { if (await window.webContents.executeJavaScript(expression)) return; await new Promise(resolve => setTimeout(resolve, 50)); }
-    throw new Error('训练界面未在预期时间完成变化');
+    throw new Error('模型训练看板未在预期时间完成变化');
   };
   const settle = async () => window.webContents.executeJavaScript(`(async()=>{
     await document.fonts.ready;
     await Promise.all(document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   })()`);
-  // 界面只在挂载时读 hash，导航一律用侧栏入口点击，避免出现“改了 hash 但页面没换”的假通过。
-  const visit = async (label: string, selector: string) => {
-    await window.webContents.executeJavaScript(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim().includes(${JSON.stringify(label)}));
-      if(!item)throw new Error('缺少导航项：'+${JSON.stringify(label)});item.click();})()`);
-    await waitFor(`!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector('.page-loading')`);
-    await settle();
-  };
   const run = async (): Promise<void> => {
   window.show();
   await waitFor(`!!document.querySelector('.sidebar-status .status-dot.ready') && !document.querySelector('.connection-banner')`);
 
-  await visit('模型训练', '.training-page');
-  const empty = await window.webContents.executeJavaScript(`({
-    runtime:document.querySelector('.training-runtime')?.innerText.trim()??'',
-    jobs:document.querySelector('.training-page')?.innerText.includes('尚无训练任务')??false,
-    datasets:document.querySelector('.training-page')?.innerText.includes('尚无训练数据集')??false,
-    error:document.querySelector('.toast.error')?.innerText??null})`);
-  if (empty.error) throw new Error(`训练页出现错误提示：${empty.error}`);
-  // 环境区块必须给出真实探测结果或明确原因，不允许空着装作可用。
-  if (!empty.runtime || !/训练环境/.test(empty.runtime)) throw new Error('训练页缺少训练环境区块');
-  if (!/可用|不可用|缺少|失败|尚未|未配置/.test(empty.runtime)) throw new Error(`训练环境区块没有可判断的状态说明：${empty.runtime.slice(0, 120)}`);
-  if (!empty.jobs || !empty.datasets) throw new Error('训练页缺少空态说明');
+  // 训练只在任务看板里回看：页签必须能打开，且看板本身不提供任何建任务入口。
+  await window.webContents.executeJavaScript(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='任务');
+    if(!item)throw new Error('缺少任务导航项');item.click();})()`);
+  await waitFor(`!!document.querySelector('.page-tasks') && !document.querySelector('.page-loading')`);
+  await window.webContents.executeJavaScript(`(()=>{const b=[...document.querySelectorAll('.task-kind-tabs button')].find(item=>item.innerText.trim()==='模型训练');
+    if(!b||b.disabled)throw new Error('缺少模型训练页签');b.click();})()`);
+  await waitFor(`!!document.querySelector('.page-tasks') && !document.querySelector('.page-loading')`);
+  await settle();
+  const board = await window.webContents.executeJavaScript(`({
+    readOnly: !['新建训练','提交训练','创建数据集快照'].some(label=>[...document.querySelectorAll('.page-tasks button')].some(b=>b.innerText.trim()===label)),
+    hint: document.querySelector('.task-kind-note')?.innerText??'',
+    error: document.querySelector('.toast.error')?.innerText??null})`);
+  if (board.error) throw new Error(`模型训练看板出现错误提示：${board.error}`);
+  if (!board.readOnly) throw new Error('模型训练看板仍提供建任务入口，与只读看板约定不符');
+  if (!/对话/.test(board.hint)) throw new Error(`模型训练看板没有说明发起方式：${board.hint}`);
 
-  // 真实数据：示例项目 → 固定导出版本 → 不可变训练快照。
+  // 真实数据：示例项目 → 数据集版本 → 不可变训练快照，再由引擎侧确认它真的可读。
   const dataset = await hooks.prepareDataset();
   const snapshotHash = String(dataset.snapshotHash ?? '');
   if (!snapshotHash) throw new Error('训练数据集未生成快照指纹');
-  await visit('标注工作台', '.page-workbench');
-  await visit('模型训练', '.training-page');
-  // 快照列表由引擎异步返回，先等首张卡片出现再比对，避免把加载时序判成内容缺失。
-  await waitFor(`!!document.querySelector('.training-card')`);
-  const card = await window.webContents.executeJavaScript(`(()=>{const node=document.querySelector('.training-card');
-    return node?{text:node.innerText,showsSnapshot:node.innerText.includes(${JSON.stringify(snapshotHash.slice(0, 12))})}:null})()`);
-  if (!card?.showsSnapshot) throw new Error(`训练页没有显示真实数据集快照（期望 ${snapshotHash.slice(0, 12)}；实际 ${card?.text ?? '无卡片'}）`);
-
-  await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.training-page button')].find(b=>b.innerText.trim()==='新建训练')?.click())()`);
-  await waitFor(`!!document.querySelector('.training-wizard')`);
-  await settle();
-  const wizard = await window.webContents.executeJavaScript(`(()=>{const button=label=>[...document.querySelectorAll('.training-wizard button')].find(b=>b.innerText.trim()===label);
-    return {tabs:[...document.querySelectorAll('.training-wizard .tabs button')].map(b=>({label:b.innerText.trim(),disabled:b.disabled,selected:b.getAttribute('aria-selected')})),
-      sources:[...document.querySelectorAll('.training-sources button')].map(b=>b.innerText.trim()),
-      createDisabled:!!button('创建数据集快照')?.disabled,submitVisible:!!button('提交训练')};})()`);
-  if (wizard.tabs.length !== 3 || wizard.tabs.some((tab: { label: string }, index: number) => !tab.label.startsWith(`${index + 1}. `))) throw new Error('训练向导步骤标签不完整');
-  if (!wizard.tabs[2].disabled) throw new Error('未创建数据集时不应开放确认提交步骤');
-  if (wizard.tabs[0].selected !== 'true') throw new Error('训练向导未默认停在数据源步骤');
-  if (wizard.sources.length !== 3 || !wizard.sources.some((text: string) => text.includes('本地已标注数据集')) || !wizard.sources.some((text: string) => text.includes('AI 标注结果')) || !wizard.sources.some((text: string) => text.includes('数据集版本'))) throw new Error('训练向导缺少数据来源选项');
-  if (!wizard.createDisabled) throw new Error('未选择目录时不应允许创建数据集快照');
-  if (wizard.submitVisible) throw new Error('未创建数据集时不应出现提交训练入口');
-  // 数据集版本来源：必须提供版本选择，且未选版本时不得允许创建快照。
-  const versionSource = await window.webContents.executeJavaScript(`(async()=>{
-    const button=[...document.querySelectorAll('.training-sources button')].find(node=>node.innerText.includes('数据集版本'));
-    button.click();
-    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-    const select=document.querySelector('[aria-label="数据集版本"]');
-    const create=[...document.querySelectorAll('.training-wizard button')].find(node=>node.innerText.trim()==='创建数据集快照');
-    return {selected:!!select,disabled:!!create?.disabled};})()`);
-  if (!versionSource.selected || !versionSource.disabled) throw new Error('数据集版本来源缺少版本选择，或未选版本时允许创建快照');
-
-  await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.training-sources button')].find(b=>b.innerText.includes('AI 标注结果'))?.click())()`);
-  await waitFor(`!!document.querySelector('[aria-label="导出版本"]')`);
-  const exported = await window.webContents.executeJavaScript(`({
-    hasExport:!!document.querySelector('[aria-label="导出版本"]'),hasScope:!!document.querySelector('[aria-label="标注来源"]'),
-    hasRatio:!!document.querySelector('[aria-label="训练集比例"]'),
-    hasGenerate:[...document.querySelectorAll('.training-wizard button')].some(b=>b.innerText.includes('按当前项目标注生成导出版本'))})`);
-  if (!exported.hasExport || !exported.hasScope || !exported.hasRatio || !exported.hasGenerate) throw new Error('导出版本来源缺少必要选项');
-  await writeFile(path.join(folder, '1-training-wizard.png'), (await window.webContents.capturePage()).toPNG());
-  await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.training-wizard button')].find(b=>b.innerText.trim()==='取消')?.click())()`);
-  await waitFor(`!document.querySelector('.training-wizard')`);
+  const listed = await window.webContents.executeJavaScript(`(async()=>{
+    const page=await window.autoLabel.request('training.dataset.list',{limit:100});
+    const found=page.items.find(item=>item.id===${JSON.stringify(String(dataset.id ?? ''))});
+    return {total:page.total,status:found?.status??null,snapshotHash:found?.snapshotHash??null};})()`);
+  if (listed.snapshotHash !== snapshotHash) throw new Error(`训练快照没有出现在引擎数据里（期望 ${snapshotHash.slice(0, 12)}；实际 ${listed.snapshotHash ?? '无'}）`);
+  await writeFile(path.join(folder, '1-training-board.png'), (await window.webContents.capturePage()).toPNG());
 
   await window.webContents.executeJavaScript(`document.documentElement.dataset.theme='dark'`);
   await settle();
   const dark = await window.webContents.executeJavaScript(`({theme:document.documentElement.dataset.theme,error:document.querySelector('.toast.error')?.innerText??null,pageLength:document.querySelector('.page').innerText.length})`);
   await writeFile(path.join(folder, '2-training-dark.png'), (await window.webContents.capturePage()).toPNG());
-  if (dark.theme !== 'dark' || dark.error || dark.pageLength <= 40) throw new Error('训练页深色视图检查失败');
+  if (dark.theme !== 'dark' || dark.error || dark.pageLength <= 40) throw new Error('模型训练看板深色视图检查失败');
 
-  await writeFile(output, JSON.stringify({ passed: true, runtime: empty.runtime, dataset: { id: dataset.id, status: dataset.status, snapshotHash }, wizard, exported, dark }, null, 2));
+  await writeFile(output, JSON.stringify({ passed: true, readOnly: true, hint: board.hint, dataset: { id: dataset.id, status: dataset.status, snapshotHash, total: listed.total }, dark }, null, 2));
   };
   try { await run(); }
   catch (error) {

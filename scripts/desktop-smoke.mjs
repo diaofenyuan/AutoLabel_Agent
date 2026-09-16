@@ -113,14 +113,15 @@ if (manualOnly) { assert.equal(result.passed, true); console.log(`新源码手�
 if (updateUiOnly) { assert.equal(result.passed, true); assert.deepEqual(result.states, ['available','ready','install-gate','cancelled','checksum-error']); console.log(`更新界面本地回环检查通过：${output}`); process.exit(0); }
 if (runControlOnly) { assert.equal(result.passed, true); assert.equal(result.paused.cancelled, true); assert.equal(result.failedRetry.retryDispatched, true); assert.ok(result.failedRetry.callsAfter > result.failedRetry.callsBefore); console.log(`任务中心暂停/恢复/取消/失败重试界面检查通过：${output}`); process.exit(0); }
 if (mediaOnly) { assert.equal(result.passed, true); assert.equal(result.timeline?.frameCount, 4); assert.equal(result.timeline?.previewLoaded, true); console.log(`视频时间轴与轨迹候选界面检查通过：${output}`); process.exit(0); }
-if (trainingUiOnly) { assert.equal(result.passed, true); assert.ok(['ready', 'invalid'].includes(result.dataset.status)); assert.equal(result.wizard.tabs.length, 3); console.log(`训练页向导与真实快照界面检查通过：${output}`); process.exit(0); }
+if (trainingUiOnly) { assert.equal(result.passed, true); assert.ok(['ready', 'invalid'].includes(result.dataset.status)); assert.equal(result.readOnly, true); console.log(`训练改由对话发起后的只读看板检查通过：${output}`); process.exit(0); }
 if (connectionOnly) { assert.equal(result.before.ready, true); assert.equal(result.before.banner, false); assert.equal(result.disconnected.visible, true); assert.equal(result.disconnected.buttonEnabled, true); assert.equal(result.restored.ready, true); assert.equal(result.restored.banner, false); console.log(`断线重连桌面界面检查通过：${output}`); process.exit(0); }
 if (uiOnly) {
-  // 主导航收敛后验收覆盖三项主导航 + 示例工作台。
+  // 主导航收敛后验收覆盖三项主导航 + 项目概览（只读抽查的落点）。
   const pages = result.pages.filter(page => page.page);
   assert.equal(pages.length, 4); assert.ok(pages.every(page => page.bridge && page.bodyLength > 40 && !page.error));
-  assert.ok(result.pages.find(page => page.check === 'manual-example')?.loaded);
-  assert.ok(pages.find(page => page.page === 'workbench').canvasObjects > 0);
+  const example = result.pages.find(page => page.check === 'manual-example');
+  assert.ok(example?.image?.loaded && String(example.mediaUrl).startsWith('autolabel-media://asset/'));
+  assert.ok(pages.some(page => page.page === 'overview'));
   assert.equal(await run(args.map(arg => arg === '--desktop-ui-check' ? '--desktop-ui-resume' : arg)), 0);
   result = JSON.parse(await readFile(output, 'utf8')); assert.equal(result.restartPersistence.restored, true);
   console.log(`主导航与人工示例检查通过：${output}`); process.exit(0);

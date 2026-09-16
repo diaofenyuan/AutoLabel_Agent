@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Database, Download, FolderOpen, Layers, MessageSquare, RefreshCw } from 'lucide-react';
+import { Database, Download, FolderOpen, Layers, MessageSquare, MoreHorizontal, RefreshCw, ShieldCheck } from 'lucide-react';
 import type { Asset } from '../../shared/protocol';
+import type { LibraryResource } from '../../shared/resources';
 import { useApp } from './context';
 import { DatasetVersionDialog, type DatasetVersion } from './DatasetVersions';
 import type { ExportRecord } from './ExportDialog';
+import AssetActions from './AssetActions';
 import ExportDialog from './ExportDialog';
+import ResourceApply from './ResourceApply';
 import ResultViewer from './ResultViewer';
+import TemplateDialog from './TemplateDialog';
 import { errorMessage, isDemo, request } from './bridge';
-import { Button, Empty, Loading, Modal, PageHeader } from './ui';
+import { Button, Empty, IconButton, Loading, Modal, PageHeader } from './ui';
 import { statusNames, taskNames } from './types';
 
 /** 素材分页与结果卡片共用同一上限：asset.list 的 limit 最大 100。 */
@@ -19,7 +23,7 @@ const versionStatusNames: Record<string, string> = { draft: '草稿', building: 
  * 这里不放任何编辑表单——标注修正、建版本、导出都在对话里发起；页面只聚合已经存在的结果。
  */
 export default function ProjectOverview() {
-  const { project, navigate, assetTotal, openProject } = useApp();
+  const { project, notify, navigate, assetTotal, openProject } = useApp();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -27,7 +31,8 @@ export default function ProjectOverview() {
   const [preview, setPreview] = useState<Asset | null>(null);
   const [versions, setVersions] = useState<DatasetVersion[]>([]);
   const [exports, setExports] = useState<ExportRecord[]>([]);
-  const [dialog, setDialog] = useState<'versions' | 'export' | null>(null);
+  const [dialog, setDialog] = useState<'versions' | 'export' | 'resources' | 'template' | null>(null);
+  const [actions, setActions] = useState<Asset | null>(null);
 
   const loadAssets = useCallback(async (offset: number) => {
     if (!project) return;
@@ -62,6 +67,8 @@ export default function ProjectOverview() {
   return <div className="content overview-page">
     <PageHeader title={`项目概览 · ${project.name}`} description={`${taskNames[project.taskType]} · ${project.classes.length} 个类别 · 建自 ${new Date(project.createdAt).toLocaleDateString('zh-CN')}`}
       actions={<><Button onClick={() => void openProject(project)}><MessageSquare size={14} />进入对话</Button>
+        <Button onClick={() => setDialog('template')}><ShieldCheck size={14} />类别与点位模板</Button>
+        <Button onClick={() => setDialog('resources')}><FolderOpen size={14} />资源</Button>
         <Button onClick={() => setDialog('versions')}><Layers size={14} />数据集版本</Button>
         <Button className="primary" disabled={isDemo} onClick={() => setDialog('export')}><Download size={14} />导出</Button></>} />
     {error && <p role="alert" className="inline-error">{error}</p>}
@@ -107,11 +114,15 @@ export default function ProjectOverview() {
       </div>
       {distribution.length > 0 && <div className="result-stats">{distribution.map(item => <span key={item.id}><i style={{ background: item.color }} />{item.name} <strong>{item.count}</strong></span>)}</div>}
       {loading && !assets.length ? <Loading label="正在读取素材…" />
-        : assets.length ? <div className="result-grid">{assets.map(asset => <button key={asset.id} className="result-thumb" title={`${asset.name} · ${statusNames[asset.status] ?? asset.status}`} onClick={() => setPreview(asset)}>
-          <img loading="lazy" src={asset.thumbnailUrl || asset.mediaUrl} alt={asset.name} />
-          <span className="truncate">{asset.name}</span>
-          <small>{statusNames[asset.status] ?? asset.status} · {asset.annotations.length} 个</small>
-        </button>)}</div>
+        : assets.length ? <div className="result-grid">{assets.map(asset => <div className="result-thumb-wrap" key={asset.id}>
+          <button className="result-thumb" title={`${asset.name} · ${statusNames[asset.status] ?? asset.status}`} onClick={() => setPreview(asset)}>
+            <img loading="lazy" src={asset.thumbnailUrl || asset.mediaUrl} alt={asset.name} />
+            <span className="truncate">{asset.name}</span>
+            <small>{statusNames[asset.status] ?? asset.status} · {asset.annotations.length} 个</small>
+          </button>
+          {/* 版本记录、标签导入、效果图与文件位置这些命令不属于画布编辑，留在素材上，工作台退场后仍有入口。 */}
+          <IconButton label={`${asset.name} 的素材与标注操作`} className="result-thumb-more" onClick={() => setActions(asset)}><MoreHorizontal size={14} /></IconButton>
+        </div>)}</div>
         : <p className="quiet-empty">这个项目还没有素材，先在对话里说明要导入什么。</p>}
       {assets.length < (assetTotal || total) && <Button busy={loading} onClick={() => void loadAssets(assets.length)}>加载更多（还有 {(assetTotal || total) - assets.length} 张）</Button>}
     </section>
@@ -122,5 +133,43 @@ export default function ProjectOverview() {
     </Modal>}
     {dialog === 'versions' && <DatasetVersionDialog project={project} onClose={() => setDialog(null)} />}
     {dialog === 'export' && <ExportDialog onClose={() => setDialog(null)} />}
+    {dialog === 'template' && <TemplateDialog onClose={() => setDialog(null)} />}
+    {dialog === 'resources' && <ResourceHub onClose={() => setDialog(null)} />}
+    {actions && <AssetActions asset={actions} onClose={() => setActions(null)}
+      onApplied={updated => { setAssets(list => list.map(item => item.id === updated.id ? updated : item)); setActions(updated); }}
+      onUseVersion={() => { setActions(null); notify('历史版本可以载入草稿，但没有画布可编辑；请在对话里说明要改成什么。'); }} />}
   </div>;
+}
+
+const resourceKindNames: Record<string, string> = { prompt: '提示词', template: '模板', flow: '流程', reference: '人工参考', evaluation_comparison: '评测比较' };
+
+/** 资源入口：读已保存的提示词、模板与流程资源，应用到当前项目；新建人工参考走对话里的引用面板。 */
+function ResourceHub({ onClose }: { onClose: () => void }) {
+  const { project } = useApp();
+  const [kind, setKind] = useState('prompt');
+  const [items, setItems] = useState<LibraryResource[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [applying, setApplying] = useState<LibraryResource | null>(null);
+  useEffect(() => {
+    let live = true; setLoading(true); setError('');
+    void request<LibraryResource[]>('resource.list', { kind, query: '', offset: 0, limit: 500 })
+      .then(list => { if (live) setItems(list); }).catch(e => { if (live) setError(errorMessage(e)); }).finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [kind]);
+  return <Modal wide title="资源" onClose={onClose}>
+    <div className="form-stack">
+      <div className="tabs">{Object.entries(resourceKindNames).map(([key, label]) =>
+        <button key={key} className={kind === key ? 'selected' : ''} onClick={() => setKind(key)}>{label}</button>)}</div>
+      <p className="muted tiny">资源是独立于项目的固定版本；应用到项目只覆盖你勾选的字段。新建人工参考请在对话的引用面板里完成。</p>
+      {error && <p role="alert" className="inline-error">{error}</p>}
+      {loading ? <Loading label="正在读取资源…" /> : items.length ? <div className="board-list">{items.map(item => <article key={item.id} className="board-row">
+        <div className="board-main"><strong>{item.name}</strong><span className="muted tiny">版本 {item.version} · 更新 {new Date(item.updatedAt).toLocaleString('zh-CN')}{item.category ? ` · ${item.category}` : ''}</span></div>
+        {project && item.kind !== 'reference'
+          ? <Button onClick={() => setApplying(item)}>应用到本项目</Button>
+          : <span className="muted tiny">在对话里引用</span>}
+      </article>)}</div> : <p className="quiet-empty">这一类还没有资源。</p>}
+    </div>
+    {applying && <ResourceApply resource={applying} onClose={() => setApplying(null)} />}
+  </Modal>;
 }
