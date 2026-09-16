@@ -258,6 +258,22 @@
 .chat-suggestions button:hover:not(:disabled){border-color:var(--soft);background:var(--surface);color:var(--text)}
 .chat-home-recent{width:100%;max-width:1540px;margin:0 auto;padding:0 4px 18px}
 .chat-home-recent .sidebar-group-title{display:block;margin-bottom:9px}
+/* 对话结果卡片：统计 + 缩略图网格 + 抽查/导出/继续修正。 */
+.result-card{border:1px solid var(--border);border-radius:11px;padding:14px;margin:0 0 14px;background:var(--surface)}
+.result-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.result-card-head h3{font-size:13px}.result-card-head p{margin-top:4px}
+.result-card-head .actions{display:flex;gap:7px;flex-wrap:wrap}
+.result-card-head .actions .button{min-height:29px;padding:4px 10px;font-size:11px}
+.result-stats{display:flex;flex-wrap:wrap;gap:12px;margin:11px 0 3px;font-size:11px;color:var(--muted)}
+.result-stats span{display:flex;align-items:center;gap:6px}
+.result-stats i{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+.result-stats strong{color:var(--text);font-weight:600}
+.result-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px;margin:12px 0}
+.result-thumb{display:flex;flex-direction:column;gap:3px;padding:5px;border:1px solid var(--border);border-radius:8px;background:var(--bg);text-align:left;min-width:0}
+.result-thumb:hover{border-color:var(--accent)}
+.result-thumb img{width:100%;height:66px;object-fit:cover;border-radius:4px;background:var(--surface)}
+.result-thumb span{font-size:11px;max-width:100%}
+.result-thumb small{font-size:9px;color:var(--soft)}
 /* 只读标注预览：等比铺满容器，不接收任何指针事件，编辑一律走对话指令。 */
 .result-viewer{position:relative;width:100%;overflow:auto;background:var(--surface-soft);border:1px solid var(--border);border-radius:9px}
 .result-canvas{display:block;width:100%;height:auto}

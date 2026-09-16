@@ -7,7 +7,7 @@ import { taskNames, type Asset, type LabelClass } from './types';
  * 人工修正改由对话指令驱动，不再回到画布。
  */
 export default function ResultViewer({ asset, classes, connectionTemplate, maxHeight }: {
-  asset: Asset; classes: LabelClass[]; connectionTemplate?: unknown; maxHeight?: number;
+  asset: Asset; classes: LabelClass[]; connectionTemplate?: unknown; maxHeight?: string;
 }) {
   const label = (classId: string) => classes.find(item => item.id === classId);
   // 预览按容器宽度等比缩放，所以线宽与字号按图片尺寸取一个单位值，缩放后仍看得清。
