@@ -7,6 +7,8 @@ import { AiSetupNotice } from './AiSetup';
 import { DropOverlay } from './fileDrop';
 import { useChatFileDrop } from './chatDrop';
 import VideoImport from './VideoImport';
+import ModelPicker from './ModelPicker';
+import FlowPicker from './FlowPicker';
 import type { Project } from './types';
 
 /** 从导入路径里取一个像样的项目名：用文件所在文件夹名，取不到就退回通用名。 */
@@ -22,10 +24,16 @@ function folderName(file: string): string {
  * 输入一句话就按描述建好项目，并把这句话作为该项目的第一条指令发出去。
  */
 export default function ChatHome() {
-  const { projects, openProject, refreshProjects, notify, setMediaJob, setMediaTaskId } = useApp();
+  const { projects, openProject, refreshProjects, notify, setMediaJob, setMediaTaskId, prefs, savePrefs, providers, navigate } = useApp();
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const drop = useChatFileDrop();
+  // 欢迎页还没有会话，选择模型与深度即写入默认值：新建会话与任务都以它为初值。
+  const choice = { providerId: prefs.chatProviderId, model: prefs.chatModel, depth: prefs.chatThinkingDepth ?? 'standard' };
+  async function saveChoice(next: Partial<typeof choice>) {
+    try { await savePrefs({ ...prefs, chatProviderId: next.providerId ?? choice.providerId, chatModel: next.model ?? choice.model, chatThinkingDepth: next.depth ?? choice.depth }); }
+    catch (e) { notify(errorMessage(e), true); }
+  }
   // 「继续 <最近项目>」按最近更新的项目走，没有项目时这一项不出现。
   const lastProject = [...projects].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))[0];
 
@@ -68,15 +76,26 @@ export default function ChatHome() {
     <div className="chat-welcome">
       <h1>今天要标注什么？</h1>
       <AiSetupNotice />
-      <Composer value={input} onChange={setInput} onSend={() => void start()} placeholder="例如：标注工地照片里的安全帽和人员…" busy={busy}>
-        <span className="composer-hint">Ctrl + Enter 发送 · 会按这句话建好项目并开始第一条对话</span>
-      </Composer>
       <div className="chat-suggestions" aria-label="建议">
         <button disabled={busy} onClick={() => void importImages()}><ImageIcon size={14} />导入图片开始标注</button>
         {lastProject && <button disabled={busy} onClick={() => void openProject(lastProject).catch(e => notify(errorMessage(e), true))}>继续 {lastProject.name}</button>}
       </div>
-      <p className="muted tiny">也可以把图片或视频直接拖进来，会新建项目并入库。</p>
+      <p className="muted tiny">也可以把图片或视频直接拖进来，会新建项目并入库；长任务在对话里选流程发起。</p>
     </div>
+    {/* 输入区同样固定在页面最下方：欢迎语与建议在上方，发送后按这句话建好项目并开始对话。 */}
+    <footer className="chat-dock">
+      <Composer value={input} onChange={setInput} onSend={() => void start()} placeholder="例如：标注工地照片里的安全帽和人员…" busy={busy}>
+        <div className="chat-options">
+          <FlowPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
+          <span className="composer-hint">Ctrl + Enter 发送 · 会按这句话建好项目并开始第一条对话</span>
+        </div>
+      </Composer>
+      <div className="chat-model-line">
+        <ModelPicker providers={providers} providerId={choice.providerId} model={choice.model} depth={choice.depth} disabled={busy}
+          onChange={next => void saveChoice(next)} onDepthChange={next => void saveChoice({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} />
+        <span className="muted tiny">这里的默认值用于新建的对话与任务</span>
+      </div>
+    </footer>
     {drop.video && <VideoImport key={drop.video.path} projectId={drop.video.projectId} initialSourcePath={drop.video.path} onClose={drop.closeVideo}
       onCreated={(job, temporarySource) => { setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource }); drop.closeVideo(); notify('已创建抽帧任务，进度在任务里查看。'); }} />}
   </div>;

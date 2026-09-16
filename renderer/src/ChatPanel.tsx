@@ -6,12 +6,13 @@ import ResultCard from './ResultCard';
 import VideoImport from './VideoImport';
 import { AgentSteps, PlanCard, useAgentSteps, type AgentStep } from './AgentActivity';
 import { TaskCards } from './TaskCards';
+import ModelPicker from './ModelPicker';
+import FlowPicker from './FlowPicker';
 import { DropOverlay } from './fileDrop';
 import { useChatFileDrop } from './chatDrop';
 import { useEffect, useRef } from 'react';
 import { MessageSquare, Settings2, FolderOpen, Sparkles } from 'lucide-react';
 import { blankChatSession, useApp, type ChatSession } from './context';
-import { thinkingDepthNames, type ThinkingDepth } from './types';
 import { useAiConfigured } from './AiSetup';
 import { request, getBridge, isDemo, errorMessage } from './bridge';
 import { Composer, Button, Empty } from './ui';
@@ -111,21 +112,9 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     });
   }, [events, key, session?.busy, session?.streamSinceSequence, setChats]);
   if (!session) return null;
-  // 可选模型来自「已保存凭据的接口 × 该接口的默认模型」；当前选中项一定在列表里，避免下拉把已选模型吃掉。
-  const options: Array<{ key: string; label: string }> = [];
-  const known = new Set<string>();
-  const addModel = (providerId?: string, model?: string) => {
-    if (!providerId || !model) return;
-    const optionKey = `${providerId}|${model}`;
-    if (known.has(optionKey)) return;
-    known.add(optionKey);
-    options.push({ key: optionKey, label: `${providers.find(item => item.id === providerId)?.name ?? providerId} · ${model}` });
-  };
-  for (const provider of providers) if (provider.hasCredential) addModel(provider.id, provider.model);
-  addModel(selectedProviderId, selectedModel);
   return <div className={`chat-panel ${compact ? 'compact' : ''} ${dropActive ? 'drop-active' : ''}`} {...(compact ? {} : drop.handlers)}>
     {!compact && <DropOverlay visible={dropActive} />}
-    <div className="chat-messages" aria-live="polite">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><Button onClick={() => void navigate('settings')}><Settings2 size={14} />配置对话模型</Button></Empty> : session.messages.map((message,i) => <div className={`chat-message ${message.role}`} key={i}><div className="chat-message-head"><span className={`chat-avatar ${message.role}`} aria-hidden="true">{message.role === 'assistant' ? <Sparkles size={12} /> : '你'}</span><small>{message.role === 'user' ? '你' : '标注助手'}</small></div><p>{message.content}</p></div>)}{session.busy && session.streamingText && <div className="chat-message assistant streaming"><div className="chat-message-head"><span className="chat-avatar assistant" aria-hidden="true"><Sparkles size={12} /></span><small>标注助手</small></div><p>{session.streamingText}</p></div>}{session.busy && <div className="chat-wait"><span className="waiting-dots">•••</span>{session.cancelRequested ? '正在请求停止 · 已发送请求的结果仍需核对' : chatStatus(events, session.id)} · {session.runningScope}</div>}
+    <div className="chat-messages" aria-live="polite">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><Button onClick={() => void navigate('settings', 'ai')}><Settings2 size={14} />配置对话模型</Button></Empty> : session.messages.map((message,i) => <div className={`chat-message ${message.role}`} key={i}><div className="chat-message-head"><span className={`chat-avatar ${message.role}`} aria-hidden="true">{message.role === 'assistant' ? <Sparkles size={12} /> : '你'}</span><small>{message.role === 'user' ? '你' : '标注助手'}</small></div><p>{message.content}</p></div>)}{session.busy && session.streamingText && <div className="chat-message assistant streaming"><div className="chat-message-head"><span className="chat-avatar assistant" aria-hidden="true"><Sparkles size={12} /></span><small>标注助手</small></div><p>{session.streamingText}</p></div>}{session.busy && <div className="chat-wait"><span className="waiting-dots">•••</span>{session.cancelRequested ? '正在请求停止 · 已发送请求的结果仍需核对' : chatStatus(events, session.id)} · {session.runningScope}</div>}
       {/* 结果卡片跟着会话走：已经有回复且绑定了项目时才展开实际结果，避免空转读取。 */}
       {!compact && <AgentSteps steps={steps} busy={session.busy} />}
       {!compact && session.planned?.length ? <PlanCard actions={session.planned} busy={session.busy}
@@ -141,11 +130,26 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
         box?.focus(); box?.scrollIntoView({ block: 'center' });
       }} />}
       {!compact && project && session.messages.some(message => message.role === 'assistant') && <ResultCard project={project} />}</div>
-    {project&&<ReferencePicker project={project} value={session.referenceResources??[]} onChange={referenceResources=>update({referenceResources})} disabled={session.busy}/>}<ConfigurationView value={chatConfig} providers={providers} compact/><div className="chat-scope"><select aria-label="助手处理范围" disabled={session.busy} value={session.scope} onChange={e => update({ scope: e.target.value as ChatSession['scope'] })}>{assetId && <option value="current">当前图片</option>}<option value="project">全项目 · {assetTotal} 张</option><option value="page">当前页 · {assets.length} 张</option><option value="selected">已勾选（跨页）· {selectedAssetIds.length} 张</option></select><select aria-label="助手执行方式" disabled={session.busy} value={String(session.autoExecute)} onChange={e => update({ autoExecute: e.target.value === 'true' })}><option value="true">直接执行</option><option value="false">先看方案</option></select></div>
-    <Composer value={session.input} onChange={input => update({ input })} onSend={() => void send()} placeholder="描述你的标注任务…" busy={session.busy} onCancel={() => { if (session.cancelRequested) return; update({ cancelRequested: true }); void request('agent.cancel', { sessionId: session.id }).catch(e => { update({ cancelRequested: false }); notify(errorMessage(e), true); }); }}><div className="chat-options"><button title={session.exportDir || '授权本次对话的导出目录'} onClick={() => void getBridge().then(b => b.chooseFiles({ kind: 'directory' })).then(paths => { if (paths[0]) update({ exportDir: paths[0] }); }).catch(e => notify(errorMessage(e), true))}><FolderOpen size={13} />{session.exportDir ? '已选目录' : '导出目录'}</button>{options.length
-        ? <select aria-label="对话模型" title="本次对话使用的模型" disabled={session.busy} value={`${selectedProviderId}|${selectedModel}`} onChange={e => { const [providerId, model] = e.target.value.split('|'); update({ providerId, model }); }}>{options.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}</select>
-        : <button onClick={() => void navigate('settings')}>{aiConfigured ? '选择模型' : '配置 AI'}</button>}
-      <select aria-label="思考深度" title="助手投入的思考与自检力度" disabled={session.busy} value={depth} onChange={e => update({ depth: e.target.value as ThinkingDepth })}>{(['fast', 'standard', 'deep'] as const).map(key => <option key={key} value={key}>{thinkingDepthNames[key]}</option>)}</select></div></Composer>
+    {/* 输入区固定在页面最下方：上面只有消息在滚动，控制项与模型选择跟着输入框走。 */}
+    <footer className="chat-dock">
+      {project&&<ReferencePicker project={project} value={session.referenceResources??[]} onChange={referenceResources=>update({referenceResources})} disabled={session.busy}/>}
+      <ConfigurationView value={chatConfig} providers={providers} compact/>
+      <Composer value={session.input} onChange={input => update({ input })} onSend={() => void send()} placeholder="描述你的标注任务…" busy={session.busy} onCancel={() => { if (session.cancelRequested) return; update({ cancelRequested: true }); void request('agent.cancel', { sessionId: session.id }).catch(e => { update({ cancelRequested: false }); notify(errorMessage(e), true); }); }}>
+        <div className="chat-options">
+          <FlowPicker disabled={session.busy} onPick={prompt => { update({ input: prompt }); document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus(); }} />
+          <select aria-label="助手处理范围" disabled={session.busy} value={session.scope} onChange={e => update({ scope: e.target.value as ChatSession['scope'] })}>{assetId && <option value="current">当前图片</option>}<option value="project">全项目 · {assetTotal} 张</option><option value="page">当前页 · {assets.length} 张</option><option value="selected">已勾选（跨页）· {selectedAssetIds.length} 张</option></select>
+          <select aria-label="助手执行方式" disabled={session.busy} value={String(session.autoExecute)} onChange={e => update({ autoExecute: e.target.value === 'true' })}><option value="true">直接执行</option><option value="false">先看方案</option></select>
+          <button title={session.exportDir || '授权本次对话的导出目录'} onClick={() => void getBridge().then(b => b.chooseFiles({ kind: 'directory' })).then(paths => { if (paths[0]) update({ exportDir: paths[0] }); }).catch(e => notify(errorMessage(e), true))}><FolderOpen size={12} />{session.exportDir ? '已选目录' : '导出目录'}</button>
+        </div>
+      </Composer>
+      {/* 收起时只有一行：当前模型与思考深度；点开才是搜索、模型列表与档位。 */}
+      <div className="chat-model-line">
+        <ModelPicker providers={providers} providerId={selectedProviderId} model={selectedModel} depth={depth} disabled={session.busy}
+          onChange={choice => update({ providerId: choice.providerId, model: choice.model })}
+          onDepthChange={next => update({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} />
+        {!aiConfigured && <span className="muted tiny">配置 AI 后可自动标注</span>}
+      </div>
+    </footer>
     {drop.video && <VideoImport key={drop.video.path} projectId={drop.video.projectId} initialSourcePath={drop.video.path} onClose={drop.closeVideo}
       onCreated={(job, temporarySource) => { setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource }); drop.closeVideo(); notify('已创建抽帧任务，进度在任务里查看。'); }} />}
   </div>;

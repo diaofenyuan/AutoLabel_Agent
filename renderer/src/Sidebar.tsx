@@ -12,10 +12,10 @@ import { Button, Field, IconButton, Modal } from './ui';
 
 /**
  * 会话挂在项目下，导航里不再有「新建对话」：新对话由欢迎页按描述建项目后开始。
- * 主导航只剩任务，设置固定在底部。
+ * 主导航只剩「新对话」这一项动作与底部的设置；任务与流程都回到对话里发起，进度在对话的任务卡片回看。
  */
 const mainEntries = [
-  { key: 'tasks', label: '任务', icon: ListTodo },
+  { key: 'new-chat', label: '新对话', icon: Plus },
 ] as const;
 
 /**
@@ -142,7 +142,7 @@ export function Sidebar() {
       <IconButton label="搜索" onClick={openJumper}><Search size={16} /></IconButton>
     </div>
     <div className="sidebar-scroll">
-      <nav aria-label="主导航">{mainEntries.map(entry => <button key={entry.key} className={`nav-item ${page === entry.key ? 'selected' : ''}`} aria-current={page === entry.key ? 'page' : undefined} title={entry.label} onClick={() => void navigate(entry.key)}><entry.icon size={18} strokeWidth={1.65} /><span>{entry.label}</span>{entry.key === 'tasks' && activeTasks > 0 && <span className="nav-badge" aria-label={`进行中的任务 ${activeTasks} 个`}>{activeTasks}</span>}</button>)}</nav>
+      <nav aria-label="主导航">{mainEntries.map(entry => <button key={entry.key} className="nav-item" title={entry.label} onClick={() => void startProjectChat()}><entry.icon size={18} strokeWidth={1.65} /><span>{entry.label}</span></button>)}</nav>
       {pinned.length > 0 && <div className="sidebar-group"><div className="sidebar-group-head"><span className="sidebar-group-title">置顶</span></div>{pinned.map(sessionRow)}</div>}
       <div className="sidebar-group">
         {/* 「＋」回到欢迎页：新对话要先有项目，由欢迎页按描述建好项目再开始。 */}
@@ -190,6 +190,8 @@ export function Sidebar() {
         <span className={`status-dot ${engine.state}`} />
         <span className="truncate">{isDemo ? '本地演示 · 浏览器存储' : engine.state === 'ready' ? '本地工作空间 · 引擎已连接' : engine.state === 'starting' ? '本地工作空间 · 引擎启动中' : engine.state === 'stopped' ? '本地工作空间 · 引擎已停止' : '本地工作空间 · 引擎中断'}</span>
       </div>
+      {/* 任务不再是主导航项：长任务在对话里发起，看板留在底部次要入口，进行中的数量仍以徽标提示。 */}
+      <button className="nav-item" aria-current={page === 'tasks' ? 'page' : undefined} title="任务" onClick={() => void navigate('tasks')}><ListTodo size={18} strokeWidth={1.65} /><span>任务</span>{activeTasks > 0 && <span className="nav-badge" aria-label={`进行中的任务 ${activeTasks} 个`}>{activeTasks}</span>}</button>
       <button className="nav-item" aria-current={page === 'settings' ? 'page' : undefined} title="设置" onClick={() => void navigate('settings')}><SettingsIcon size={18} strokeWidth={1.65} /><span>设置</span></button>
     </div>
     {rename && <Modal title={rename.kind === 'session' ? '重命名对话' : '重命名项目'} onClose={() => setRename(null)}><form onSubmit={submitRename} className="form-stack"><Field label="名称"><input autoFocus maxLength={rename.kind === 'session' ? 120 : 80} value={rename.value} onChange={e => setRename({ ...rename, value: e.target.value })} /></Field><div className="modal-actions"><Button type="button" onClick={() => setRename(null)}>取消</Button><Button className="primary" type="submit" busy={busy} disabled={!rename.value.trim()}>保存</Button></div></form></Modal>}

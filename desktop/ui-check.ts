@@ -92,6 +92,13 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   window.show();
   await waitFor(`!!document.querySelector('.chat-home') && !document.querySelector('.skeleton-list')`);
   stage('ui:home');
+  // 欢迎页的输入区同样贴在页面最下方，并带上模型与任务流程入口。
+  const homeDock = await window.webContents.executeJavaScript(`(()=>{const node=document.querySelector('.chat-home .chat-dock');if(!node)return {missing:true};
+    const box=node.getBoundingClientRect();return {missing:false,hasPicker:!!document.querySelector('.chat-home .model-picker-trigger'),
+      hasFlow:!!document.querySelector('.chat-home .flow-picker>button'),gapBottom:Math.round(innerHeight-box.bottom)};})()`);
+  if (homeDock.missing || !homeDock.hasPicker || !homeDock.hasFlow || homeDock.gapBottom > 24)
+    throw new Error(`欢迎页输入区没有贴在页面最下方：${JSON.stringify(homeDock)}`);
+  results.push({ check: 'home-dock', ...homeDock });
   await waitFor(`!!document.querySelector('.sidebar-status .status-dot.ready') && !document.querySelector('.connection-banner')`);
   stage('ui:engine-ready');
   const palette = await window.webContents.executeJavaScript(`(async()=>{
@@ -133,6 +140,44 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   })()`);
   if (!example.image.loaded || !String(example.mediaUrl).startsWith('autolabel-media://asset/')) throw new Error(`手工示例未通过真实桌面素材协议加载：${JSON.stringify(example)}`);
   results.push({ check: 'manual-example', ...example });
+  // 输入区必须贴在页面最下方：会话页只有消息区滚动，控制项与模型选择跟着输入框。
+  const dock = await window.webContents.executeJavaScript(`(()=>{const node=document.querySelector('.chat-dock');if(!node)return {missing:true};
+    const box=node.getBoundingClientRect();return {missing:false,height:Math.round(box.height),gapBottom:Math.round(innerHeight-box.bottom)};})()`);
+  if (dock.missing || dock.height < 40) throw new Error('会话页缺少底部输入区');
+  if (dock.gapBottom > 24) throw new Error(`输入区没有贴在页面最下方：距底部 ${dock.gapBottom}px`);
+  results.push({ check: 'composer-dock', ...dock });
+  // 模型与思考深度收起成一行，点开才出现搜索、模型列表与档位。
+  const picker = await window.webContents.executeJavaScript(`(async()=>{
+    const settle=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    const trigger=document.querySelector('.chat-model-line .model-picker-trigger');
+    if(!trigger)throw new Error('缺少模型与思考深度入口');
+    const collapsed={text:trigger.innerText.trim(),open:!!document.querySelector('.picker-popover')};
+    trigger.click(); await settle();
+    const opened={popover:!!document.querySelector('.picker-popover'),search:!!document.querySelector('.picker-search input'),
+      effort:[...document.querySelectorAll('.picker-effort-options button')].map(b=>b.innerText.trim()),
+      rows:document.querySelectorAll('.picker-row').length};
+    document.body.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})); await settle();
+    return {collapsed,opened,dismissed:!document.querySelector('.picker-popover')};
+  })()`);
+  if (picker.collapsed.open) throw new Error('模型选择器默认应当是收起状态');
+  if (!picker.opened.popover || !picker.opened.search) throw new Error('模型选择器没有打开搜索与模型列表');
+  if (picker.opened.effort.join(',') !== '快速,标准,深入') throw new Error(`思考深度档位不正确：${picker.opened.effort.join('、')}`);
+  if (!picker.dismissed) throw new Error('点击外部后模型选择器没有收起');
+  results.push({ check: 'model-picker', ...picker });
+  // 任务流程在对话里选：菜单要列出可选流程，选中只填进输入框，不直接执行。
+  const flow = await window.webContents.executeJavaScript(`(async()=>{
+    const settle=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    const trigger=document.querySelector('.flow-picker>button');
+    if(!trigger)throw new Error('对话里缺少任务流程入口');
+    trigger.click(); await settle();
+    const options=[...document.querySelectorAll('.flow-option strong')].map(node=>node.innerText.trim());
+    document.querySelector('.flow-option').click(); await settle();
+    return {options,closed:!document.querySelector('.flow-picker-menu'),input:document.querySelector('.chat-panel textarea')?.value??''};
+  })()`);
+  if (flow.options.length < 5) throw new Error(`任务流程选项过少：${flow.options.join('、')}`);
+  if (!flow.closed) throw new Error('选中任务流程后菜单没有收起');
+  if (!flow.input.trim()) throw new Error('选中任务流程后没有把起手式写进输入框');
+  results.push({ check: 'flow-picker', ...flow });
   // 只读抽查走项目概览：缩略图同样通过真实媒体协议渲染。
   await openPage('项目概览', 'overview');
   await waitFor(`!!document.querySelector('.overview-card') && !document.querySelector('.page-loading')`);
