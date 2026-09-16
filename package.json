@@ -27,6 +27,7 @@
     "check:annotate-ui": "node scripts/desktop-smoke.mjs --annotate",
     "check:unknown-retry-ui": "node scripts/desktop-smoke.mjs --unknown-retry",
     "check:frame-scope-ui": "node scripts/desktop-smoke.mjs --frame-scope",
+    "check:project-identity-ui": "node scripts/desktop-smoke.mjs --project-identity",
     "check:connection-ui": "node scripts/desktop-smoke.mjs --connection-ui",
     "check:training-ui": "node scripts/desktop-smoke.mjs --training-ui",
     "check:installer-contract": "node scripts/installer-contract-check.mjs",

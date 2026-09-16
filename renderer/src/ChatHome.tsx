@@ -36,15 +36,32 @@ export default function ChatHome() {
     try { await savePrefs({ ...prefs, chatProviderId: next.providerId ?? choice.providerId, chatModel: next.model ?? choice.model, chatThinkingDepth: next.depth ?? choice.depth }); }
     catch (e) { notify(errorMessage(e), true); }
   }
-  // 「继续 <最近项目>」按最近更新的项目走，没有项目时这一项不出现。
-  const lastProject = [...projects].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))[0];
+  // 最近更新的几个项目都留出入口：只给一个「继续」时，用户没法表达「我要接着另一个项目干」。
+  const recentProjects = [...projects].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? ''))).slice(0, 3);
+  // 首行前 40 字就是项目名。把它先算出来显示在输入框旁：用户才知道这句话会落到哪个项目，而不是发完才发现多了一个项目。
+  const pendingName = input.trim().split('\n')[0].slice(0, 40).trim();
+  const sameNameProject = pendingName ? projects.find(item => item.name === pendingName) : undefined;
 
-  /** 建项目 → 进入该项目的会话 → 首条消息自动发出。 */
+  /**
+   * 同名项目默认复用而不是再建一个。
+   * 重复拖入同一批素材原先会在侧栏留下两个外观完全一致的项目，用户分不清哪个有素材，
+   * 助手又会落在空的那个上——复用是这个问题的源头修复。
+   */
+  async function resolveProject(name: string, description?: string): Promise<{ project: Project; reused: boolean }> {
+    const trimmed = name.trim().slice(0, 80);
+    const existing = projects.find(item => item.name === trimmed);
+    if (existing) return { project: existing, reused: true };
+    return { project: await request<Project>('project.create', { name: trimmed, description, taskType: 'detect' }), reused: false };
+  }
+
+  /** 建项目 → 进入该项目的会话 → 首条消息自动发出。同名项目已存在时接入它，不再新建。 */
   async function startProject(name: string, description: string, firstMessage: string) {
-    const created = await request<Project>('project.create', { name: name.trim().slice(0, 80), description, taskType: 'detect' });
+    const { project: target, reused } = await resolveProject(name, description);
     // 先刷新项目列表：侧栏会话是按项目归组的，列表落后会把新项目的会话显示成「项目已删除」。
     await refreshProjects();
-    await openProject(created, firstMessage);
+    await openProject(target, firstMessage);
+    // openProject 会清掉当前提示，所以这句话必须放在它之后，否则用户看不到。
+    if (reused) notify(`已接入同名项目「${target.name}」，这条消息发在它里面。想另起一个请先在侧栏重命名项目。`);
   }
   async function start() {
     const text = input.trim();
@@ -63,12 +80,16 @@ export default function ChatHome() {
     try {
       const paths = await (await getBridge()).chooseFiles({ kind: 'images', multiple: true });
       if (!paths.length) return;
-      const created = await request<Project>('project.create', { name: folderName(paths[0]), taskType: 'detect' });
-      const result = await request<{ imported: number; skipped: number }>('asset.import', { projectId: created.id, paths, mode: 'copy' });
-      notify(`已导入 ${result.imported} 张，跳过 ${result.skipped} 张。`);
+      const { project: target, reused } = await resolveProject(folderName(paths[0]));
+      const result = await request<{ imported: number; skipped: number }>('asset.import', { projectId: target.id, paths, mode: 'copy' });
       // 先刷新项目列表：侧栏会话是按项目归组的，列表落后会把新项目的会话显示成「项目已删除」。
       await refreshProjects();
-      await openProject(created, `刚导入了 ${result.imported} 张图片，请开始标注`);
+      await openProject(target, result.imported ? `刚导入了 ${result.imported} 张图片，请开始标注` : '这批图片之前已经导入过，请核对已有标注');
+      // openProject 会清掉当前提示，所以导入结果必须放在它之后播报，否则用户看不到。
+      // 跳过数单独说明：同一批图重复导入会按内容指纹去重，用户需要知道素材没有丢，只是已经在了。
+      notify(reused
+        ? `已并入同名项目「${target.name}」：新增 ${result.imported} 张，已存在 ${result.skipped} 张。`
+        : `已导入 ${result.imported} 张，跳过 ${result.skipped} 张。`);
     } catch (e) { notify(errorMessage(e), true); }
     finally { setBusy(false); }
   }
@@ -80,11 +101,12 @@ export default function ChatHome() {
     try {
       const paths = await (await getBridge()).chooseFiles({ kind: 'video' });
       if (!paths.length) return;
-      const created = await request<Project>('project.create', { name: folderName(paths[0]), taskType: 'detect' });
+      const { project: target, reused } = await resolveProject(folderName(paths[0]));
       // 先刷新项目列表：侧栏会话是按项目归组的，列表落后会把新项目的会话显示成「项目已删除」。
       await refreshProjects();
+      if (reused) notify(`已接入同名项目「${target.name}」，抽帧素材会并入其中。`);
       // 抽帧在面板里检查和设参，此处只把项目与已授权路径交给它，不预先建任务。
-      setVideoStart({ projectId: created.id, path: paths[0] });
+      setVideoStart({ projectId: target.id, path: paths[0] });
     } catch (e) { notify(errorMessage(e), true); }
     finally { setBusy(false); }
   }
@@ -97,7 +119,8 @@ export default function ChatHome() {
       <div className="chat-suggestions" aria-label="建议">
         <button disabled={busy} onClick={() => void importImages()}><ImageIcon size={14} />导入图片开始标注</button>
         <button disabled={busy} onClick={() => void selectVideo()}><Film size={14} />选择视频抽帧</button>
-        {lastProject && <button disabled={busy} onClick={() => void openProject(lastProject).catch(e => notify(errorMessage(e), true))}>继续 {lastProject.name}</button>}
+        {recentProjects.map(item => <button key={item.id} disabled={busy} title={`最近更新的项目 · ${item.assetCount} 张素材`}
+          onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}>继续 {item.name}（{item.assetCount} 张）</button>)}
       </div>
       <p className="muted tiny">也可以把图片或视频直接拖进来，会新建项目并入库；长任务在对话里选流程发起。</p>
     </div>
@@ -106,7 +129,12 @@ export default function ChatHome() {
       <Composer value={input} onChange={setInput} onSend={() => void start()} placeholder="例如：标注工地照片里的安全帽和人员…" busy={busy}>
         <div className="chat-options">
           <FlowPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
-          <span className="composer-hint">Ctrl + Enter 发送 · 会按这句话建好项目并开始第一条对话</span>
+          {/* 把落点写在发送之前：新建还是并入同名项目，用户发之前就能看到。 */}
+          {pendingName
+            ? <span className="composer-hint">{sameNameProject
+              ? `将并入已有项目「${sameNameProject.name}」（现有 ${sameNameProject.assetCount} 张素材）`
+              : `将新建项目「${pendingName}」`} · Ctrl + Enter 发送</span>
+            : <span className="composer-hint">Ctrl + Enter 发送 · 会按这句话建好项目并开始第一条对话</span>}
         </div>
       </Composer>
       <div className="chat-model-line">

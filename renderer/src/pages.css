@@ -428,3 +428,6 @@
 .run-next-steps>p{margin:9px 0 0;line-height:1.7}
 /* 遗漏范围里每类原因带的下一步动作：行内小按钮，不抢原因与张数的可读性。 */
 .reason-summary>li>.button{min-height:24px;padding:2px 8px;font-size:10px;margin-left:auto}
+/* 侧栏项目行的素材数：同名项目靠它区分，右对齐不挤占项目名。 */
+.sidebar-project-count{flex-shrink:0;margin-left:auto;padding-left:8px;font-size:10px;color:var(--muted)}
+.sidebar-project.selected .sidebar-project-count{color:var(--text)}

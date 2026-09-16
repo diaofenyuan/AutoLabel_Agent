@@ -158,7 +158,8 @@ export function Sidebar() {
           ? <>
             {(showAllProjects ? grouped : grouped.slice(0, PROJECTS_VISIBLE)).map(({ project: item, sessions, total }) => <div key={item.id} className="sidebar-project-group">
               <div className={`sidebar-project ${project?.id === item.id ? 'selected' : ''}`}>
-                <button className="sidebar-row" title={item.name} onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><FolderOpen size={15} /><span className="sidebar-row-title truncate">{item.name}</span></button>
+                {/* 素材数直接写在项目行上：同名项目靠它区分，否则用户只能逐个点开看哪个有素材。 */}
+                <button className="sidebar-row" title={`${item.name} · ${item.assetCount} 张素材`} onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><FolderOpen size={15} /><span className="sidebar-row-title truncate">{item.name}</span><span className="sidebar-project-count">{item.assetCount} 张</span></button>
                 <span className="sidebar-actions">
                   <button title="项目概览" onClick={() => void openOverview(item)}><LayoutGrid size={13} /></button>
                   <button title="重命名" onClick={() => setRename({ kind: 'project', id: item.id, value: item.name })}><Pencil size={13} /></button>

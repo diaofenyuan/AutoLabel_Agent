@@ -282,7 +282,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       const { providerId, model } = configuration;
       const prompt = args.prompt ?? configuration.prompt;
       if (!p.classes.length) throw new AgentError('CLASSES_REQUIRED', '请先配置标注类别');
-      if (!p.assetCount) throw new AgentError('IMAGES_REQUIRED', '请先导入图片');
+      // 空项目最常见的成因是「落在了另一个同名/空项目上」，所以报错必须带上项目名并指向侧栏，而不是只说没素材。
+      if (!p.assetCount) throw new AgentError('IMAGES_REQUIRED', `项目「${p.name}」里还没有素材。请确认当前项目是否正确：侧栏项目行列出的是全部项目，点开有素材的那个再继续；如果确实要在这个项目里做，请先导入图片。`);
       if (!providerId || !model) throw new AgentError('MODEL_REQUIRED', '请先选择标注接口和标注模型');
       if (typeof prompt !== 'string' || !prompt.trim()) throw new AgentError('PROMPT_REQUIRED', '请补充需要标注的对象和规则');
       const selected = args.assetIds == null ? env.context.assetIds : ids(args.assetIds, '素材标识');
