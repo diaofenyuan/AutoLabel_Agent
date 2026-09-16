@@ -224,6 +224,8 @@ export const demoBridge: DesktopBridge = {
   restartEngine: async () => ({ state: 'disconnected', message: '请在桌面应用中启动本地引擎。' }),
   setWindowDirty: async () => {},
   chooseFiles: options => options.kind === 'images' ? chooseImages() : Promise.reject(new Error('目录、视频与模型文件请选择桌面版本。')),
+  // 浏览器里没有真实文件系统：目录枚举只属于桌面能力，演示态如实拒绝而不是返回假数据。
+  listDirectory: async () => { throw new Error('列出目录内容需要桌面版本。'); },
   transcodeVideo: async () => { throw new Error('转码需要桌面版本调用本机 FFmpeg。'); },
   discardTranscode: async () => {},
   saveFile: async () => null,

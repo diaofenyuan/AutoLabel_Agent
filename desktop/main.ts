@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage, protocol, session, powerMonitor, safeStorage } from 'electron';
 import type { IpcMainInvokeEvent, OpenDialogOptions } from 'electron';
 import path from 'node:path';
-import { readFile, writeFile, mkdir, stat, statfs, realpath } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, stat, statfs, realpath, readdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { EngineManager } from './engine';
 import { AgentManager } from './agent-manager';
@@ -18,7 +18,8 @@ import { StoragePathSettings, resolveStoragePaths, storagePathsState, validateTr
 import { ChatStore } from './chat-store';
 import type { StoragePathsState } from '../shared/storage';
 import { PathGrants, authorizeCommandPaths, mediaTargetFromUrl, isTrustedUrl, normalizeMedia, publicInputResult, redact } from './security';
-import { DesktopError, validateCommand, assertAgentCommand, fileSelectionSchema, saveFileSchema, windowActionSchema, transcodeSourceSchema, transcodeOutputSchema } from './validation';
+import { DesktopError, validateCommand, assertAgentCommand, fileSelectionSchema, saveFileSchema, windowActionSchema, transcodeSourceSchema, transcodeOutputSchema, directoryScanSchema } from './validation';
+import { DIRECTORY_SCAN_MAX_DEPTH, DIRECTORY_SCAN_MAX_FILES, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, isImagePath, isVideoPath } from '../shared/mediaFormats';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'autolabel-app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
@@ -41,6 +42,8 @@ let storagePaths: ResolvedPaths | undefined;
 // 对话记录目录取自解析后的三类路径，改路径后无需重启即可生效。
 const chatStore = new ChatStore(() => storagePaths?.entries.find(entry => entry.kind === 'chats')?.path ?? '');
 const iconPath = path.join(root, 'build', 'icon.png');
+/** 视频候选清单的上限：界面上是一份让用户逐个点「抽帧」的列表，不需要把上万条路径送回渲染层。 */
+const MEDIA_LIST_LIMIT = 500;
 const grants = new PathGrants();
 const localExecution = new LocalExecutionSettings(preferenceStore, grants);
 const mediaExecution = new MediaExecutionSettings(preferenceStore, grants, path.join(app.isPackaged ? process.resourcesPath : path.join(root, 'build'), 'media-tools'));
@@ -531,15 +534,14 @@ function registerIpc(): void {
   /**
    * 拖入对话的文件与文件选择器同属用户显式动作，按同样的规则登记授权。
    * 类型只认图片与视频（其余由界面明确告知不支持），授权范围由主进程按扩展名判定，不交给渲染层。
+   * 白名单取 shared/mediaFormats：与选择器、目录扫描共用一份，图片收紧到引擎真正能收的 jpg/jpeg/png。
    */
   handle('autolabel:grant-dropped-files', async (_event, values) => {
     if (!Array.isArray(values) || !values.length || values.length > 500) throw new DesktopError('INVALID_PAYLOAD', '拖入的文件数量无效');
     const granted: string[] = []; const rejected: string[] = [];
     for (const value of values) {
       if (typeof value !== 'string' || !value || value.length > 32767 || !path.isAbsolute(value)) { rejected.push(String(value).slice(0, 200)); continue; }
-      const extension = path.extname(value).slice(1).toLowerCase();
-      const kind = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff'].includes(extension) ? 'images'
-        : ['mp4', 'avi', 'mov', 'mkv', 'webm', 'm4v', 'flv', 'wmv', 'mpg', 'mpeg', 'ts'].includes(extension) ? 'video' : '';
+      const kind = isImagePath(value) ? 'images' : isVideoPath(value) ? 'video' : '';
       if (!kind) { rejected.push(path.basename(value)); continue; }
       try {
         if (!(await stat(value)).isFile()) { rejected.push(path.basename(value)); continue; }
@@ -547,6 +549,45 @@ function registerIpc(): void {
       } catch { rejected.push(path.basename(value)); }
     }
     return { granted, rejected };
+  });
+  /**
+   * 列出已授权目录里的可用素材。
+   *
+   * 渲染层拿不到文件系统，而「选了文件夹却静默少收素材」正是最隐蔽的一类失败：
+   * 引擎的目录扫描只收 jpg/jpeg/png，界面若不知道文件夹里还有什么，就只能报一个偏小的导入数。
+   * 这里按与引擎一致的规则（递归 12 层、上限 10000）走一遍，把「有多少个文件用不上」如实回给界面。
+   * 只读已授权目录，不新增授权。
+   */
+  handle('autolabel:list-directory', async (_event, options) => {
+    const parsed = directoryScanSchema.safeParse(options);
+    if (!parsed.success) throw new DesktopError('INVALID_PAYLOAD', '目录扫描参数无效');
+    const { kind } = parsed.data;
+    const directory = await grants.require(parsed.data.path, ['directory']);
+    const match = kind === 'images' ? isImagePath : isVideoPath;
+    // 视频候选是给用户挑的清单，不需要把上限用完；图片侧仍按引擎的导入上限统计，好让「有多少用不上」准确。
+    const limit = kind === 'video' ? MEDIA_LIST_LIMIT : DIRECTORY_SCAN_MAX_FILES;
+    const files: string[] = []; let unsupported = 0; let truncated = false;
+    const walk = async (current: string, depth: number): Promise<void> => {
+      if (truncated || depth > DIRECTORY_SCAN_MAX_DEPTH) return;
+      let entries;
+      try { entries = await readdir(current, { withFileTypes: true }); }
+      catch { return; }
+      for (const entry of entries) {
+        if (truncated) return;
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) { await walk(full, depth + 1); continue; }
+        if (!entry.isFile()) continue;
+        if (match(full)) {
+          if (files.length >= limit) { truncated = true; return; }
+          files.push(full);
+        } else unsupported++;
+      }
+    };
+    await walk(directory, 1);
+    // 视频命令要求逐个文件授权（「目录授权不扩大到视频」是刻意的边界，见 security.test），
+    // 所以把用户刚刚选中的文件夹里的视频一并登记；图片不必登记，asset.import 本身就接受目录授权。
+    if (kind === 'video') for (const file of files) await grants.add(file, 'video');
+    return { directory, files, unsupported, truncated };
   });
   handle('autolabel:choose-files', async (_event, options) => {
     const parsed = fileSelectionSchema.safeParse(options);
@@ -563,8 +604,8 @@ function registerIpc(): void {
     };
     if (dialogFixtures) return Promise.all((await dialogFixtures.take(kind)).map(authorize));
     const filters: Record<string, Electron.FileFilter[]> = {
-      images: [{ name: '图片（JPEG、PNG）', extensions: ['jpg', 'jpeg', 'png'] }],
-      video: [{ name: '视频', extensions: ['mp4', 'mkv', 'avi', 'mov', 'webm'] }],
+      images: [{ name: `图片（${IMAGE_EXTENSIONS.map(value => value.toUpperCase()).join('、')}）`, extensions: [...IMAGE_EXTENSIONS] }],
+      video: [{ name: '视频', extensions: [...VIDEO_EXTENSIONS] }],
       model: [{ name: '本地模型', extensions: ['pt', 'onnx'] }],
       python: [{ name: 'Python 解释器', extensions: ['exe'] }],
       ffmpeg: [{ name: 'FFmpeg 可执行文件', extensions: ['exe'] }],

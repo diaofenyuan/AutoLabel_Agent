@@ -53,6 +53,13 @@ export interface DesktopBridge {
   engineStatus(): Promise<EngineStatus>;
   onEngineStatus(listener: (status: EngineStatus) => void): () => void;
   chooseFiles(options: FileSelection): Promise<string[]>;
+  /**
+   * 列出已授权目录里的可用素材。
+   * 渲染层拿不到文件系统，而引擎的目录扫描只收 jpg/jpeg/png：没有这一步，
+   * 「选了文件夹却静默少收素材」就无法如实告知，也无法列出待抽帧的视频。
+   * 只读已授权目录，不新增授权、不访问目录以外的路径。
+   */
+  listDirectory?(options: { path: string; kind: 'images' | 'video' }): Promise<{ directory: string; files: string[]; unsupported: number; truncated: boolean }>;
   /** 用本机 FFmpeg 生成几何与色彩恒定的临时副本，绕开引擎「不猜测」的严格校验；返回受管临时路径。 */
   transcodeVideo(options: { sourcePath: string }): Promise<{ path: string }>;
   /** 删除 transcodeVideo 产出的临时副本；只接受该功能自己创建的路径。 */

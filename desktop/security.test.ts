@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { assertAgentCommand, validateCommand } from './validation';
 import { PathGrants, authorizeCommandPaths, assetIdFromUrl, mediaTargetFromUrl, isTrustedUrl, normalizeMedia, redact } from './security';
 import { SseDecoder } from './sse';
+import { DIRECTORY_SCAN_MAX_DEPTH, DIRECTORY_SCAN_MAX_FILES, IMAGE_EXTENSIONS, isImagePath, isVideoPath } from '../shared/mediaFormats';
 import { DialogFixtures } from './dialog-fixtures';
 
 test('IPC 拒绝内部命令、未知字段与无效标注数值', () => {
@@ -457,4 +458,21 @@ test('视频探测和创建只能读取原生视频选择授权，目录授权�
     await authorizeCommandPaths('media.video.inspect', { sourcePath: selected }, grants);
     await authorizeCommandPaths('media.video.create', { sourcePath: selected }, grants);
   } finally { assert.ok(root.startsWith(path.resolve(os.tmpdir()) + path.sep + 'autolabel-video-grant-')); await rm(root, { recursive: true, force: true }); }
+});
+
+test('素材扩展名白名单以引擎实际能力为下限，三处共用一份常量', async () => {
+  // 选择器 filters、拖入白名单、目录扫描若各写一份，就会出现「同一类素材走不同入口可用格式不同」；
+  // 更隐蔽的是目录导入：引擎只收 jpg/jpeg/png，按拖入白名单放开会静默少收素材。
+  assert.deepEqual([...IMAGE_EXTENSIONS], ['jpg', 'jpeg', 'png']);
+  assert.equal(isImagePath('D:/随便/图.PNG'), true);
+  assert.equal(isImagePath('D:/随便/图.webp'), false);
+  assert.equal(isVideoPath('D:/随便/片.M4V'), true);
+  assert.equal(isVideoPath('D:/随便/片.txt'), false);
+  // 引擎的目录扫描正则必须与这份常量一致；改了引擎就要同步改常量，反之亦然。
+  const engine = await readFile(path.resolve('engine/src/main/java/cn/autolabel/engine/Projects.java'), 'utf8');
+  const walk = /Files\.walk\(path,(\d+)\)/.exec(engine);
+  assert.ok(walk, '引擎目录扫描实现应保持可识别，便于这份一致性断言');
+  assert.equal(Number(walk![1]), DIRECTORY_SCAN_MAX_DEPTH, '目录递归层数应与引擎一致');
+  assert.match(engine, /matches\("\.\*\\\\\.\(jpe\?g\|png\)\$"\)/, '引擎目录扫描的扩展名应与 IMAGE_EXTENSIONS 一致');
+  assert.match(engine, /limit\(10001-files\.size\(\)\)/, '单次导入上限应与 DIRECTORY_SCAN_MAX_FILES 一致');
 });

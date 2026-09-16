@@ -599,3 +599,5 @@ export const windowActionSchema = z.enum(['minimize', 'maximize', 'close']);
 // 转码兜底的输入与输出路径：结构极简单，但仍走同一套校验，避免 IPC 入口出现未校验参数。
 export const transcodeSourceSchema = z.strictObject({ sourcePath: mediaPath });
 export const transcodeOutputSchema = z.strictObject({ path: mediaPath });
+/** 目录枚举：只接受已授权目录，用于如实报告「文件夹里有多少文件用不上」以及列出待抽帧的视频。 */
+export const directoryScanSchema = z.strictObject({ path: mediaPath, kind: z.enum(['images', 'video']) });

@@ -1,14 +1,15 @@
 import { useState } from 'react';
-import { Image as ImageIcon, Film } from 'lucide-react';
+import { FolderPlus, Image as ImageIcon, Film } from 'lucide-react';
 import { useApp } from './context';
 import { request, errorMessage, getBridge } from './bridge';
-import { Composer } from './ui';
+import { Button, Composer, Modal } from './ui';
 import { AiSetupNotice } from './AiSetup';
 import { DropOverlay } from './fileDrop';
 import { useChatFileDrop } from './chatDrop';
 import VideoImport from './VideoImport';
 import ModelPicker from './ModelPicker';
 import FlowPicker from './FlowPicker';
+import { VIDEO_EXTENSION_LABEL } from '../../shared/mediaFormats';
 import type { Project } from './types';
 
 /** 从导入路径里取一个像样的项目名：用文件所在文件夹名，取不到就退回通用名。 */
@@ -17,6 +18,12 @@ function folderName(file: string): string {
   const name = parts.length >= 2 ? parts[parts.length - 2] : '';
   return name.slice(0, 80) || '未命名项目';
 }
+/** 选中文件夹时项目名取它自己的名字：用 folderName 会取到上一级，与用户预期不符。 */
+function directoryName(directory: string): string {
+  const parts = directory.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1]?.slice(0, 80) || '未命名项目';
+}
+const baseName = (value: string) => value.split(/[\\/]/).filter(Boolean).pop() ?? value;
 
 /**
  * 欢迎页：还没有进入任何项目时落在这里。
@@ -29,6 +36,8 @@ export default function ChatHome() {
   const [busy, setBusy] = useState(false);
   // 欢迎页还没有项目时，用户点「选择视频抽帧」要先有一个项目承载抽帧产物；这里存下这次点击建好的项目与选中路径。
   const [videoStart, setVideoStart] = useState<{ projectId: string; path: string } | null>(null);
+  /** 一次选了多个视频（多选或整个文件夹）时的候选清单：逐个发起抽帧，不做队列调度。 */
+  const [videoPicks, setVideoPicks] = useState<{ projectId: string; files: string[] } | null>(null);
   const drop = useChatFileDrop();
   // 欢迎页还没有会话，选择模型与深度即写入默认值：新建会话与任务都以它为初值。
   const choice = { providerId: prefs.chatProviderId, model: prefs.chatModel, depth: prefs.chatThinkingDepth ?? 'standard' };
@@ -99,14 +108,63 @@ export default function ChatHome() {
     if (busy) return;
     setBusy(true);
     try {
-      const paths = await (await getBridge()).chooseFiles({ kind: 'video' });
+      // 允许一次多选：先前是单选，批量导视频只能一个个来。
+      const paths = await (await getBridge()).chooseFiles({ kind: 'video', multiple: true });
       if (!paths.length) return;
       const { project: target, reused } = await resolveProject(folderName(paths[0]));
       // 先刷新项目列表：侧栏会话是按项目归组的，列表落后会把新项目的会话显示成「项目已删除」。
       await refreshProjects();
       if (reused) notify(`已接入同名项目「${target.name}」，抽帧素材会并入其中。`);
-      // 抽帧在面板里检查和设参，此处只把项目与已授权路径交给它，不预先建任务。
-      setVideoStart({ projectId: target.id, path: paths[0] });
+      // 多个视频先给清单：同时起多个抽帧任务既慢又难查，交给用户一个个来。
+      if (paths.length === 1) setVideoStart({ projectId: target.id, path: paths[0] });
+      else setVideoPicks({ projectId: target.id, files: paths });
+    } catch (e) { notify(errorMessage(e), true); }
+    finally { setBusy(false); }
+  }
+
+  /**
+   * 「导入图片文件夹」：整目录一次导入。
+   * 导入前后各做一件事——先枚举目录把「有多少文件用不上」问出来，再按引擎的目录扫描规则导入。
+   * 少了前一步，含 webp 的文件夹会静默少收素材，用户只看到一个偏小的数字。
+   */
+  async function importImageFolder() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const bridge = await getBridge();
+      const [directory] = await bridge.chooseFiles({ kind: 'directory' });
+      if (!directory) return;
+      const scanned = await bridge.listDirectory?.({ path: directory, kind: 'images' });
+      const { project: target, reused } = await resolveProject(directoryName(directory));
+      const result = await request<{ imported: number; skipped: number }>('asset.import', { projectId: target.id, paths: [directory], mode: 'copy' });
+      await refreshProjects();
+      await openProject(target, result.imported ? `刚导入了 ${result.imported} 张图片，请开始标注` : '这个文件夹里的图片已经导入过，请核对已有标注');
+      // openProject 会清掉当前提示，所以导入结果必须放在它之后播报。
+      notify([
+        reused ? `已并入同名项目「${target.name}」：新增 ${result.imported} 张，已在项目里 ${result.skipped} 张。` : `已导入 ${result.imported} 张，跳过 ${result.skipped} 张。`,
+        scanned?.unsupported ? `文件夹里另有 ${scanned.unsupported} 个文件不是 JPG / JPEG / PNG，没有导入。` : '',
+        scanned?.truncated ? '文件夹过大，本次只处理了上限内的部分，其余请分批导入。' : ''
+      ].filter(Boolean).join(' '));
+    } catch (e) { notify(errorMessage(e), true); }
+    finally { setBusy(false); }
+  }
+
+  /** 「选择视频文件夹」：列出文件夹里的视频让用户挑，逐个发起抽帧；没有视频时如实说明原因。 */
+  async function selectVideoFolder() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const bridge = await getBridge();
+      const [directory] = await bridge.chooseFiles({ kind: 'directory' });
+      if (!directory) return;
+      const scanned = await bridge.listDirectory?.({ path: directory, kind: 'video' });
+      if (!scanned?.files.length) {
+        notify(`这个文件夹里没有可抽帧的视频（支持 ${VIDEO_EXTENSION_LABEL}）${scanned?.unsupported ? `；另有 ${scanned.unsupported} 个文件不是视频` : ''}。`, true);
+        return;
+      }
+      const { project: target } = await resolveProject(directoryName(directory));
+      await refreshProjects();
+      setVideoPicks({ projectId: target.id, files: scanned.files });
     } catch (e) { notify(errorMessage(e), true); }
     finally { setBusy(false); }
   }
@@ -118,7 +176,9 @@ export default function ChatHome() {
       <AiSetupNotice />
       <div className="chat-suggestions" aria-label="建议">
         <button disabled={busy} onClick={() => void importImages()}><ImageIcon size={14} />导入图片开始标注</button>
+        <button disabled={busy} onClick={() => void importImageFolder()}><FolderPlus size={14} />导入图片文件夹</button>
         <button disabled={busy} onClick={() => void selectVideo()}><Film size={14} />选择视频抽帧</button>
+        <button disabled={busy} onClick={() => void selectVideoFolder()}><FolderPlus size={14} />选择视频文件夹</button>
         {recentProjects.map(item => <button key={item.id} disabled={busy} title={`最近更新的项目 · ${item.assetCount} 张素材`}
           onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}>继续 {item.name}（{item.assetCount} 张）</button>)}
       </div>
@@ -143,6 +203,17 @@ export default function ChatHome() {
         <span className="muted tiny">这里的默认值用于新建的对话与任务</span>
       </div>
     </footer>
+    {/* 一次选了多个视频（多选或整个文件夹）时的候选清单：一次起一个抽帧任务，抽完再点下一个。 */}
+    {videoPicks && <Modal title="选择要抽帧的视频" onClose={() => setVideoPicks(null)}>
+      <div className="form-stack">
+        <p className="muted tiny">共 {videoPicks.files.length} 个候选，一次处理一个：抽完一个再点下一个，避免多个抽帧任务同时跑。</p>
+        <div className="board-list">{videoPicks.files.map(file => <article className="board-row" key={file}>
+          <div className="board-main"><strong>{baseName(file)}</strong><span className="muted tiny break-word">{file}</span></div>
+          <Button onClick={() => { const target = videoPicks.projectId; setVideoPicks(null); setVideoStart({ projectId: target, path: file }); }}>抽帧</Button>
+        </article>)}</div>
+        <div className="modal-actions"><Button onClick={() => setVideoPicks(null)}>关闭</Button></div>
+      </div>
+    </Modal>}
     {/* 拖入视频与点击「选择视频抽帧」都走同一个抽帧面板：区别只在于项目是拖放时建的还是按钮提前建好的。 */}
     {(drop.video ?? videoStart) && (() => {
       const source = drop.video ?? videoStart!;
