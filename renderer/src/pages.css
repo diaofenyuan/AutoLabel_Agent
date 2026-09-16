@@ -258,6 +258,10 @@
 .chat-suggestions button:hover:not(:disabled){border-color:var(--soft);background:var(--surface);color:var(--text)}
 .chat-home-recent{width:100%;max-width:1540px;margin:0 auto;padding:0 4px 18px}
 .chat-home-recent .sidebar-group-title{display:block;margin-bottom:9px}
+/* 只读标注预览：等比铺满容器，不接收任何指针事件，编辑一律走对话指令。 */
+.result-viewer{position:relative;width:100%;overflow:auto;background:var(--surface-soft);border:1px solid var(--border);border-radius:9px}
+.result-canvas{display:block;width:100%;height:auto}
+.result-canvas image,.result-shape{pointer-events:none}
 .chat-session-strip{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
 .chat-session-card{display:flex;align-items:center;gap:7px;max-width:238px;min-width:0;height:32px;padding:0 11px;border:1px solid var(--border);border-radius:999px;background:var(--bg);color:var(--muted);font-size:12px}
 .chat-session-card .truncate{max-width:150px}
