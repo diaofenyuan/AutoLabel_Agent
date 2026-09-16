@@ -170,6 +170,21 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
     await js(`document.querySelector('dialog[open] button[aria-label="关闭弹窗"]').click()`);
     await waitFor(`!document.querySelector('dialog[open]')`);
 
+    // ===== 导出：输出目录留空也能提交，与「留空时保存到默认落点」的说明一致 =====
+    await button('导出');
+    await waitFor(`!!${dialog}&&${dialog}.innerText.includes('导出前检查')`);
+    // 这个项目还有 1 张未标注素材：先按既有的一键剔除把它移出范围，再看提交按钮的状态。
+    await waitFor(`[...${dialog}.querySelectorAll('button')].some(b=>b.innerText.includes('未标注素材并继续导出'))`, 40000);
+    await js(`(()=>{const b=[...${dialog}.querySelectorAll('button')].find(b=>b.innerText.includes('未标注素材并继续导出'));b.click();})()`);
+    // 等界面自己把剔除结果读回来：面板的预检是它自己发起的，直接查接口会抢在它前面。
+    await waitFor(`${dialog}.innerText.includes('已排除')`, 40000);
+    const exportState = await js<{ outputDir: string; disabled: boolean }>(`(()=>{const input=[...${dialog}.querySelectorAll('input[readonly]')][0];const b=[...${dialog}.querySelectorAll('button')].find(b=>b.innerText.trim()==='导出数据集');return {outputDir:input?.value??'',disabled:Boolean(b?.disabled)};})()`);
+    assert.equal(exportState.outputDir, '', '本步骤的前提是输出目录保持留空');
+    assert.equal(exportState.disabled, false, '输出目录留空时应能直接提交——文案说留空即用默认落点，禁用条件却要求先选目录');
+    checks.push({ check: 'export-without-output-dir', emptyOutputDir: true, submitted: true });
+    await js(`document.querySelector('dialog[open] button[aria-label="关闭弹窗"]').click()`);
+    await waitFor(`!document.querySelector('dialog[open]')`);
+
     // ===== 文案一致性：不再宣传不可用的快捷键 =====
     await js(`[...document.querySelectorAll('.topbar-actions button')].find(b=>b.getAttribute('aria-label')==='快捷键与帮助').click()`);
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('快捷键与帮助')`);
@@ -190,7 +205,8 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
     for (const ghost of ['标注工作台', 'V / H', 'Ctrl + S', 'Ctrl + Z']) {
       assert.ok(!settingsText.includes(ghost), `设置页仍在宣传不存在的「${ghost}」，实际：${settingsText.slice(0, 400)}`);
     }
-    checks.push({ check: 'shortcut-copy-matches-capability', helpGhosts: 0, settingsGhosts: 0 });
+    assert.ok(await js<boolean>(`[...document.querySelectorAll('.sidebar-project button[title]')].some(b=>b.getAttribute('title')==='进入对话')`), '侧栏项目行应有明确的「进入对话」入口，而不是只能点项目名');
+    checks.push({ check: 'shortcut-copy-matches-capability', helpGhosts: 0, settingsGhosts: 0, sidebarChatEntry: true });
 
     // ===== AI 配置：能力验证要如实说明测试图很小，且超时设置可找到 =====
     await js(`[...document.querySelectorAll('.settings-tabs button')].find(b=>b.innerText.trim()==='软件 AI 配置').click()`);
@@ -202,7 +218,8 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
     assert.ok(capabilityNote.includes('不代表真实尺寸的大图不会超时'), `能力验证必须说明结论边界，实际：${capabilityNote}`);
     // 超时藏在折叠区里也要能被找到：折叠按钮文案要写清里面有什么。
     assert.ok(await js<boolean>(`[...document.querySelectorAll('.advanced-toggle')].some(b=>b.innerText.includes('超时'))`), '高级请求配置的入口应写明包含超时设置');
-    checks.push({ check: 'ai-capability-honesty', rows: capabilityRows.length, timeoutDiscoverable: true });
+    assert.ok(await js<boolean>(`[...document.querySelectorAll('.model-section button')].some(b=>b.innerText.includes('一键验证并设为默认模型'))`), 'AI 配置页应提供一键验证入口，避免首次配置要手工点五次测试再选两次模型');
+    checks.push({ check: 'ai-capability-honesty', rows: capabilityRows.length, timeoutDiscoverable: true, oneClickVerify: true });
 
     await writeFile(output, json({ checks, passed: true }));
   } catch (error) {

@@ -25,7 +25,7 @@ export function AiSetupNotice({ children }: { children?: ReactNode }) {
     <Sparkles size={16} />
     <span>配置 AI 后可以让助手自动标注。</span>
     {children}
-    <button className="text-button" onClick={() => void navigate('settings')}>前往设置</button>
+    <button className="text-button" onClick={() => void navigate('settings', 'ai')}>前往设置 · 软件 AI 配置</button>
     <IconButton label="不再提示" onClick={() => void savePrefs({ ...prefs, aiSetupDismissed: true }).catch(e => notify(errorMessage(e), true))}><X size={14} /></IconButton>
   </div>;
 }

@@ -169,6 +169,8 @@ if (directoryImportOnly) {
   // 视频文件夹先列候选再逐个发起，点「抽帧」真的打开抽帧面板。
   assert.equal(byCheck.get('video-folder-picker')?.candidates, 2);
   assert.equal(byCheck.get('video-folder-picker')?.panelOpened, true);
+  // 大尺寸来源默认降采样：1920×1080 应等比降到 1024×576 并写进抽帧参数。
+  assert.deepEqual([byCheck.get('video-folder-picker')?.downsampled?.width, byCheck.get('video-folder-picker')?.downsampled?.height], ['1024', '576']);
   // 拖入契约：图片与文件夹放行、txt 与 webp 带原因拒绝、超量回落上限与本次数量。
   assert.equal(byCheck.get('drop-contract')?.declared, 2);
   assert.equal(byCheck.get('drop-contract')?.extensionReasons, 2);
@@ -232,6 +234,10 @@ if (annotateOnly) {
   assert.equal(byCheck.get('split-vocabulary')?.checkButtonDoesNotCreateVersion, true);
   assert.equal(byCheck.get('ai-capability-honesty')?.rows, 6);
   assert.equal(byCheck.get('ai-capability-honesty')?.timeoutDiscoverable, true);
+  assert.equal(byCheck.get('ai-capability-honesty')?.oneClickVerify, true);
+  // 导出：输出目录留空也能提交，且侧栏有明确的进入对话入口。
+  assert.equal(byCheck.get('export-without-output-dir')?.submitted, true);
+  assert.equal(byCheck.get('shortcut-copy-matches-capability')?.sidebarChatEntry, true);
   console.log(`素材人工标注入口与文案一致性检查通过：${output}`); process.exit(0);
 }
 if (trainingUiOnly) { assert.equal(result.passed, true); assert.ok(['ready', 'invalid'].includes(result.dataset.status)); assert.equal(result.readOnly, true); console.log(`训练改由对话发起后的只读看板检查通过：${output}`); process.exit(0); }

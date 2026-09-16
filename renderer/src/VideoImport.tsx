@@ -6,6 +6,14 @@ import { useApp } from './context';
 import { Button, Field, IconButton, Modal, Notice } from './ui';
 import { MediaError } from './mediaUi';
 import { FrameAutoImportOption } from './FrameJobStrip';
+
+/**
+ * 默认降采样阈值与目标长边。
+ * 走查的对照测试证明体积不是超时的主因（4 MiB 与 100 KB 的失败率都约 70%），
+ * 但它确实是放大项：先按住最容易放大问题的那个因素，同时不把「降采样」当成重试出口的替代品。
+ */
+const DOWNSAMPLE_THRESHOLD = 1600;
+const DOWNSAMPLE_LONG_EDGE = 1024;
 import type { MediaErrorActionHandlers } from './mediaErrorMap';
 import { listRecipes, recipeScopeNote, recipeSummary, removeRecipe, saveRecipe } from './videoRecipes';
 
@@ -53,6 +61,9 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
   const [advanced, setAdvanced] = useState(false), [command, setCommand] = useState('');
   const [whole, setWhole] = useState(true), [ranges, setRanges] = useState<VideoTimeRange[]>([{ start: 0, end: 1 }]);
   const [resize, setResize] = useState(false), [width, setWidth] = useState('640'), [height, setHeight] = useState('640'), [fit, setFit] = useState<'contain' | 'stretch'>('contain');
+  /** 尺寸被用户显式改过之后就不再自动降采样：默认值可以猜，用户的选择不能覆盖。 */
+  const sizeTouched = useRef(false);
+  const [downsampled, setDownsampled] = useState(false);
   const [format, setFormat] = useState<'png' | 'jpg'>('png'), [quality, setQuality] = useState('3');
   const duration = inspection?.durationSeconds ?? null;
   const durationUnknown = inspection !== null && duration === null;
@@ -104,6 +115,16 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
       setRanges([{ start: 0, end: info.durationSeconds ?? 0 }]);
       // 时长未知时引擎必须拿到明确范围，直接展开高级区，不让用户自己去翻。
       setAdvanced(info.durationSeconds === null);
+      // 4K 原帧送模型会显著抬高超时概率（走查里 23 帧有 16 帧超时）。这里默认把长边压到 1024，
+      // 保持宽高比所以不会留黑边；用户改过尺寸或套过配方时不覆盖他的选择。
+      const longEdge = Math.max(info.width, info.height);
+      if (!sizeTouched.current && longEdge > DOWNSAMPLE_THRESHOLD && info.width > 0 && info.height > 0) {
+        const scale = DOWNSAMPLE_LONG_EDGE / longEdge;
+        setResize(true); setFit('contain');
+        setWidth(String(Math.max(1, Math.round(info.width * scale))));
+        setHeight(String(Math.max(1, Math.round(info.height * scale))));
+        setDownsampled(true);
+      }
     } catch (e) { setInspection(null); setError(errorMessage(e)); } finally { setInspecting(false); }
   }
   const mode = density === 'custom' ? customMode : 'interval';
@@ -179,6 +200,7 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
   function applyRecipe(recipe: VideoExtractionRecipe) {
     applyingRecipe.current = true;
     setDensity(recipe.density); setCustomMode(recipe.customMode); setCustomValue(String(recipe.customValue));
+    sizeTouched.current = true; setDownsampled(false);
     setResize(recipe.resize); setWidth(String(recipe.width)); setHeight(String(recipe.height)); setFit(recipe.fit);
     setFormat(recipe.format); setQuality(String(recipe.quality));
     setRecipeId(recipe.id);
@@ -234,6 +256,7 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
       : <>
         <div className="video-inspection"><div className="video-inspection-head"><strong title={sourcePath}>{inspection.sourceName}</strong><button className="text-button" onClick={() => void choose()} disabled={blocked}>重新选择</button></div><p>{inspection.width} × {inspection.height} · {durationLabel(duration)}</p><p className="muted tiny">报告帧率：{inspection.reportedFrameRate ?? '未知'} · 报告帧数：{inspection.reportedFrameCount ?? '未知'}</p>{transcodePath && <p className="muted tiny">来源为本机转码副本（临时文件，导入素材后自动删除）。</p>}</div>
         {inspection.geometryNotice && <Notice>{inspection.geometryNotice}</Notice>}
+        {downsampled && <Notice>源视频长边 {Math.max(inspection.width, inspection.height)} 像素，已默认把输出缩到长边 {DOWNSAMPLE_LONG_EDGE} 像素（保持宽高比）：原尺寸送模型会明显更容易超时。需要全分辨率时在下面取消「指定输出尺寸」。</Notice>}
         <div className="video-recipe"><Field label="抽帧配方"><select aria-label="抽帧配方" disabled={blocked} value={recipeId} onChange={e => { const picked = available.find(item => item.id === e.target.value); if (picked) applyRecipe(picked); else { setRecipeId(''); setRecipeNotice(''); } }}><option value="">自定义（不使用配方）</option><optgroup label="推荐配方">{available.filter(item => item.builtin).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup>{available.some(item => !item.builtin) && <optgroup label="我的配方">{available.filter(item => !item.builtin).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup>}</select></Field><div className="video-recipe-actions"><Button disabled={blocked} onClick={() => { setSavingRecipe(true); setRecipeName(''); }}>保存当前为配方</Button>{available.some(item => item.id === recipeId && !item.builtin) && <Button disabled={blocked} onClick={() => void dropRecipe(recipeId)}>删除配方</Button>}</div></div>
         {savingRecipe && <div className="video-recipe-save"><input aria-label="配方名称" maxLength={40} placeholder="例如：园区监控夜间" disabled={blocked} value={recipeName} onChange={e => setRecipeName(e.target.value)} /><Button className="primary" busy={recipeBusy} disabled={blocked} onClick={() => void commitRecipe()}>保存</Button><Button disabled={blocked} onClick={() => { setSavingRecipe(false); setRecipeName(''); }}>取消</Button></div>}
         {recipeNotice && <p className="muted tiny">{recipeNotice}</p>}
@@ -248,8 +271,8 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
           <label className="checkbox-row"><input type="checkbox" disabled={busy || duration === null} checked={whole} onChange={e => setWhole(e.target.checked)} />使用整段已知时长</label>
           {durationUnknown && <Notice>视频时长未知，请明确填写抽帧时间范围。</Notice>}
           {!whole && <><p className="muted tiny">单位为秒，相对首个实际源帧；包含起点，不包含终点。相邻时间段允许接续。</p>{ranges.map((range, i) => <div className="video-range-row" key={i}><Field label={`第 ${i + 1} 段起点`}><input aria-label={`视频时间段 ${i + 1} 起点`} type="number" min={0} step="any" disabled={busy} value={range.start} onChange={e => setRanges(list => list.map((r, index) => index === i ? { ...r, start: Number(e.target.value) } : r))} /></Field><Field label="终点"><input aria-label={`视频时间段 ${i + 1} 终点`} type="number" min={0} step="any" disabled={busy} value={range.end} onChange={e => setRanges(list => list.map((r, index) => index === i ? { ...r, end: Number(e.target.value) } : r))} /></Field><IconButton label={`移除时间段 ${i + 1}`} disabled={busy || ranges.length === 1} onClick={() => setRanges(list => list.filter((_, index) => i !== index))}><Trash2 size={14} /></IconButton></div>)}<Button disabled={busy || ranges.length >= 32} onClick={() => setRanges(list => [...list, { start: list.at(-1)?.end ?? 0, end: (list.at(-1)?.end ?? 0) + 1 }])}><Plus size={13} />添加时间段</Button></>}
-          <label className="checkbox-row"><input type="checkbox" disabled={busy} checked={resize} onChange={e => setResize(e.target.checked)} />指定输出尺寸</label>
-          {resize && <><div className="field-grid"><Field label="宽度（像素）"><input aria-label="视频输出宽度" type="number" min={1} disabled={busy} value={width} onChange={e => setWidth(e.target.value)} /></Field><Field label="高度（像素）"><input aria-label="视频输出高度" type="number" min={1} disabled={busy} value={height} onChange={e => setHeight(e.target.value)} /></Field></div><Field label="适配方式"><select aria-label="视频尺寸适配" disabled={busy} value={fit} onChange={e => setFit(e.target.value as typeof fit)}><option value="contain">等比缩放并留边</option><option value="stretch">拉伸到指定尺寸</option></select></Field></>}
+          <label className="checkbox-row"><input type="checkbox" disabled={busy} checked={resize} onChange={e => { sizeTouched.current = true; setDownsampled(false); setResize(e.target.checked); }} />指定输出尺寸</label>
+          {resize && <><div className="field-grid"><Field label="宽度（像素）"><input aria-label="视频输出宽度" type="number" min={1} disabled={busy} value={width} onChange={e => { sizeTouched.current = true; setDownsampled(false); setWidth(e.target.value); }} /></Field><Field label="高度（像素）"><input aria-label="视频输出高度" type="number" min={1} disabled={busy} value={height} onChange={e => { sizeTouched.current = true; setDownsampled(false); setHeight(e.target.value); }} /></Field></div><Field label="适配方式"><select aria-label="视频尺寸适配" disabled={busy} value={fit} onChange={e => setFit(e.target.value as typeof fit)}><option value="contain">等比缩放并留边</option><option value="stretch">拉伸到指定尺寸</option></select></Field></>}
           <Field label="输出格式"><select aria-label="视频输出格式" disabled={busy} value={format} onChange={e => setFormat(e.target.value as typeof format)}><option value="png">PNG</option><option value="jpg">JPEG</option></select></Field>
           {format === 'jpg' && <Field label="JPEG 质量参数（2 高，31 低）"><input aria-label="视频JPEG质量" type="number" min={2} max={31} disabled={busy} value={quality} onChange={e => setQuality(e.target.value)} /></Field>}
         </details>

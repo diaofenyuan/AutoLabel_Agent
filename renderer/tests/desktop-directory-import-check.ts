@@ -53,8 +53,9 @@ export async function checkDesktopDirectoryImport(window: BrowserWindow, output:
     await copyFile(path.resolve('.qa/media-samples/sample-2.jpg'), path.join(imageFolder, 'b.jpg'));
     await copyFile(path.resolve('.qa/media-samples/sample.webp'), path.join(imageFolder, 'c.webp'));
     await writeFile(path.join(imageFolder, 'README.txt'), '不是图片');
-    await copyFile(path.resolve('.qa/media-samples/vtest.avi'), path.join(videoFolder, 'clip-1.avi'));
-    await copyFile(path.resolve('.qa/media-samples/vtest.avi'), path.join(videoFolder, 'clip-2.avi'));
+    // 用 1920×1080 的来源：长边超过 1600，正好验证抽帧面板的默认降采样。
+    await copyFile(path.resolve('.qa/media-samples/vtest-hd.avi'), path.join(videoFolder, 'clip-1.avi'));
+    await copyFile(path.resolve('.qa/media-samples/vtest-hd.avi'), path.join(videoFolder, 'clip-2.avi'));
 
     // 入口必须在欢迎页可见：能力早就有了，缺的一直是入口。
     const suggestions = await js<string[]>(`[...document.querySelectorAll('.chat-suggestions button')].map(b=>b.innerText.trim())`);
@@ -109,8 +110,13 @@ export async function checkDesktopDirectoryImport(window: BrowserWindow, output:
     assert.ok(pickerText.includes('一次处理一个'), `候选清单应说明逐个处理，实际：${pickerText.slice(0, 300)}`);
     await button('抽帧', dialog);
     // 抽帧面板必须真的打开，而不是点完没反应。
-    await waitFor(`!!${dialog}&&${dialog}.innerText.includes('768 × 576')`, 60000);
-    checks.push({ check: 'video-folder-picker', candidates: rows, sequential: true, panelOpened: true });
+    await waitFor(`!!${dialog}&&${dialog}.innerText.includes('1920 × 1080')`, 60000);
+    // 大尺寸来源必须默认降采样并说清原因与取消方式：4K 原帧送模型是走查里超时的放大项。
+    await waitFor(`[...${dialog}.querySelectorAll('.notice')].some(n=>n.innerText.includes('已默认把输出缩到长边'))`, 20000);
+    const sizeFields = await js<{ width: string; height: string; resize: boolean }>(`(()=>{const w=document.querySelector('[aria-label="视频输出宽度"]');const h=document.querySelector('[aria-label="视频输出高度"]');const l=[...${dialog}.querySelectorAll('.checkbox-row')].find(e=>e.textContent.includes('指定输出尺寸'));return {width:w?.value??'',height:h?.value??'',resize:Boolean(l?.querySelector('input')?.checked)};})()`);
+    assert.deepEqual([sizeFields.width, sizeFields.height], ['1024', '576'], `1920×1080 应等比降到长边 1024，实际：${json(sizeFields)}`);
+    assert.equal(sizeFields.resize, true, '降采样必须真的写进抽帧参数，而不是只显示一句提示');
+    checks.push({ check: 'video-folder-picker', candidates: rows, sequential: true, panelOpened: true, downsampled: sizeFields });
     await writeFile(output, json({ checks, passed: true }));
   } catch (error) {
     await writeFile(output.replace(/\.json$/, '-failure.png'), (await window.webContents.capturePage()).toPNG());

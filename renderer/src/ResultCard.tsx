@@ -16,7 +16,7 @@ const PAGE_SIZE = 100;
  * 抽查走只读预览，修正仍然回到对话。
  */
 export default function ResultCard({ project }: { project: Project }) {
-  const { notify } = useApp();
+  const { notify, events } = useApp();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -33,7 +33,21 @@ export default function ResultCard({ project }: { project: Project }) {
     finally { setLoading(false); }
   }
   useEffect(() => { setAssets([]); setTotal(0); void load(false); }, [project.id]);
+  /**
+   * 标注结果是异步写入的：助手提交任务时这张卡片已经渲染出来了，只在挂载时读一次，
+   * 运行结束后卡片就停在旧状态——走查里「明明有候选框，列表却显示未标注 · 0 个」正是这么来的。
+   * 这里按真实事件重新读取，事件类型只认会改变素材标注的那几种。
+   */
+  const refreshedEvent = events.at(-1)?.type ?? '';
+  useEffect(() => {
+    if (!['annotation.candidate', 'annotation.saved', 'asset.imported', 'sample.succeeded', 'run.completed', 'run.completed_with_errors', 'run.needs_attention'].includes(refreshedEvent)) return;
+    const timer = window.setTimeout(() => void load(false), 400);
+    return () => window.clearTimeout(timer);
+  }, [events.at(-1)?.sequence, refreshedEvent]);
   const annotationCount = assets.reduce((sum, asset) => sum + asset.annotations.length, 0);
+  // 候选与正式分开报数：把「有候选框」说成「未标注」，用户会以为助手什么都没做。
+  const candidateOnly = assets.filter(asset => asset.status === 'candidate').length;
+  const confirmedOnly = assets.filter(asset => asset.status === 'confirmed').length;
   const distribution = project.classes
     .map(label => ({ id: label.id, name: label.name, color: label.color,
       count: assets.reduce((sum, asset) => sum + asset.annotations.filter(annotation => annotation.classId === label.id).length, 0) }))
@@ -42,7 +56,7 @@ export default function ResultCard({ project }: { project: Project }) {
     <div className="result-card-head">
       <div>
         <h3>结果 · {project.name}</h3>
-        <p className="muted tiny">已加载 {assets.length} / 共 {total} 张 · {annotationCount} 个标注对象{assets.length < total ? '（统计只覆盖已加载部分）' : ''}</p>
+        <p className="muted tiny">已加载 {assets.length} / 共 {total} 张 · {annotationCount} 个标注对象{candidateOnly ? `（其中 ${candidateOnly} 张是待确认的候选）` : ''}{confirmedOnly ? ` · 已确认 ${confirmedOnly} 张` : ''}{assets.length < total ? '（统计只覆盖已加载部分）' : ''}</p>
       </div>
       <div className="actions">
         <Button disabled={!assets.length} onClick={() => setPreview(assets[0])}><Eye size={14} />抽查</Button>

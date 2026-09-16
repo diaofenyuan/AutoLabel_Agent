@@ -161,6 +161,8 @@ export function Sidebar() {
                 {/* 素材数直接写在项目行上：同名项目靠它区分，否则用户只能逐个点开看哪个有素材。 */}
                 <button className="sidebar-row" title={`${item.name} · ${item.assetCount} 张素材`} onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><FolderOpen size={15} /><span className="sidebar-row-title truncate">{item.name}</span><span className="sidebar-project-count">{item.assetCount} 张</span></button>
                 <span className="sidebar-actions">
+                  {/* 进对话与看概览分开给图标：点项目名字虽然也能进，但界面上没有任何提示。 */}
+                  <button title="进入对话" onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><MessageSquare size={13} /></button>
                   <button title="项目概览" onClick={() => void openOverview(item)}><LayoutGrid size={13} /></button>
                   <button title="重命名" onClick={() => setRename({ kind: 'project', id: item.id, value: item.name })}><Pencil size={13} /></button>
                   <button title="删除项目…" onClick={() => requestDeleteProject(item)}><Trash2 size={13} /></button>

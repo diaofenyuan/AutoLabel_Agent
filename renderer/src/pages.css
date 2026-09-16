@@ -441,3 +441,10 @@
 .media-job-row{display:flex;align-items:center;gap:8px}
 .media-job-row>.media-job-open{flex:1;min-width:0}
 .media-job-row>.button{flex-shrink:0;min-height:26px;padding:3px 9px;font-size:11px}
+/* 对话气泡里的 Markdown：只渲染列表、加粗与行内代码；段落间距与纯文本一致，不额外加框。 */
+.chat-text>p{margin:0 0 8px}
+.chat-text>p:last-child{margin-bottom:0}
+.chat-text>ul,.chat-text>ol{margin:0 0 8px;padding-left:20px}
+.chat-text li{margin:2px 0}
+.chat-text .chat-subheading{font-weight:600}
+.chat-text code{font-family:Consolas,monospace;font-size:.94em;padding:1px 4px;border-radius:4px;background:color-mix(in srgb,var(--accent) 10%,transparent)}
