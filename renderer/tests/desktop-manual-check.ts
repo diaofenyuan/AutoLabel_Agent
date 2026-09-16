@@ -17,9 +17,11 @@ import { checkDesktopProviderDelete } from './desktop-provider-delete-check';
 import { checkDesktopUpdateUi } from './desktop-update-ui-check';
 import { checkDesktopRunControls } from './desktop-run-control-check';
 import { checkDesktopReason } from './desktop-reason-check';
+import { checkDesktopAnnotate } from './desktop-annotate-check';
 
 // 只在桌面显式验收入口运行；所有文件夹、对话框选择及破坏性夹具均限制在独立测试目录。
 export async function checkDesktopManual(window:BrowserWindow, output:string):Promise<void> {
+  if(process.env.AUTOLABEL_ANNOTATE_UI_CHECK==='1')return checkDesktopAnnotate(window,output);
   if(process.env.AUTOLABEL_REASON_UI_CHECK==='1')return checkDesktopReason(window,output);
   if(process.env.AUTOLABEL_PROVIDER_DELETE_UI_CHECK==='1')return checkDesktopProviderDelete(window,output);
   if(process.env.AUTOLABEL_EDITING_UI_CHECK==='1')return checkDesktopEditing(window,output);

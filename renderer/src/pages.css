@@ -416,3 +416,8 @@
 .preflight-action>p{margin-top:8px;line-height:1.7}
 .issue-diagnostics{margin-top:6px}
 .issue-diagnostics>p{font-family:Consolas,monospace;font-size:10px}
+/* 素材标注编辑器：预览与画布同一弹窗，顶部条固定说明当前版本与未保存状态。 */
+.asset-annotator-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+.asset-annotator>.result-viewer{margin-bottom:10px}
+.asset-annotator .quality-canvas{margin-top:8px}
+.asset-annotator .notice{margin:12px 0 0}

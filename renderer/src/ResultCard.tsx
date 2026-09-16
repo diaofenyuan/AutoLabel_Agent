@@ -4,7 +4,7 @@ import { useApp } from './context';
 import { request, errorMessage, isDemo } from './bridge';
 import { Button, Modal } from './ui';
 import ExportDialog from './ExportDialog';
-import ResultViewer from './ResultViewer';
+import AssetAnnotator from './AssetAnnotator';
 import { statusNames, type Asset, type Project } from './types';
 
 /** asset.list 的 limit 上限就是 100；超过一页用 total 翻页，避免一次渲染上千张缩略图。 */
@@ -59,9 +59,12 @@ export default function ResultCard({ project }: { project: Project }) {
       </button>)}</div>
       : <p className="quiet-empty">{loading ? '正在读取素材…' : '这个项目还没有素材，先在对话里说明要导入什么。'}</p>}
     {assets.length < total && <Button busy={loading} onClick={() => void load(true)}>加载更多（还有 {total - assets.length} 张）</Button>}
-    {preview && <Modal wide title={`抽查 · ${preview.name}`} onClose={() => setPreview(null)}>
-      <ResultViewer asset={preview} classes={project.classes} connectionTemplate={project.settings?.keypointConnections} maxHeight="60vh" />
-      <p className="muted tiny">只读预览。要改标注就在对话里说明，例如「把第 2 张图的第二个框改成行人」。</p>
+    {preview && <Modal wide title={`素材 · ${preview.name}`} onClose={() => setPreview(null)}>
+      {/* 结果卡片与项目概览共用同一个标注编辑器：默认只读，点「编辑标注」才进画布。 */}
+      <AssetAnnotator asset={preview} classes={project.classes} taskType={project.taskType} templateSettings={project.settings}
+        connectionTemplate={project.settings?.keypointConnections} maxHeight="60vh"
+        onClose={() => setPreview(null)}
+        onSaved={updated => { setAssets(list => list.map(item => item.id === updated.id ? updated : item)); setPreview(updated); }} />
     </Modal>}
     {exporting && <ExportDialog onClose={() => setExporting(false)} />}
   </section>;

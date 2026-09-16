@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Database, Download, FolderOpen, Layers, MessageSquare, MoreHorizontal, RefreshCw, ShieldCheck } from 'lucide-react';
-import type { Asset } from '../../shared/protocol';
+import type { Annotation, Asset } from '../../shared/protocol';
 import type { LibraryResource } from '../../shared/resources';
 import { useApp } from './context';
 import { DatasetVersionDialog, type DatasetVersion } from './DatasetVersions';
@@ -8,7 +8,7 @@ import type { ExportRecord } from './ExportDialog';
 import AssetActions from './AssetActions';
 import ExportDialog from './ExportDialog';
 import ResourceApply from './ResourceApply';
-import ResultViewer from './ResultViewer';
+import AssetAnnotator from './AssetAnnotator';
 import TemplateDialog from './TemplateDialog';
 import { errorMessage, isDemo, request } from './bridge';
 import { Button, Empty, IconButton, Loading, Modal, PageHeader } from './ui';
@@ -33,6 +33,8 @@ export default function ProjectOverview() {
   const [exports, setExports] = useState<ExportRecord[]>([]);
   const [dialog, setDialog] = useState<'versions' | 'export' | 'resources' | 'template' | null>(null);
   const [actions, setActions] = useState<Asset | null>(null);
+  /** 「将选中版本载入草稿」的落点：载入后直接打开这张图的画布，历史版本才有实际去处。 */
+  const [loadInto, setLoadInto] = useState<{ assetId: string; annotations: Annotation[] } | null>(null);
 
   const loadAssets = useCallback(async (offset: number) => {
     if (!project) return;
@@ -121,7 +123,7 @@ export default function ProjectOverview() {
       <div className="result-card-head">
         <div>
           <h3>只读抽查</h3>
-          <p className="muted tiny">已加载 {assets.length} / 共 {assetTotal || total} 张 · 勾选想要的素材，再去对话里让助手只处理这些；点开图片可以看到框与类别，修改请在对话里说明。</p>
+          <p className="muted tiny">已加载 {assets.length} / 共 {assetTotal || total} 张 · 勾选想要的素材，再去对话里让助手只处理这些；点开图片可以查看框与类别，也可以直接人工编辑标注。</p>
         </div>
         <div className="actions"><Button busy={loading} disabled={loading} onClick={() => void loadAssets(0)}><RefreshCw size={14} />刷新</Button></div>
       </div>
@@ -156,9 +158,13 @@ export default function ProjectOverview() {
       {assets.length < (assetTotal || total) && <Button busy={loading} onClick={() => void loadAssets(assets.length)}>加载更多（还有 {(assetTotal || total) - assets.length} 张）</Button>}
     </section>
 
-    {preview && <Modal wide title={`抽查 · ${preview.name}`} onClose={() => setPreview(null)}>
-      <ResultViewer asset={preview} classes={project.classes} connectionTemplate={project.settings?.keypointConnections as string[] | undefined} maxHeight="60vh" />
-      <p className="muted tiny">只读预览。要改标注就在对话里说明，例如「把第 2 张图的第二个框改成行人」。</p>
+    {preview && <Modal wide title={`素材 · ${preview.name}`} onClose={() => { setPreview(null); setLoadInto(null); }}>
+      {/* 预览与人工画布同一个弹窗：默认只读，点「编辑标注」才切到可写画布。 */}
+      <AssetAnnotator asset={preview} classes={project.classes} taskType={project.taskType} templateSettings={project.settings}
+        connectionTemplate={project.settings?.keypointConnections as string[] | undefined} maxHeight="60vh"
+        initialAnnotations={loadInto?.assetId === preview.id ? loadInto.annotations : undefined}
+        onClose={() => { setPreview(null); setLoadInto(null); }}
+        onSaved={updated => setAssets(list => list.map(item => item.id === updated.id ? updated : item))} />
     </Modal>}
     {dialog === 'versions' && <DatasetVersionDialog project={project} onClose={() => setDialog(null)}
       onOpenTemplate={() => setDialog('template')}
@@ -169,7 +175,7 @@ export default function ProjectOverview() {
     {dialog === 'resources' && <ResourceHub onClose={() => setDialog(null)} />}
     {actions && <AssetActions asset={actions} onClose={() => setActions(null)}
       onApplied={updated => { setAssets(list => list.map(item => item.id === updated.id ? updated : item)); setActions(updated); }}
-      onUseVersion={() => { setActions(null); notify('历史版本可以载入草稿，但没有画布可编辑；请在对话里说明要改成什么。'); }} />}
+      onUseVersion={annotations => { const target = actions; setActions(null); setLoadInto({ assetId: target.id, annotations }); setPreview(target); }} />}
   </div>;
 }
 
