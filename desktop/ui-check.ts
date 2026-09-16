@@ -203,7 +203,7 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
     await writeFile(path.join(folder, name), (await window.webContents.capturePage()).toPNG());
   };
   await openPage(pageLabels.tasks, 'tasks');
-  for (const [index, label] of ['标注任务', '素材任务', '轨迹标注'].entries()) {
+  for (const [index, label] of ['自动流程', '标注任务', '素材任务', '模型训练', '数据导出', '轨迹标注'].entries()) {
     await window.webContents.executeJavaScript(`(()=>{const b=[...document.querySelectorAll('.task-kind-tabs button')].find(item=>item.innerText.trim()===${JSON.stringify(label)});if(b&&!b.disabled)b.click()})()`);
     await waitFor(`!!document.querySelector('.page-tasks') && !document.querySelector('.page-loading')`);
     await settle();

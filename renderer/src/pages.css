@@ -316,3 +316,16 @@
 .task-card .actions{display:flex;gap:7px;margin-top:10px;flex-wrap:wrap}
 .task-card .actions .button{min-height:29px;padding:4px 10px;font-size:11px}
 .task-card .training-progress{margin:9px 0 5px}
+/* 任务看板：只读行，状态、进度与失败原因来自引擎，操作回对话。 */
+.board-list{display:flex;flex-direction:column;gap:8px}
+.board-row{display:flex;align-items:center;gap:12px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}
+.board-row[data-status="running"],.board-row[data-status="preparing"],.board-row[data-status="cancelling"]{border-color:color-mix(in srgb,var(--accent) 30%,var(--border))}
+.board-row[data-status="failed"],.board-row[data-status="interrupted"]{border-color:color-mix(in srgb,var(--error) 30%,var(--border))}
+.board-icon{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;background:var(--surface-soft);color:var(--muted);flex-shrink:0}
+.board-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.board-main strong{font-size:12px}
+.board-title{background:none;border:0;padding:0;text-align:left;color:var(--text);font-size:12px;font-weight:600}
+.board-title:hover{color:var(--accent)}
+.board-detail{border:1px solid var(--border);border-radius:11px;padding:13px 14px;background:var(--surface)}
+.nav-badge{margin-left:auto;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:color-mix(in srgb,var(--accent) 20%,transparent);
+  color:var(--accent);font-size:10px;line-height:18px;text-align:center}

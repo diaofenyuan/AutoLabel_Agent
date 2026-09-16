@@ -8,7 +8,7 @@ import AssetScopeField, { useAssetScope, type AssetScope } from './AssetScope';
 import ExportFormatPicker, { type ExportFormatSelection, type ExportFormatSpec } from './ExportFormatPicker';
 
 interface Preflight { issues: Array<{ message?: string; severity?: string; code?: string } | string>; summary: unknown; format?: ExportFormatSpec }
-interface ExportRecord {id:string;path:string;status:string;taskType:TaskType;createdAt?:string;assetCount?:number;manifestHash?:string;sourceExportId?:string}
+export interface ExportRecord {id:string;path:string;status:string;taskType:TaskType;createdAt?:string;assetCount?:number;manifestHash?:string;sourceExportId?:string}
 interface ExportDifference {added:string[];removed:string[];changed:Array<{assetId:string;fields:string[]}>;unchanged:number;classesChanged:boolean;formatChanged?:boolean}
 /** 只把用户明确选定的格式发给引擎：优先已保存/内置标识，其次内联布局；都不传时引擎沿用内置 YOLO 默认布局。 */
 const formatPayload=(selection:ExportFormatSelection)=>({

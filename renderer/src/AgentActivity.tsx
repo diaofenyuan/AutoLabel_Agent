@@ -41,7 +41,34 @@ export const toolLabel = (name: string) => toolNames[name] ?? name;
 function publish(sessionId: string, step: AgentStep) {
   const current = activity.get(sessionId) ?? [];
   activity.set(sessionId, [...current.filter(item => item.id !== step.id), step].slice(-50));
+  rememberTaskOrigin(sessionId, step);
   listeners.forEach(listener => listener());
+}
+
+/**
+ * 任务来源会话：引擎的任务记录里没有对话标识，任务看板的「回到会话」只能靠这里记下的对应关系。
+ * 存在 localStorage 里，重启后仍能跳回最初发起它的那段对话；只保留最近 500 条，避免无限增长。
+ */
+const ORIGIN_KEY = 'autolabel.taskOrigins';
+function readOrigins(): Record<string, string> {
+  try { const raw = JSON.parse(localStorage.getItem(ORIGIN_KEY) ?? '{}'); return raw && typeof raw === 'object' ? raw as Record<string, string> : {}; }
+  catch { return {}; }
+}
+export function taskOrigin(id: string): string | undefined {
+  const value = readOrigins()[id];
+  return typeof value === 'string' ? value : undefined;
+}
+function rememberTaskOrigin(sessionId: string, step: AgentStep) {
+  const result = step.result as Record<string, unknown> | null | undefined;
+  if (!result) return;
+  const ids = [result.job, result.run].map(item => item as Record<string, unknown> | undefined)
+    .map(item => typeof item?.id === 'string' ? item.id : undefined)
+    .filter((id): id is string => Boolean(id));
+  if (!ids.length) return;
+  const origins = readOrigins(); let changed = false;
+  for (const id of ids) if (!origins[id]) { origins[id] = sessionId; changed = true; }
+  if (!changed) return;
+  try { localStorage.setItem(ORIGIN_KEY, JSON.stringify(Object.fromEntries(Object.entries(origins).slice(-500)))); } catch { /* 存不下就只在本次会话内生效 */ }
 }
 function connect() {
   if (connected) return;

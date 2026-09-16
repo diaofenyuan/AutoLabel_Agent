@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import type { ChatSessionSummary } from '../../shared/chat';
 import { useApp } from './context';
+import { useActiveTaskCount } from './activeTasks';
 import { errorMessage, isDemo, request } from './bridge';
 import { Button, Field, IconButton, Modal } from './ui';
 
@@ -29,6 +30,8 @@ type RenameTarget = { kind: 'session' | 'project'; id: string; value: string };
 /** Codex 式侧栏：顶部 / 主入口 / 置顶 / 项目 / 最近 / 底部六段，会话来自 chat.history.list。 */
 export function Sidebar() {
   const { page, navigate, project, projects, openProject, refreshProjects, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, openJumper, requestDeleteProject, notify, engine } = useApp();
+  // 侧栏「任务」徽标：进行中的长任务数量，切页也能看见还有多少在跑。
+  const activeTasks = useActiveTaskCount();
   const [rename, setRename] = useState<RenameTarget | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [headerMenu, setHeaderMenu] = useState(false);
@@ -131,7 +134,7 @@ export function Sidebar() {
       <IconButton label="搜索" onClick={openJumper}><Search size={16} /></IconButton>
     </div>
     <div className="sidebar-scroll">
-      <nav aria-label="主导航">{mainEntries.map(entry => <button key={entry.key} className={`nav-item ${page === entry.key ? 'selected' : ''}`} aria-current={page === entry.key ? 'page' : undefined} title={entry.label} onClick={() => void navigate(entry.key)}><entry.icon size={18} strokeWidth={1.65} /><span>{entry.label}</span></button>)}</nav>
+      <nav aria-label="主导航">{mainEntries.map(entry => <button key={entry.key} className={`nav-item ${page === entry.key ? 'selected' : ''}`} aria-current={page === entry.key ? 'page' : undefined} title={entry.label} onClick={() => void navigate(entry.key)}><entry.icon size={18} strokeWidth={1.65} /><span>{entry.label}</span>{entry.key === 'tasks' && activeTasks > 0 && <span className="nav-badge" aria-label={`进行中的任务 ${activeTasks} 个`}>{activeTasks}</span>}</button>)}</nav>
       {pinned.length > 0 && <div className="sidebar-group"><div className="sidebar-group-head"><span className="sidebar-group-title">置顶</span></div>{pinned.map(sessionRow)}</div>}
       <div className="sidebar-group">
         {/* 「＋」回到欢迎页：新对话要先有项目，由欢迎页按描述建好项目再开始。 */}
