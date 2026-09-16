@@ -149,8 +149,14 @@ if (reasonOnly) {
   // 数据集版本与导出两处都必须给出中文明细、隐藏原始码，且直达动作真的落到模板入口。
   assert.equal(byCheck.get('dataset-version-preflight')?.rawCodesHidden, true);
   assert.equal(byCheck.get('dataset-version-preflight')?.directActionWorks, true);
+  assert.equal(byCheck.get('annotation-scope-all')?.excluded, 0);
+  assert.equal(byCheck.get('annotation-scope-all')?.deniesUnlabeledBlock, true);
   assert.equal(byCheck.get('export-preflight')?.groupedByReason, true);
   assert.equal(byCheck.get('export-preflight')?.rawCodesHidden, true);
+  // 一键剔除未标注素材必须真的把素材移出范围，并且可恢复。
+  assert.equal(byCheck.get('export-exclude-unlabeled')?.excluded, 2);
+  assert.equal(byCheck.get('export-exclude-unlabeled')?.restorable, true);
+  assert.equal(byCheck.get('export-exclude-unlabeled')?.exportReady, true);
   console.log(`数据集与导出的原因呈现检查通过：${output}`); process.exit(0);
 }
 if (trainingUiOnly) { assert.equal(result.passed, true); assert.ok(['ready', 'invalid'].includes(result.dataset.status)); assert.equal(result.readOnly, true); console.log(`训练改由对话发起后的只读看板检查通过：${output}`); process.exit(0); }

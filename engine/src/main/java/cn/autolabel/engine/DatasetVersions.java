@@ -25,7 +25,10 @@ final class DatasetVersions implements AutoCloseable {
     private static final double[] DEFAULT_RATIO={0.7,0.2,0.1};
     private static final int PRECISION=8;
     private static final Set<String> LABELED=Set.of("candidate","modified","confirmed");
-    private static final Set<String> SCOPES=Set.of("labeled","confirmed");
+    // `all` 由用户显式声明：这批未标注素材按「无目标样本」纳入版本，而不是被静默排除。
+    // 它不推翻「未标注不等于成功无目标」的既有口径——默认两档仍然阻断，只有用户明确选择才纳入，
+    // 且分类任务的「缺类别」永远阻断（无类别的分类样本不是合法负样本）。
+    private static final Set<String> SCOPES=Set.of("labeled","confirmed","all");
     private static final Set<String> SPLITS=Set.of("train","val","test");
 
     private final Store store;private final Projects projects;private final Exporter exporter;
@@ -67,7 +70,8 @@ final class DatasetVersions implements AutoCloseable {
                 JsonObject asset=Json.parse(Json.required(row,"data"));
                 String state=Json.str(asset,"status","");
                 // 未纳入范围的素材同样参与解析：它们构成「遗漏范围」，只是不进入版本内容。
-                if(scope.equals("confirmed")?!state.equals("confirmed"):!LABELED.contains(state)){
+                // scope=all 不做状态过滤：未标注素材以「无目标样本」进入候选，由空标签策略决定去留。
+                if(!scope.equals("all")&&(scope.equals("confirmed")?!state.equals("confirmed"):!LABELED.contains(state))){
                     s.excluded.add(Json.obj("asset",asset,"reasonCode",scope.equals("confirmed")?DatasetSelection.SCOPE_CONFIRMED:DatasetSelection.SCOPE));continue;
                 }
                 candidates.add(asset);paths.add(Path.of(Json.required(row,"path")));
@@ -262,7 +266,8 @@ final class DatasetVersions implements AutoCloseable {
             "note","采样只作用于训练集，验证集与测试集保持原始内容；张数按预览种子计算。");
     }
 
-    private JsonObject inspect(Source s){return exporter.inspect(new Exporter.Snapshot(s.project,s.assets,s.paths,s.taskType));}
+    // scope=all 时未标注素材是用户显式声明的无目标样本，体检不再按「不能当作无目标图导出」阻断。
+    private JsonObject inspect(Source s){return exporter.inspect(new Exporter.Snapshot(s.project,s.assets,s.paths,s.taskType),s.scope.equals("all"));}
     private static long distinctGroups(Source s){return Exporter.groups(s.assets).values().stream().distinct().count();}
     private static long blocking(JsonArray issues){
         long total=0;
@@ -949,7 +954,7 @@ final class DatasetVersions implements AutoCloseable {
 
     private static String scope(JsonObject p){
         String scope=Json.str(p,"annotationScope","labeled");
-        if(!SCOPES.contains(scope))throw error(400,"dataset_scope_invalid","标注范围应为 labeled 或 confirmed。");
+        if(!SCOPES.contains(scope))throw error(400,"dataset_scope_invalid","标注范围应为 labeled、confirmed 或 all。");
         return scope;
     }
     private static void keys(JsonObject p,String... allowed){

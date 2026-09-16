@@ -411,5 +411,8 @@
 .reason-error{color:var(--error)}
 .reason-warning{color:var(--muted)}
 .reason-issues-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px}
+/* 预检底部的可执行动作：一键剔除未标注素材，或说明已剔除多少张。 */
+.preflight-action{margin-top:12px}
+.preflight-action>p{margin-top:8px;line-height:1.7}
 .issue-diagnostics{margin-top:6px}
 .issue-diagnostics>p{font-family:Consolas,monospace;font-size:10px}

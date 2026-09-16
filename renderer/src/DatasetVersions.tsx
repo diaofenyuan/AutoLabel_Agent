@@ -28,7 +28,19 @@ interface VerifyResult { verified: number; total: number; missing: string[]; cha
 
 const statusText: Record<string, string> = { draft: '草稿', building: '生成中', ready: '已生成', failed: '生成失败', cancelled: '已取消', deleted: '已删除' };
 const stageText: Record<string, string> = { queued: '排队中', scanning: '解析原始数据集', splitting: '计算划分', copying: '复制与校验副本', publishing: '发布版本', done: '已完成', failed: '已失败', cancelled: '已取消' };
-const scopeLabels: Array<[string, string]> = [['labeled', '有正式标注（候选 / 已修改 / 已确认）'], ['confirmed', '仅人工已确认']];
+const scopeLabels: Array<[string, string]> = [['labeled', '有正式标注（候选 / 已修改 / 已确认）'], ['confirmed', '仅人工已确认'],
+  ['all', '包含未标注素材（按无目标样本处理）']];
+/**
+ * 第三档的语义与默认两档差别很大，必须在选择处就说清楚：
+ * 「未标注」是「用户声明它没有目标」，与「模型跑成功但没找到目标」不是同一件事，
+ * 因此这里不并入默认档，只作为用户显式选择。
+ */
+const scopeNotes: Record<string, string> = {
+  labeled: '未标注素材会被移出范围，只记入「遗漏范围」。',
+  confirmed: '只有人工已确认的素材进入版本。',
+  all: '未标注素材按「无目标样本」纳入版本并写出空标签文件；这表示你已确认它们本来就没有目标，不等同于「标注成功但没找到目标」。'
+};
+const scopeShort: Record<string, string> = { labeled: '有正式标注', confirmed: '仅已确认标注', all: '含未标注素材' };
 const size = (value?: number) => value === undefined ? '—' : `${(value / 1024 / 1024).toFixed(1)} MB`;
 /** 预检返回的问题是体检（Exporter.inspect）的原始结构，界面只读不改造，因此这里做一次收窄访问。 */
 const preflightIssues = (preflight: Record<string, unknown> | null): VersionIssue[] =>
@@ -190,7 +202,7 @@ export function DatasetVersionDialog({ project, onClose, onOpenTemplate, onOpenC
       <p className="muted tiny">版本生成后不可变更：任何调整都会产生新版本号。划分以来源组为最小单位，默认按 70 / 20 / 10 逼近。</p>
       {creating && <form className="form-stack" style={{ marginTop: 16 }} onSubmit={e => { e.preventDefault(); void submit(); }}>
         <Field label="版本名称" hint="留空则只显示版本号。"><input maxLength={200} value={name} onChange={e => setName(e.target.value)} placeholder={`v${(versions[0]?.number ?? 0) + 1}`} /></Field>
-        <Field label="标注范围"><select value={annotationScope} onChange={e => setAnnotationScope(e.target.value)}>{scopeLabels.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field>
+        <Field label="标注范围" hint={scopeNotes[annotationScope]}><select value={annotationScope} onChange={e => setAnnotationScope(e.target.value)}>{scopeLabels.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field>
         <Field label="划分种子" hint="留空自动生成。同一种子对同一数据源会得到完全相同的划分。"><input maxLength={256} value={seed} onChange={e => setSeed(e.target.value)} placeholder="自动生成" /></Field>
         <details className="recipe-section"><summary>选择（过滤与采样）</summary>
           <div className="recipe-grid">
@@ -259,7 +271,7 @@ export function DatasetVersionDialog({ project, onClose, onOpenTemplate, onOpenC
           return <div className="training-card" key={version.id} style={detailId === version.id ? { borderColor: 'var(--accent)' } : undefined}>
             <header><strong style={{ fontSize: 13 }}>v{version.number}{version.name ? ` · ${version.name}` : ''}</strong>
               <span className={`training-badge ${version.status === 'ready' ? 'ready' : version.status === 'failed' ? 'invalid' : ''}`}>{statusText[version.status] ?? version.status}</span></header>
-            <p className="muted tiny">{version.annotationScope === 'confirmed' ? '仅已确认标注' : '有正式标注'} · {version.taskType.toUpperCase()} · {images} 张图片 · {String(summary.objects ?? '—')} 个目标</p>
+            <p className="muted tiny">{scopeShort[version.annotationScope] ?? version.annotationScope} · {version.taskType.toUpperCase()} · {images} 张图片 · {String(summary.objects ?? '—')} 个目标</p>
             <p className="muted tiny">{size(summary.bytes)} · 排除 {String(summary.excluded ?? 0)} 张 · 来源组 {String(summary.groups ?? '—')} 个</p>
             {version.status === 'building' && version.build?.progress && <><div className="progress"><span style={{ width: `${Math.min(100, (version.build.progress.done ?? 0) / Math.max(1, version.build.progress.total ?? 1) * 100)}%` }} /></div>
               <p className="muted tiny">{stageText[version.build.progress.stage ?? ''] ?? version.build.progress.stage} · {version.build.progress.done} / {version.build.progress.total}</p></>}

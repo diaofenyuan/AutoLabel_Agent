@@ -176,7 +176,9 @@ const trackGenerationParameters = z.strictObject({ maxGapSeconds: finite.gt(0).m
   maxKeypointSpeedPixelsPerSecond: finite.gt(0).max(1e12).optional(), maxScaleFactor: finite.min(1).max(1e12).optional() });
 const trackGeneratePreview = trackWrite.extend({ parameters: trackGenerationParameters.optional(), scope: z.enum(['affected', 'all']).optional() });
 const exportFields = { projectId: id, taskType: taskType.optional(), assetIds,
-  formatId: builtinId.optional(), formatVersion: resourceVersion.optional() };
+  formatId: builtinId.optional(), formatVersion: resourceVersion.optional(),
+  // 一键剔除尚未生成正式标注的素材：只缩小本次导出范围，素材与既有标注都保留，补标后可重新导出。
+  excludeUnlabeled: z.boolean().optional() };
 // 导出格式规范由引擎做语义校验（任务兼容、路径与扩展名），这里只限制结构与体积。
 const exportLayout = z.strictObject({ image: z.string().max(400).optional(), classifyImage: z.string().max(400).optional(),
   label: z.string().max(400).optional(), index: z.string().max(400).optional() });
@@ -218,6 +220,11 @@ const datasetSplit = z.strictObject({
   algorithm: z.enum(['source-group', 'random-shuffle', 'minimal-move']).optional(),
   train: finite.optional(), val: finite.optional(), test: finite.optional(), strict: z.boolean().optional(),
   explicit: z.record(z.string(), z.enum(['train', 'val', 'test'])).optional() });
+/**
+ * 标注范围。`labeled` / `confirmed` 是默认两档，都把未标注素材移出范围；
+ * `all` 表示用户显式声明未标注素材即无目标样本，因此必须与引擎 DatasetVersions.SCOPES 同步。
+ */
+const annotationScope = z.enum(['labeled', 'confirmed', 'all']);
 const trainingPage = { offset: z.number().int().min(0).max(2147483647).optional(), limit: z.number().int().min(1).max(100).optional() };
 const trainingDevice = z.string().regex(/^(gpu-auto|cpu|0|[1-9][0-9]{0,2})$/);
 const trainingParameters = z.strictObject({
@@ -365,11 +372,11 @@ const schemas: Record<string, z.ZodType> = {
   'training.job.registerModel': z.strictObject({ jobId: id, checkpoint: z.enum(['best', 'last']), name }),
   // 数据集版本：写操作不进 Agent 工具白名单，只能由用户在界面显式触发。
   // 选择/转换/划分配方结构与引擎 DatasetSelection/DatasetTransforms/DatasetSplitting 一一对应；这里做结构前置校验，语义由引擎复核。
-  'dataset.version.preflight': z.strictObject({ projectId: id, annotationScope: z.enum(['labeled', 'confirmed']).optional(),
+  'dataset.version.preflight': z.strictObject({ projectId: id, annotationScope: annotationScope.optional(),
     selection: datasetSelection.optional(), transform: datasetTransform.optional(), split: datasetSplit.optional(),
     seed: z.string().min(1).max(256).optional() }),
   'dataset.version.create': z.strictObject({ projectId: id, name: datasetName.optional(),
-    annotationScope: z.enum(['labeled', 'confirmed']).optional(), seed: z.string().min(1).max(256).optional(),
+    annotationScope: annotationScope.optional(), seed: z.string().min(1).max(256).optional(),
     selection: datasetSelection.optional(), transform: datasetTransform.optional(), split: datasetSplit.optional() }),
   'dataset.version.get': z.strictObject({ versionId: id }),
   'dataset.version.list': z.strictObject({ projectId: id.optional(), ...trainingPage }),

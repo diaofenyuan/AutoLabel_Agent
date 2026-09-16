@@ -15,6 +15,7 @@ final class DatasetVersionsTest {
 
     static void run(Path root)throws Exception{
         filters(root.resolve("filters"));
+        scopeAll(root.resolve("scope-all"));
         sampling(root.resolve("sampling"));
         folding(root.resolve("folding"));
         transforms(root.resolve("transforms"));
@@ -658,6 +659,59 @@ final class DatasetVersionsTest {
     private static JsonArray items(Engine e,String versionId)throws Exception{
         JsonObject page=EngineTest.command(e,"dataset.version.items",Json.obj("versionId",versionId,"limit",500));
         return Json.array(page,"items");
+    }
+
+    // ===== 标注范围第三档：显式声明未标注素材为无目标样本 =====
+
+    /**
+     * 默认两档与 `all` 的边界：`all` 只是把「用户已经明确做过的选择」落地，
+     * 不推翻「未标注不等于成功无目标」的既有口径——默认仍然阻断，分类任务的缺类别在任何范围下都阻断。
+     */
+    private static void scopeAll(Path root)throws Exception{
+        try(Engine e=new Engine(root.resolve("data"))){
+            JsonObject project=EngineTest.command(e,"project.create",Json.obj("name","标注范围","taskType","detect",
+                "classes",Json.arr(Json.obj("id","cat","name","猫","color","#3b82f6"))));
+            String pid=Json.required(project,"id");
+            JsonArray ids=EngineTest.importSamples(e,pid,4);
+            annotate(e,ids.get(0).getAsString(),"cat");
+            annotate(e,ids.get(1).getAsString(),"cat");
+            String firstUnlabeled=ids.get(2).getAsString(),secondUnlabeled=ids.get(3).getAsString();
+
+            // 默认口径：未标注素材在体检之前就被移出范围，只作为「遗漏范围」如实报告，不进入版本内容。
+            JsonObject strict=EngineTest.command(e,"dataset.version.preflight",Json.obj("projectId",pid));
+            check(Json.number(Json.object(strict,"excludedByReason"),"annotation_scope_excluded",0)==2,"默认口径仍排除未标注素材");
+            check(Json.number(strict,"assets",0)==2,"默认口径只收有正式标注的素材");
+            check(!issueCodePresent(strict,"asset_unlabeled"),"默认口径下未标注素材按遗漏范围报告，不混入体检内容");
+            rejects("dataset_scope_invalid",()->EngineTest.command(e,"dataset.version.preflight",Json.obj("projectId",pid,"annotationScope","everything")));
+
+            // 显式声明：未标注素材作为无目标样本进入版本内容，不再被排除。
+            // 若 Exporter.inspect 仍按「不能当作无目标图导出」判定，这里会以 asset_unlabeled 阻断。
+            JsonObject declared=EngineTest.command(e,"dataset.version.preflight",Json.obj("projectId",pid,"annotationScope","all"));
+            check(Json.number(declared,"assets",0)==4,"scope=all 纳入全部素材");
+            check(Json.number(declared,"excluded",0)==0,"scope=all 不再产生范围外素材");
+            check(Json.number(declared,"blocking",0)==0,"scope=all 不再因未标注阻断");
+            check(!issueCodePresent(declared,"asset_unlabeled"),"scope=all 不再报告 asset_unlabeled");
+            check(issueCodePresent(declared,"empty_label"),"无目标样本仍以提示如实列出");
+
+            JsonObject created=await(e,EngineTest.command(e,"dataset.version.create",Json.obj("projectId",pid,"annotationScope","all","seed","scope-all")));
+            check(Json.required(created,"status").equals("ready"),"scope=all 的版本可生成");
+            JsonObject summary=Json.object(created,"summary");
+            check(Json.number(summary,"images",0)==4,"版本包含全部 4 张");
+            check(Json.number(summary,"objects",0)==2,"无目标样本不计入目标数");
+            JsonObject item=includedItem(e,Json.required(created,"id"),firstUnlabeled);
+            check(Json.number(item,"objects",-1)==0,"未标注素材以 0 个目标进入版本");
+            // 空标签文件是 YOLO 对负样本的合法表示，不是「缺标签」：文件存在且内容为空。
+            check(Files.readString(versionDirectory(e,Json.required(created,"id")).resolve(Json.required(item,"label"))).isEmpty(),"无目标样本写出空标签文件");
+            check(includedItemExists(e,Json.required(created,"id"),secondUnlabeled),"两张未标注素材都进入版本");
+
+            // 分类任务不受影响：无类别的分类样本不是合法负样本，任何标注范围都必须阻断。
+            JsonObject classify=EngineTest.command(e,"project.create",Json.obj("name","分类范围","taskType","classify",
+                "classes",Json.arr(Json.obj("id","ok","name","正常","color","#3b82f6"))));
+            String classifyId=Json.required(classify,"id");
+            EngineTest.importSamples(e,classifyId,2);
+            JsonObject classifyAll=EngineTest.command(e,"dataset.version.preflight",Json.obj("projectId",classifyId,"annotationScope","all"));
+            check(issueCodePresent(classifyAll,"classification_missing"),"分类任务在 scope=all 下仍阻断缺类别样本");
+        }
     }
 
     private static void annotate(Engine e,String assetId,String classId)throws Exception{

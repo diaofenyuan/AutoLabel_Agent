@@ -39,9 +39,9 @@ export async function checkDesktopReason(window: BrowserWindow, output: string):
   /** 原因码必须从用户可见文本里消失：界面与 toast 一起扫描。 */
   const CODE_PATTERN = /\b(annotation_scope_excluded|annotation_scope_confirmed_only|form_video_frame|form_derived|form_overlay_rendering|explicit_exclude|empty_label_excluded|empty_label_limit_exceeded|class_excluded|class_not_included|size_excluded|source_group_excluded|time_excluded|sampled_out|near_duplicate_folded|asset_unlabeled|classes_empty|export_empty|media_missing|dataset_version_blocked)\b/;
   /** 证据截图：先滚到预检区域再截整屏。按元素矩形截图会受弹窗滚动与重渲染影响截到中间态。 */
-  async function capturePreflight(file: string, inner: string) {
+  async function capturePreflight(file: string, inner: string, marker = '需要先处理') {
     const target = `document.querySelector(${json(`dialog[open] ${inner}`)})`;
-    await waitFor(`!!${target}&&!document.querySelector('dialog[open] .inline-loading')&&${target}.innerText.includes('需要先处理')`, 25000);
+    await waitFor(`!!${target}&&!document.querySelector('dialog[open] .inline-loading')&&${target}.innerText.includes(${json(marker)})`, 25000);
     await js(`${target}.scrollIntoView({block:'end'})`);
     await new Promise(resolve => setTimeout(resolve, 320));
     await writeFile(file, (await window.webContents.capturePage()).toPNG());
@@ -81,7 +81,23 @@ export async function checkDesktopReason(window: BrowserWindow, output: string):
     assert.ok(!versionText.includes('个阻断问题'), '不应再出现「存在 N 个阻断问题」这类只报数量的写法');
     const versionLeak = CODE_PATTERN.exec(versionText);
     assert.equal(versionLeak, null, `数据集版本界面泄漏了原因码：${versionLeak?.[0]}`);
-    await capturePreflight(output.replace(/\.json$/, '-version-panel.png'), '.version-preview');
+    await writeFile(output.replace(/\.json$/, '-version-panel.png'), (await window.webContents.capturePage()).toPNG());
+    // 第三档「包含未标注素材」：用户显式声明这批素材本来就无目标，纳入后不再算作遗漏范围。
+    const scopeSelect = `[...document.querySelectorAll('dialog[open] select')].find(s=>[...s.options].some(o=>o.textContent.includes('有正式标注')))`;
+    assert.ok(await js<boolean>(`!!${scopeSelect}`), '标注范围选择框应存在');
+    await js(`(()=>{const s=${scopeSelect};s.value='all';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await waitFor(`!!${scopeSelect}&&${scopeSelect}.value==='all'`);
+    assert.ok(await js<boolean>(`${dialog}.innerText.includes('按「无目标样本」纳入版本')`), '第三档必须说明它与「标注成功但没找到目标」的区别');
+    await button('检查数据源', dialog);
+    await waitFor(`!!${dialog}.querySelector('.reason-issues')&&${dialog}.innerText.includes('可用素材 3 张')`, 25000);
+    const declaredText = await js<string>(`${dialog}.innerText`);
+    assert.ok(declaredText.includes('范围外 0 张'), `显式声明后不应再有范围外素材，实际：${declaredText.slice(0, 400)}`);
+    assert.ok(!declaredText.includes('没有可导出的素材'), `显式声明后不应再报「没有可导出的素材」，实际：${declaredText.slice(0, 400)}`);
+    assert.ok(declaredText.includes('项目尚未定义类别'), '类别缺失仍应作为待处理项保留');
+    const declaredLeak = CODE_PATTERN.exec(declaredText);
+    assert.equal(declaredLeak, null, `第三档界面泄漏了原因码：${declaredLeak?.[0]}`);
+    await capturePreflight(output.replace(/\.json$/, '-version-scope-all.png'), '.version-preview');
+    checks.push({ check: 'annotation-scope-all', assets: 3, excluded: 0, deniesUnlabeledBlock: true });
     // 直达动作必须能兑现：点击后真的落到类别模板弹窗，而不是点了没反应。
     await button('打开类别与点位模板', dialog);
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('类别与点位模板')`);
@@ -90,20 +106,45 @@ export async function checkDesktopReason(window: BrowserWindow, output: string):
     await waitFor(`!document.querySelector('dialog[open]')`);
     checks.push({ check: 'dataset-version-preflight', readableIssues: 2, reasonLabels: true, rawCodesHidden: true, directActionWorks: true });
 
+    // 先给项目一个类别并标好一张图：这样「剔除未标注」之后范围里仍有可导出内容，才能验证到真正的终态。
+    const assetPage = await api<{ items: Array<{ id: string }> }>('asset.list', { projectId: created!.id, limit: 100 });
+    await api('project.update', { projectId: created!.id, classes: [{ id: 'figure', name: '粉色手办', color: '#e0559b' }] });
+    await api('annotation.save', { assetId: assetPage.items[0].id, baseVersion: 0, confirm: true,
+      annotations: [{ id: 'reason-fixture', type: 'detect', classId: 'figure', bbox: { x: 10, y: 10, width: 100, height: 100 } }] });
+    const blockedRange = await api<{ summary: { blocking: number } }>('export.preflight', { projectId: created!.id, taskType: 'detect' });
+    assert.ok(blockedRange.summary.blocking > 0, '未标注素材应构成导出阻断');
+    const clearedRange = await api<{ summary: { canExport: boolean } }>('export.preflight', { projectId: created!.id, taskType: 'detect', excludeUnlabeled: true });
+    assert.equal(clearedRange.summary.canExport, true, `剔除未标注后应可导出：${JSON.stringify(clearedRange.summary)}`);
+
     // ===== 导出：同一批素材的问题按原因合并，仍不出现原始码 =====
     await button('导出');
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('导出前检查')`);
     await waitFor(`!!${dialog}.querySelector('.reason-issues')`, 25000);
     const exportText = await js<string>(`${dialog}.innerText`);
-    assert.ok(exportText.includes('项目尚未定义类别'), `导出预检应列出「项目尚未定义类别」，实际：${exportText.slice(0, 400)}`);
     assert.ok(exportText.includes('素材尚未生成正式标注'), `导出预检应列出未标注素材说明，实际：${exportText.slice(0, 400)}`);
-    assert.ok(exportText.includes('（3 张）'), `同原因应按张数合并成一行，实际：${exportText.slice(0, 400)}`);
+    assert.ok(exportText.includes('（2 张）'), `同原因应按张数合并成一行，实际：${exportText.slice(0, 400)}`);
     const exportLeak = CODE_PATTERN.exec(exportText);
     assert.equal(exportLeak, null, `导出界面泄漏了原因码：${exportLeak?.[0]}`);
     await capturePreflight(output.replace(/\.json$/, '-export-panel.png'), '.preflight');
+    checks.push({ check: 'export-preflight', groupedByReason: true, rawCodesHidden: true });
+
+    // ===== 一键剔除未标注素材：把「只报错」变成用户能自己走通的一步 =====
+    await button('排除这 2 张未标注素材并继续导出', dialog);
+    await waitFor(`!!${dialog}.innerText.includes('已排除 2 张未标注素材')`, 25000);
+    const excludedText = await js<string>(`${dialog}.innerText`);
+    assert.ok(!excludedText.includes('素材尚未生成正式标注'), `剔除后不应再报告未标注素材，实际：${excludedText.slice(0, 400)}`);
+    // 导出范围必须承认被排除的部分，否则用户会以为素材丢了。
+    assert.ok(excludedText.includes('其中 2 张未标注素材已按你的选择排除'), `导出范围应承认被排除部分，实际：${excludedText.slice(0, 400)}`);
+    assert.ok(!excludedText.includes('需要先处理'), `剔除后不应再有阻断项，实际：${excludedText.slice(0, 400)}`);
+    const excludedLeak = CODE_PATTERN.exec(excludedText);
+    assert.equal(excludedLeak, null, `剔除未标注后的界面泄漏了原因码：${excludedLeak?.[0]}`);
+    await capturePreflight(output.replace(/\.json$/, '-export-excluded.png'), '.preflight', '已排除 2 张未标注素材');
+    // 恢复按钮把范围交还给用户，避免误点后无法回头。
+    await button('恢复包含它们', dialog);
+    await waitFor(`${dialog}.innerText.includes('素材尚未生成正式标注')`, 25000);
+    checks.push({ check: 'export-exclude-unlabeled', excluded: 2, reasonCleared: true, scopeNote: true, restorable: true, exportReady: true });
     await button('关闭', dialog);
     await waitFor(`!document.querySelector('dialog[open]')`);
-    checks.push({ check: 'export-preflight', groupedByReason: true, rawCodesHidden: true });
 
     // ===== toast：错误提示同样不得带出原始码 =====
     const toast = await js<string>(`document.querySelector('.toast')?.innerText??''`);

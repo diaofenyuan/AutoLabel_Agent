@@ -18,10 +18,20 @@ final class Exporter {
         if(p.has("assetIds")&&wanted.isEmpty())throw new ApiError(400,"asset_selection_empty","所选素材为空，请选择素材后导出。");
         List<JsonObject> assets=new ArrayList<>();Map<String,Path> paths=new HashMap<>();for(JsonObject row:Store.rows(c,"SELECT id,data,path FROM assets WHERE project_id=? ORDER BY id",id)){
             JsonObject a=Json.parse(row.get("data").getAsString());String aid=Json.required(a,"id");if(!wanted.isEmpty()&&!wanted.contains(aid))continue;
-            if(Json.bool(p,"onlyConfirmed",false)&&!Json.str(a,"status","").equals("confirmed"))continue;assets.add(a);paths.put(aid,Path.of(row.get("path").getAsString()));}
+            if(Json.bool(p,"onlyConfirmed",false)&&!Json.str(a,"status","").equals("confirmed"))continue;
+            // 一键剔除尚未生成正式标注的素材：只影响本次导出范围，素材与既有标注都保留，补标后可重新导出。
+            if(Json.bool(p,"excludeUnlabeled",false)&&!Set.of("candidate","modified","confirmed").contains(Json.str(a,"status","")))continue;
+            assets.add(a);paths.put(aid,Path.of(row.get("path").getAsString()));}
         if(!wanted.isEmpty()){Set<String> known=new HashSet<>();for(JsonObject row:Store.rows(c,"SELECT id FROM assets WHERE project_id=?",id))known.add(row.get("id").getAsString());if(!known.containsAll(wanted))throw new ApiError(400,"asset_project_mismatch","所选素材不属于当前项目。");}
         return new Snapshot(project,assets,paths,type);});}
-    JsonObject inspect(Snapshot s){JsonArray issues=new JsonArray();Map<String,Integer> counts=new LinkedHashMap<>();Set<String> hashes=new HashSet<>();int objects=0,empty=0;
+    /** 默认口径：尚未生成正式标注的素材不得当作无目标图，必须阻断。 */
+    JsonObject inspect(Snapshot s){return inspect(s,false);}
+    /**
+     * `emptyDeclared` 对应「用户显式声明未标注素材即无目标样本」的场景（数据集版本 scope=all）：
+     * 此时不再把 asset_unlabeled 记为阻断项，但它仍以 empty_label 提示出现在体检结果里 —— 事实照旧可见，
+     * 只是不再替用户否决他已经明确做过的选择。分类任务的「缺类别」不受影响，无类别的分类样本不是合法负样本。
+     */
+    JsonObject inspect(Snapshot s,boolean emptyDeclared){JsonArray issues=new JsonArray();Map<String,Integer> counts=new LinkedHashMap<>();Set<String> hashes=new HashSet<>();int objects=0,empty=0;
         Set<String> dirtyTrackAssets=store.read(c->{Set<String> ids=new HashSet<>();for(JsonObject row:Store.rows(c,"SELECT DISTINCT f.asset_id FROM track_dirty_frames d JOIN tracks t ON t.id=d.track_id JOIN timeline_frames f ON f.timeline_id=t.timeline_id AND f.frame_id=d.frame_id JOIN track_timelines l ON l.id=f.timeline_id WHERE l.project_id=?",Json.required(s.project,"id")))ids.add(Json.required(row,"asset_id"));return ids;});
         for(JsonElement e:Json.array(s.project,"classes"))counts.put(Json.required(e.getAsJsonObject(),"id"),0);
         if(s.assets.isEmpty())issues.add(issue(null,"error","export_empty","没有可导出的素材。"));
@@ -29,7 +39,7 @@ final class Exporter {
         for(JsonObject a:s.assets){String id=Json.required(a,"id"),status=Json.str(a,"status","");
             if(!Set.of("modified","confirmed").contains(status)){if(dirtyTrackAssets.contains(id))issues.add(issue(id,"error","track_recompute_required","该帧相关轨迹有尚未完成的重算，请生成候选或保存人工修订后导出。"));if(Json.bool(Json.object(a,"metadata"),"requiresTrackReview",false))issues.add(issue(id,"error","track_review_required","该帧轨迹候选存在待复核项，请保存人工修订版本后导出。"));}
             if(Json.bool(Json.object(a,"metadata"),"requiresGeometryReview",false))issues.add(issue(id,"error","geometry_review_required","该候选包含未完成覆盖或几何问题，请保存人工修订版本后导出。"));
-            if(!Set.of("candidate","modified","confirmed").contains(status))issues.add(issue(id,"error","asset_unlabeled","素材尚未生成正式标注，不能当作无目标图片导出。"));
+            if(!emptyDeclared&&!Set.of("candidate","modified","confirmed").contains(status))issues.add(issue(id,"error","asset_unlabeled","素材尚未生成正式标注，不能当作无目标图片导出。"));
             if(!Files.isRegularFile(s.paths.get(id)))issues.add(issue(id,"error","media_missing","基准图片丢失。"));
             try{Annotations.validateStored(Json.array(a,"annotations"),a,s.project);}catch(ApiError e){issues.add(issue(id,"error",e.code,e.getMessage()));}
             JsonArray labels=Json.array(a,"annotations");if(labels.isEmpty()){empty++;if(s.type.equals("classify"))issues.add(issue(id,"error","classification_missing","分类样本必须指定类别。"));else issues.add(issue(id,"info","empty_label","无目标样本，来源："+Json.str(a,"source","未知")));}
