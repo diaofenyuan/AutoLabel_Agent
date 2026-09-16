@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { PanelLeftClose, PanelLeftOpen, CircleHelp, ChevronRight, X, Minus, Square, Check, AlertCircle, Keyboard, LoaderCircle, Search, ArrowRight } from 'lucide-react';
-import { Context, navLabel, navRegistry, type Page, type ChatSession, type SettingsSection } from './context';
+import { Context, blankChatSession, navLabel, navRegistry, type Page, type ChatSession, type SettingsSection } from './context';
 import { getBridge, isDemo, request, errorMessage } from './bridge';
 import type { Project, Asset, Preferences, Provider, EngineEvent, EngineStatus } from './types';
 import { defaultPreferences } from './types';
@@ -9,6 +9,7 @@ import { IconButton, Modal } from './ui';
 import { Sidebar } from './Sidebar';
 import { ProjectDeletionDialog } from './ProjectDeletion';
 import ChatHome from './ChatHome';
+import ChatPanel from './ChatPanel';
 const Workbench = lazy(() => import('./Workbench'));
 const Workflow = lazy(() => import('./Workflow'));
 const Tasks = lazy(() => import('./Tasks'));
@@ -121,6 +122,8 @@ export default function App() {
   }, []);
   const newChatSession = useCallback(async () => {
     const id = crypto.randomUUID();
+    // 先落下内存里的空会话，会话页才能立刻渲染，而不是在 ensure 往返期间显示空白。
+    setChats(state => ({ ...state, [id]: blankChatSession(id, project ? 'project' : 'current') }));
     setActiveSessionId(id);
     await navigate('chat');
     try {
@@ -157,8 +160,8 @@ export default function App() {
         if (settings.status === 'fulfilled') setPrefs({ ...defaultPreferences, ...settings.value });
         if (ps.status === 'fulfilled') setProviders(ps.value);
         if (historyEvents.status === 'fulfilled' && Array.isArray(historyEvents.value)) setEvents(current => [...new Map([...historyEvents.value, ...current].map(e => [e.sequence, e])).values()].sort((a,b) => a.sequence - b.sequence).slice(-200));
-        // 启动即恢复持久化会话列表，替换纯内存 chats；失败只提示，不阻塞界面。
-        if (history.status === 'fulfilled') { setChatSessions(history.value.sessions); setActiveSessionId(current => current || history.value.sessions[0]?.id || ''); }
+        // 启动只恢复会话列表；不预先选中任何一条，首屏才会停在欢迎页（选会话是用户的动作）。
+        if (history.status === 'fulfilled') setChatSessions(history.value.sessions);
         else notify(errorMessage(history.reason), true);
       } catch (e) { if (!disposed) notify(errorMessage(e), true); }
       finally { if (!disposed) setLoading(false); }
@@ -208,7 +211,7 @@ export default function App() {
         {!isDemo && engine.state !== 'ready' && <div className="connection-banner" role={engine.state === 'error' ? 'alert' : 'status'} aria-live="polite" aria-busy={reconnecting}><AlertCircle size={14} />{reconnecting ? '正在重新连接本地引擎…' : engine.message || '本地引擎尚未就绪，数据操作暂不可用。'}<button disabled={reconnecting} onClick={() => void reconnect()}>{reconnecting ? '连接中…' : '重新连接'}</button></div>}
         <main className={`page page-${page}`} key={page} aria-busy={loading || assetsLoading}>
           {loading ? <div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作空间…</div> : <Suspense fallback={<div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作区…</div>}>
-            {page === 'chat' ? <ChatHome /> : page === 'workbench' ? <Workbench /> : page === 'workflow' ? <Workflow /> : page === 'tasks' ? <Tasks /> : page === 'resources' ? <Resources /> : page === 'models' ? <Models /> : page === 'training' ? <Training /> : <Settings />}
+            {page === 'chat' ? (activeSessionId ? <ChatPanel /> : <ChatHome />) : page === 'workbench' ? <Workbench /> : page === 'workflow' ? <Workflow /> : page === 'tasks' ? <Tasks /> : page === 'resources' ? <Resources /> : page === 'models' ? <Models /> : page === 'training' ? <Training /> : <Settings />}
           </Suspense>}
         </main>
       </section>

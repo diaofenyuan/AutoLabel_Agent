@@ -29,6 +29,12 @@ export interface ChatSession {
   referenceResources?:import('../../shared/resources').ReferenceSelection[];
   input: string; busy: boolean; cancelRequested?: boolean; exportDir: string; scope: 'current'|'project'|'page'|'selected'; autoExecute: boolean; runningScope?: string;
   streamingText?: string; streamSinceSequence?: number;
+  /** 欢迎页把首条消息随会话一起交出来：会话页挂载后立即发出，用户不必再按一次发送。 */
+  sendOnOpen?: boolean;
+}
+/** 会话按会话标识存放（不再按项目），空会话初值统一从这里取，避免各处默认值不一致。 */
+export function blankChatSession(id: string, scope: ChatSession['scope'] = 'project'): ChatSession {
+  return { id, messages: [], input: '', busy: false, exportDir: '', scope, autoExecute: true };
 }
 export interface AppState {
   page: Page;
