@@ -16,8 +16,13 @@ const mainEntries = [
   { key: 'tasks', label: '任务', icon: ListTodo },
 ] as const;
 
-/** 单个项目在侧栏里最多展开的会话数，超出的在项目页里看，避免侧栏被历史会话淹掉。 */
-const SESSIONS_PER_PROJECT = 5;
+/**
+ * 侧栏的显示上限：项目和会话都会越攒越多，默认只显示最近的一小段，其余折叠成一行提示。
+ * 数量本身不丢，展开就能看到全部。
+ */
+const PROJECTS_VISIBLE = 6;
+const SESSIONS_PER_PROJECT = 3;
+const ORPHANED_VISIBLE = 3;
 
 type RenameTarget = { kind: 'session' | 'project'; id: string; value: string };
 
@@ -28,6 +33,9 @@ export function Sidebar() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [headerMenu, setHeaderMenu] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [showAllProjects, setShowAllProjects] = useState(false);
+  const [showAllOrphaned, setShowAllOrphaned] = useState(false);
+  const [expandedProjects, setExpandedProjects] = useState<string[]>([]);
 
   // 置顶按 pinOrder、其余按 lastMessageAt 倒序，Ctrl+1…9 与置顶共用同一序列。
   const ordered = useMemo(() => [...chatSessions].sort((a, b) => {
@@ -37,10 +45,12 @@ export function Sidebar() {
   }), [chatSessions]);
   const pinned = ordered.filter(item => item.pinned);
   // 会话按项目归组：项目行下面直接列出该项目的会话，进对话一律从项目走。
-  const grouped = useMemo(() => projects.map(item => ({
-    project: item,
-    sessions: ordered.filter(session => session.projectId === item.id).slice(0, SESSIONS_PER_PROJECT),
-  })), [projects, ordered]);
+  // 每组默认只留最近几条，展开后才是全部。
+  const grouped = useMemo(() => projects.map(item => {
+    const sessions = ordered.filter(session => session.projectId === item.id);
+    return { project: item, total: sessions.length,
+      sessions: expandedProjects.includes(item.id) ? sessions : sessions.slice(0, SESSIONS_PER_PROJECT) };
+  }), [projects, ordered, expandedProjects]);
   // 来源项目已被删除的历史会话仍要能看到，单独成组；判据用会话自身状态，不靠项目列表是否已刷新。
   const orphaned = ordered.filter(session => session.status === 'deleted-project');
   /** Ctrl+1…9 的序号与 `ordered` 一致；把它显示出来，这条既有能力才不用靠帮助文档才发现。 */
@@ -133,22 +143,33 @@ export function Sidebar() {
             <button role="menuitem" onClick={() => { setHeaderMenu(false); void navigate('settings'); }}><SettingsIcon size={14} />对话记录设置…</button>
           </div>}
         </div>
-        {projects.length
-          ? grouped.map(({ project: item, sessions }) => <div key={item.id} className="sidebar-project-group">
-            <div className={`sidebar-project ${project?.id === item.id ? 'selected' : ''}`}>
-              <button className="sidebar-row" title={item.name} onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><FolderOpen size={15} /><span className="sidebar-row-title truncate">{item.name}</span></button>
-              <span className="sidebar-actions">
-                <button title="重命名" onClick={() => setRename({ kind: 'project', id: item.id, value: item.name })}><Pencil size={13} /></button>
-                <button title="删除项目…" onClick={() => requestDeleteProject(item)}><Trash2 size={13} /></button>
-              </span>
-            </div>
-            {sessions.length > 0 && <div className="sidebar-sublist">{sessions.map(sessionRow)}</div>}
-          </div>)
+        {grouped.length
+          ? <>
+            {(showAllProjects ? grouped : grouped.slice(0, PROJECTS_VISIBLE)).map(({ project: item, sessions, total }) => <div key={item.id} className="sidebar-project-group">
+              <div className={`sidebar-project ${project?.id === item.id ? 'selected' : ''}`}>
+                <button className="sidebar-row" title={item.name} onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><FolderOpen size={15} /><span className="sidebar-row-title truncate">{item.name}</span></button>
+                <span className="sidebar-actions">
+                  <button title="重命名" onClick={() => setRename({ kind: 'project', id: item.id, value: item.name })}><Pencil size={13} /></button>
+                  <button title="删除项目…" onClick={() => requestDeleteProject(item)}><Trash2 size={13} /></button>
+                </span>
+              </div>
+              {sessions.length > 0 && <div className="sidebar-sublist">{sessions.map(sessionRow)}</div>}
+              {total > SESSIONS_PER_PROJECT && <button className="sidebar-more" onClick={() => setExpandedProjects(list => list.includes(item.id) ? list.filter(id => id !== item.id) : [...list, item.id])}>
+                {expandedProjects.includes(item.id) ? '收起会话' : `还有 ${total - sessions.length} 条会话`}
+              </button>}
+            </div>)}
+            {grouped.length > PROJECTS_VISIBLE && <button className="sidebar-more" onClick={() => setShowAllProjects(value => !value)}>
+              {showAllProjects ? '收起项目' : `全部项目（共 ${grouped.length} 个）`}
+            </button>}
+          </>
           : <p className="sidebar-empty">还没有项目，用一句话描述要标注什么就会建好。</p>}
       </div>
       {orphaned.length > 0 && <div className="sidebar-group">
         <div className="sidebar-group-head"><span className="sidebar-group-title">项目已删除</span></div>
-        {orphaned.map(sessionRow)}
+        {(showAllOrphaned ? orphaned : orphaned.slice(0, ORPHANED_VISIBLE)).map(sessionRow)}
+        {orphaned.length > ORPHANED_VISIBLE && <button className="sidebar-more" onClick={() => setShowAllOrphaned(value => !value)}>
+          {showAllOrphaned ? '收起' : `还有 ${orphaned.length - ORPHANED_VISIBLE} 条`}
+        </button>}
       </div>}
     </div>
     <div className="sidebar-bottom">
