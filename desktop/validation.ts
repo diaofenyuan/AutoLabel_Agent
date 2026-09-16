@@ -251,6 +251,8 @@ const schemas: Record<string, z.ZodType> = {
   'project.list': empty,
   'project.create': z.strictObject({ name, description: text.optional(), taskType, classes: classes.optional() }),
   'project.update': z.strictObject({ projectId: id, name: name.optional(), description: text.optional(), classes: classes.optional(), settings: record.optional() }),
+  // 只允许「新增类别名」：settings 与重命名/删除不在这条命令的范围内，破坏面太大。
+  'project.classes.add': z.strictObject({ projectId: id, names: z.array(z.string().min(1).max(60)).min(1).max(20) }),
   'project.open': z.strictObject({ projectId: id }),
   'project.example': empty,
   // 项目删除不再要求输入项目名确认：影响清单已展示删除范围。confirmName 保留为可选，兼容旧调用方。
@@ -540,6 +542,7 @@ const agentCommands = new Set(['provider.list', 'provider.capabilities', 'chat.s
   // dataset.version.preflight 是只读预检：助手要能自查「素材为什么进不了数据集版本」（含视频帧硬规则），
   // 否则用户问到时只能猜。创建 / 取消 / 删除仍然留在白名单之外。
   'run.list', 'run.get', 'run.create', 'run.pause', 'run.resume', 'run.cancel', 'export.preflight', 'export.create',
+  'project.classes.add',
   'dataset.version.preflight',
   'export.format.list', 'export.format.get',
   'evaluationSet.list', 'evaluationSet.get', 'evaluation.list', 'evaluation.get', 'evaluation.results',

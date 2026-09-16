@@ -211,6 +211,15 @@ async function comparisonPayload(args: Record<string, unknown>, env: ToolEnviron
   return { setVersionId, schemes, match: { iouThreshold: threshold, poseNormalization: 'image_diagonal' } };
 }
 
+/** 类别名：去空白、去重、限长；空数组直接拒绝，避免用一次无效调用换一条引擎报错。 */
+function argumentNames(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new AgentError('INVALID_ARGUMENT', '类别名必须是列表');
+  const names = [...new Set(value.map(item => text(item, '类别名', 60)))];
+  if (!names.length) throw new AgentError('INVALID_ARGUMENT', '至少需要一个类别名');
+  if (names.length > 20) throw new AgentError('INVALID_ARGUMENT', '一次最多新增 20 个类别');
+  return names;
+}
+
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ...FLOW_TOOL_DEFINITIONS,
   ...LOCAL_TOOL_DEFINITIONS,
@@ -224,6 +233,19 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       fields(args, []); const p = await project(env);
       return { id: p.id, name: p.name, taskType: p.taskType, classes: p.classes,
         assetCount: p.assetCount, annotatedCount: p.annotatedCount, confirmedCount: p.confirmedCount };
+    },
+  },
+  {
+    name: 'set_project_classes', description: '为当前项目新增标注类别。用户已经说明类别名（例如「类别用粉色手办」）时直接调用，不要让他手工去配置。只新增、不重命名也不删除：重名会被跳过，返回真正生效的类别清单。类别不是写在对话里而是写进项目，后续标注与导出都以它为准。',
+    parameters: schema({ names: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20 } }), mutation: true,
+    async execute(args, env) {
+      fields(args, ['names']);
+      const names = argumentNames(args.names);
+      // 桌面侧直接回报真正新增与被跳过的名字：让助手自己比对会得出「重名也算新增」这种自相矛盾的结论。
+      const updated = object(await env.engine.request('project.classes.add', { projectId: projectId(env), names }), '项目');
+      const classes = Array.isArray(updated.classes) ? updated.classes : [];
+      return { added: updated.added ?? [], skipped: updated.skipped ?? [],
+        classes: classes.map(item => ({ id: (item as Record<string, unknown>).id, name: (item as Record<string, unknown>).name })) };
     },
   },
   {
@@ -281,7 +303,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       const configuration = annotationConfiguration(p, env);
       const { providerId, model } = configuration;
       const prompt = args.prompt ?? configuration.prompt;
-      if (!p.classes.length) throw new AgentError('CLASSES_REQUIRED', '请先配置标注类别');
+      if (!p.classes.length) throw new AgentError('CLASSES_REQUIRED', `项目「${p.name}」还没有标注类别。你可以在对话或项目概览的「类别与点位模板」里添加，也可以直接告诉我类别名，我用 set_project_classes 建立。`);
       // 空项目最常见的成因是「落在了另一个同名/空项目上」，所以报错必须带上项目名并指向侧栏，而不是只说没素材。
       if (!p.assetCount) throw new AgentError('IMAGES_REQUIRED', `项目「${p.name}」里还没有素材。请确认当前项目是否正确：侧栏项目行列出的是全部项目，点开有素材的那个再继续；如果确实要在这个项目里做，请先导入图片。`);
       if (!providerId || !model) throw new AgentError('MODEL_REQUIRED', '请先选择标注接口和标注模型');

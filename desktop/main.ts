@@ -18,6 +18,7 @@ import { StoragePathSettings, resolveStoragePaths, storagePathsState, validateTr
 import { ChatStore } from './chat-store';
 import type { StoragePathsState } from '../shared/storage';
 import { PathGrants, authorizeCommandPaths, mediaTargetFromUrl, isTrustedUrl, normalizeMedia, publicInputResult, redact } from './security';
+import { addProjectClasses } from './project-classes';
 import { DesktopError, validateCommand, assertAgentCommand, fileSelectionSchema, saveFileSchema, windowActionSchema, transcodeSourceSchema, transcodeOutputSchema, directoryScanSchema } from './validation';
 import { DIRECTORY_SCAN_MAX_DEPTH, DIRECTORY_SCAN_MAX_FILES, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, isImagePath, isVideoPath } from '../shared/mediaFormats';
 
@@ -334,6 +335,9 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
   if (validated.command === 'diagnostics.get') return diagnostics();
   if (validated.command === 'diagnostics.save') return saveDiagnostics();
   if (validated.command === 'storage.paths.get') return storagePathSettings.status();
+  // 助手只能新增类别名：读回当前类别后按现有配色规则追加，其余字段原样带回。
+  // 转发给引擎的仍是既有的 project.update，不新开引擎接口；引擎照常做模板校验与历史标注一致性检查。
+  if (validated.command === 'project.classes.add') return addProjectClasses(engine, payload as { projectId: string; names: string[] });
   if (validated.command === 'storage.paths.migration') return storagePathSettings.migration();
   if (storage?.busy && validated.command !== 'update.status') throw new DesktopError('STORAGE_BUSY', '数据维护正在进行，请等待完成');
   if (validated.command === 'storage.paths.probe') return storagePathSettings.probe(payload.path);

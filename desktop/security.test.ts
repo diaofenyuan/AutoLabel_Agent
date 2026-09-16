@@ -405,6 +405,11 @@ test('训练只放开触发与查询，数据快照必须来自已生成的数�
   }
   assert.doesNotThrow(() => assertAgentCommand('training.dataset.create', { source: 'version', versionId: 'v' }));
   for (const source of ['upload', 'export']) assert.throws(() => assertAgentCommand('training.dataset.create', { source, versionId: 'v' }), /数据集版本/);
+  // 建类别走窄口径命令：只允许新增类别名，整个 project.update（含 settings 模板与规则）仍不开放。
+  assert.doesNotThrow(() => assertAgentCommand('project.classes.add', { projectId: 'p', names: ['箱子'] }));
+  assert.throws(() => assertAgentCommand('project.update', { projectId: 'p', name: '改名' }), /Agent 工具范围/);
+  assert.throws(() => validateCommand('project.classes.add', { projectId: 'p', names: ['箱子'], settings: {} }), /格式不正确/);
+  assert.throws(() => validateCommand('project.classes.add', { projectId: 'p', names: [] }), /格式不正确/);
   // 预检是只读的：助手要能自己回答「素材为什么进不了数据集版本」（含视频帧硬规则），否则只能猜。
   assert.doesNotThrow(() => assertAgentCommand('dataset.version.preflight', { projectId: 'p', annotationScope: 'labeled' }));
   for (const command of ['dataset.version.create', 'dataset.version.cancel', 'dataset.version.delete', 'dataset.version.items',
