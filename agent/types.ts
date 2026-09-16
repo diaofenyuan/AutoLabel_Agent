@@ -7,11 +7,17 @@ export interface ChatMessage {
   tool_call_id?: string;
   tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
 }
+/**
+ * 思考深度：接口没有统一的 reasoning 参数，档位只改助手自身的投入（轮次预算与自检要求），
+ * 不改服务商请求参数，也不影响标注任务的模型选择。
+ */
+export type AgentDepth = 'fast' | 'standard' | 'deep';
 export interface AgentContext {
   annotationProviderId?: string; annotationModel?: string; assetIds?: string[];
   prompt?: string; concurrency?: number; maxRequests?: number | null; exportDir?: string;
   referenceAssetIds?: string[];
   referenceResources?: ReferenceSelection[];
+  depth?: AgentDepth;
 }
 export interface AgentRequest {
   sessionId: string; projectId?: string; providerId: string; model: string;

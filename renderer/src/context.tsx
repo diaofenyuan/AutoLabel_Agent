@@ -31,6 +31,11 @@ export interface ChatSession {
   streamingText?: string; streamSinceSequence?: number;
   /** 欢迎页把首条消息随会话一起交出来：会话页挂载后立即发出，用户不必再按一次发送。 */
   sendOnOpen?: boolean;
+  /**
+   * 会话级的模型与思考深度覆盖：只影响这一段对话，新会话回落到设置里的默认值。
+   * 未设置时取全局默认，因此这里只保存「用户显式改过」的值。
+   */
+  providerId?: string; model?: string; depth?: import('./types').ThinkingDepth;
 }
 /** 会话按会话标识存放（不再按项目），空会话初值统一从这里取，避免各处默认值不一致。 */
 export function blankChatSession(id: string, scope: ChatSession['scope'] = 'project'): ChatSession {

@@ -512,6 +512,8 @@ const schemas: Record<string, z.ZodType> = {
     messages: z.array(message).min(1).max(200), autoExecute: z.boolean().optional(),
     context: z.strictObject({ annotationProviderId: id.optional(), annotationModel: name.optional(), assetIds,
       prompt: text.optional(), concurrency: count.min(1).max(32).optional(), maxRequests: count.min(1).nullable().optional(),
+      // 思考深度只影响助手自身的轮次预算与自检要求，不改变服务商请求参数。
+      depth: z.enum(['fast', 'standard', 'deep']).optional(),
       exportDir: z.string().max(32767).optional(), ...referenceFields }).refine(referenceCapacity, '项目和资源库参考合计最多 63 张').optional(),
   }),
   'agent.cancel': z.strictObject({ sessionId: id }),

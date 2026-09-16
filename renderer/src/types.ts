@@ -1,4 +1,7 @@
 export type { Annotation, Asset, Project, TaskType, EngineEvent, EngineStatus, LabelClass, Point } from '../../shared/protocol';
+/** 思考深度三档：档位含义与真实映射写在设置页的说明里，不在这里另立一套说法。 */
+export type ThinkingDepth = 'fast' | 'standard' | 'deep';
+export const thinkingDepthNames: Record<ThinkingDepth, string> = { fast: '快速', standard: '标准', deep: '深入' };
 export interface Provider {
   id: string; name: string; baseUrl: string; protocol: string; model?: string;
   concurrency?: number; requestsPerMinute?: number; timeoutMs?: number; maxRetries?: number; maxImages?: number;
@@ -21,6 +24,8 @@ export interface Preferences {
   chatProviderId: string; chatModel: string; annotationProviderId: string; annotationModel: string;
   /** 训练默认值：设备与数据加载进程数只作为新建训练的初值，并发上限与进度保留由引擎在启动时读取。 */
   trainingDevice: string; trainingWorkers: number; trainingConcurrency: number; trainingRetentionDays: number;
+  /** 新对话默认的思考深度；会话内切换只影响当前会话，不回写这里（见实施计划 6.2）。 */
+  chatThinkingDepth: ThinkingDepth;
   /** 未配置 AI 时的一次性引导是否已被用户关掉；凭据配好后引导由凭据状态直接隐藏，不看这个值。 */
   aiSetupDismissed?: boolean;
   [key: string]: unknown;
@@ -28,7 +33,7 @@ export interface Preferences {
 export const defaultPreferences: Preferences = {
   theme: 'light', reducedMotion: false, canvasBackground: '#eef0f3', closeBehavior: 'ask', concurrency: 4,
   maxRequests: null, timeout: 120, retries: 2, chatProviderId: '', chatModel: '',
-  annotationProviderId: '', annotationModel: '', trainingDevice: 'gpu-auto', trainingWorkers: 8, trainingConcurrency: 1,
+  annotationProviderId: '', annotationModel: '', chatThinkingDepth: 'standard', trainingDevice: 'gpu-auto', trainingWorkers: 8, trainingConcurrency: 1,
   // 0 表示永久保留逐轮指标；非零时引擎只清理已结束任务超期的逐轮指标记录，产物与日志保留。
   trainingRetentionDays: 0,
 };
