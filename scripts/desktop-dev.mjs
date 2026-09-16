@@ -3,6 +3,7 @@ import net from 'node:net';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { GPU_FALLBACK_ARGS, explicitLaunchArgs, isGpuLaunchFailure } from './gpu-fallback.mjs';
 await import('./desktop-build.mjs');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -18,11 +19,39 @@ for (let attempt = 0; attempt < 100 && vite.exitCode === null; attempt++) {
 }
 if (!ready) { vite.kill(); throw new Error('开发界面启动失败，请先安装 renderer 依赖'); }
 const env = { ...process.env, AUTOLABEL_RENDERER_URL: origin }; delete env.ELECTRON_RUN_AS_NODE;
-// 显卡不可用或受限环境（Chromium GPU 进程起不来）需要显式追加开关，与 desktop-smoke.mjs 同一约定：
-// AUTOLABEL_EXTRA_LAUNCH_ARGS="--no-sandbox --in-process-gpu --disable-gpu"
-const extraLaunchArgs = (process.env.AUTOLABEL_EXTRA_LAUNCH_ARGS || '').split(/\s+/).filter(Boolean);
-const electron = spawn(require('electron'), [root, ...extraLaunchArgs], { cwd: root, stdio: 'inherit', windowsHide: true, env });
-const stop = () => { electron.kill(); vite.kill(); };
+
+/**
+ * 启动 Electron（开发态），并与 desktop-smoke.mjs 共用同一份 GPU 降级判定。
+ *
+ * 无显卡通道的机器上 Chromium 会在窗口创建前退出，开发入口原先把这种情况只留给人工设置
+ * AUTOLABEL_EXTRA_LAUNCH_ARGS，表现就是「npm run dev 直接崩、没有提示」。这里按同一特征自动重试一次；
+ * 调用方显式配置过开关时不重复叠加。
+ */
+const configured = explicitLaunchArgs();
+function launch(extraArgs) {
+  const child = spawn(require('electron'), [root, ...extraArgs], { cwd: root, stdio: ['inherit', 'pipe', 'pipe'], windowsHide: true, env });
+  // 输出要同时回显并留一份：直接用 inherit 就拿不到用于判定失败特征的日志串。
+  let output = '';
+  const sink = chunk => { const text = chunk.toString(); output += text; process.stdout.write(text); };
+  child.stdout.on('data', sink); child.stderr.on('data', sink);
+  const exited = new Promise(resolve => {
+    child.once('error', error => { console.error(error.message); resolve(1); });
+    child.once('exit', code => resolve(code ?? 0));
+  });
+  return { exited, output: () => output };
+}
+const stop = () => vite.kill();
 process.once('SIGINT', stop); process.once('SIGTERM', stop);
-electron.once('exit', code => { vite.kill(); process.exitCode = code ?? 0; });
-electron.once('error', error => { stop(); console.error(error.message); process.exitCode = 1; });
+
+let current = launch(configured);
+let exit = await current.exited;
+if (!configured.length && isGpuLaunchFailure(exit, current.output())) {
+  console.log('\n检测到 GPU 通道不可用，自动附加降级开关重试一次。');
+  current = launch(GPU_FALLBACK_ARGS);
+  exit = await current.exited;
+  if (isGpuLaunchFailure(exit, current.output())) {
+    console.error('降级后仍无法启动：用户数据目录下的 startup.log 记录了本次启动的失败原因。');
+  }
+}
+vite.kill();
+process.exitCode = exit;

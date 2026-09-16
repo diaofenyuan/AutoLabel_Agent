@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { GPU_FALLBACK_ARGS, explicitLaunchArgs, isGpuLaunchFailure } from './gpu-fallback.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packaged = process.argv.includes('--packaged');
 const windowOnly = process.argv.includes('--window');
@@ -67,15 +68,11 @@ if (manualOnly || updateUiOnly || runControlOnly || mediaOnly || reasonOnly || a
 }
 // 受限或显卡不可用环境（Chromium GPU 进程无法启动）可显式追加开关：
 // AUTOLABEL_EXTRA_LAUNCH_ARGS="--no-sandbox --in-process-gpu --disable-gpu"
-const explicitLaunchArgs = (process.env.AUTOLABEL_EXTRA_LAUNCH_ARGS || '').trim();
-// GPU 降级开关：无显卡通道的机器（虚拟化 / 远程会话 / 无驱动）上 Chromium GPU 进程起不来，
-// 会在窗口创建前直接崩溃（退出码 0x80000003）并伴随 gpu_process_host 报错。这类机器是常见
-// 验收环境，因此不要求人工设置环境变量，而是在首次失败后按特征自动重试一次。
-const GPU_FALLBACK_ARGS = ['--no-sandbox', '--in-process-gpu', '--disable-gpu'];
-// 只有显式传入才采用人工配置，避免与自动降级重复叠加同一个开关。
-args.push(...(explicitLaunchArgs ? explicitLaunchArgs.split(/\s+/).filter(Boolean) : []));
+// GPU 降级开关与判定取共享模块：开发启动（desktop-dev.mjs）用的是同一份，避免两处判定漂移。
+const explicit = explicitLaunchArgs();
+args.push(...explicit);
 // 仅当调用方未显式配置时才在失败后自动降级；已显式配置的环境保持原有行为，不做二次重试。
-const allowAutoFallback = !explicitLaunchArgs;
+const allowAutoFallback = !explicit.length;
 // lastOutput 用于在刻意捕获输出时（GPU 失败判定）回传本次运行的日志。
 let lastOutput = '';
 const run = async (runArgs, collect) => {
@@ -94,16 +91,10 @@ return new Promise((resolve, reject) => {
   child.once('exit', code => { clearTimeout(timeout); resolve(code); });
 });
 };
-// 判定是否为 GPU 通道不可用导致的启动失败，而非业务断言失败。
-const isGpuLaunchFailure = code => code !== 0 && (
-  /gpu_process_host|GPU process isn't usable|GPU process exited unexpectedly/i.test(lastOutput) ||
-  // Node 在 Windows 上把原生崩溃码 0x80000003 呈现为无符号形态 2147483651。
-  code === 2147483651
-);
 // 已生效的降级开关：需要传给同一脚本内的后续启动（如 ui-check 的重启持久化校验）。
 let activeFallbackArgs = [];
 let exit = await run(args, allowAutoFallback);
-if (allowAutoFallback && isGpuLaunchFailure(exit)) {
+if (allowAutoFallback && isGpuLaunchFailure(exit, lastOutput)) {
   console.log('检测到 GPU 通道不可用，自动附加降级开关重试一次。');
   activeFallbackArgs = GPU_FALLBACK_ARGS;
   exit = await run([...args, ...activeFallbackArgs], false);

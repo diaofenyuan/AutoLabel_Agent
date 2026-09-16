@@ -32,12 +32,13 @@
     "check:connection-ui": "node scripts/desktop-smoke.mjs --connection-ui",
     "check:training-ui": "node scripts/desktop-smoke.mjs --training-ui",
     "check:installer-contract": "node scripts/installer-contract-check.mjs",
+    "check:engine-jar": "node scripts/engine-jar-freshness.mjs",
     "check:agent": "tsc -p agent/tsconfig.json",
     "test:agent": "npm --prefix agent test",
     "prepare:runtime": "node scripts/desktop-runtime.mjs",
     "prepare:media-tools": "node scripts/desktop-media-tools.mjs",
-    "pack:dir": "npm run build && npm run prepare:runtime && npm run prepare:media-tools && electron-builder --win --x64 --dir --config build/electron-builder.cjs",
-    "pack:win": "npm run build && npm run prepare:runtime && npm run prepare:media-tools && electron-builder --win nsis --x64 --config build/electron-builder.cjs",
+    "pack:dir": "npm run build && npm run check:engine-jar && npm run prepare:runtime && npm run prepare:media-tools && electron-builder --win --x64 --dir --config build/electron-builder.cjs",
+    "pack:win": "npm run build && npm run check:engine-jar && npm run prepare:runtime && npm run prepare:media-tools && electron-builder --win nsis --x64 --config build/electron-builder.cjs",
     "pack:milestone": "npm run build:renderer && npm run build:desktop && npm run prepare:media-tools && node scripts/desktop-pack-milestone.mjs"
   },
   "devDependencies": {

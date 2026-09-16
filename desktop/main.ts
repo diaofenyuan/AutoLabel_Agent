@@ -325,6 +325,24 @@ async function recordAgentChat(payload: Record<string, unknown>): Promise<unknow
     throw error;
   }
 }
+/**
+ * 启动日志。
+ *
+ * 受限环境下应用可能连窗口都没创建就退出，控制台输出对双击启动的用户等于不存在；
+ * 把启动期的关键事件写进用户数据目录的 startup.log，出错提示里直接给出路径。
+ */
+async function appendStartupLog(message: unknown): Promise<void> {
+  try {
+    await mkdir(userData, { recursive: true });
+    const file = path.join(userData, 'startup.log');
+    const line = `${new Date().toISOString()} ${redact(message)}\n`;
+    const existing = await readFile(file, 'utf8').catch(() => '');
+    // 只留最近一段：启动日志的用处是「刚才那次为什么没起来」，不是长期审计。
+    const kept = existing.length > 256 * 1024 ? existing.slice(-128 * 1024) : existing;
+    await writeFile(file, kept + line);
+  } catch { /* 日志写不进去不能反过来影响启动。 */ }
+}
+
 async function request(command: unknown, input: unknown, fromAgent = false): Promise<unknown> {
   const requestEngine = engine; const requestVault = vault;
   const requestScope = preferenceStore.value.credentialScopeId as string;
@@ -910,6 +928,28 @@ else {
       .finally(() => { quitting = true; tray?.destroy(); app.quit(); });
   });
   app.on('window-all-closed', () => { if (!quitting && !tray) app.quit(); });
+/**
+ * GPU 进程退出监控。
+ *
+ * 无显卡通道的机器上 Chromium 的 GPU 进程会直接挂掉，应用可能连窗口都没建好就退出，
+ * 用户侧只看到「双击没反应」。这里把原因写进启动日志，并在窗口还没建好时明确提示，
+ * 引导用降级开关启动——比静默退出强，也不假装启动成功了。
+ */
+let windowCreated = false;
+let gpuFailureNotified = false;
+app.on('child-process-gone', async (_event, details) => {
+  if (details.type !== 'GPU') return;
+  const reason = `${details.reason}${details.exitCode !== undefined ? `（退出码 ${details.exitCode}）` : ''}`;
+  engine.log(`GPU 进程退出：${reason}`);
+  await appendStartupLog(`GPU 进程退出：${reason}；窗口已创建：${windowCreated}`);
+  // GPU 进程会连着重启几次，每次都弹窗会把用户埋在对话框里；只提示一次，日志保留全部。
+  if (windowCreated || gpuFailureNotified || process.argv.includes('--desktop-smoke')) return;
+  gpuFailureNotified = true;
+  dialog.showErrorBox('图形加速不可用', `本机无法启动图形加速（${reason}），窗口未能创建。\n\n`
+    + '请用管理员权限运行，或追加启动参数：--no-sandbox --in-process-gpu --disable-gpu\n\n'
+    + `启动日志：${path.join(userData, 'startup.log')}`);
+});
+
   void app.whenReady().then(async () => {
     await mkdir(userData, { recursive: true });
     // 上次会话留下的转码副本已经失去授权、也无法再被任何任务引用，开机即清。
@@ -947,14 +987,18 @@ else {
     // engine.start() 在第一个 await 之前就同步把状态置为 starting，窗口订阅后即可显示「引擎启动中」。
     const engineStarted = engine.start();
     await createWindow();
+    windowCreated = true;
     void engineStarted.then(async started => { if (started.state === 'ready') preferences = await preferenceStore.update({ dataEstablished: true }); });
     // 休眠/唤醒不得因为存储忙而丢事件：suspend 期间跳过可以，resume 必须送达，
     // 否则引擎会一直停在「已休眠」状态、事件流永久空转，界面只能靠手动重连恢复。
     powerMonitor.on('suspend', () => { if (!storage?.busy) void engine.suspend(); });
     powerMonitor.on('resume', () => { void engine.resume(); });
     if (process.argv.includes('--desktop-smoke')) await smoke();
-  }).catch(error => {
+  }).catch(async error => {
+    // 双击启动的用户看不到控制台：把失败写进 startup.log，并在提示里直接给出路径。
+    await appendStartupLog(`启动失败：${redact(error)}`);
     if (process.argv.includes('--desktop-smoke')) { console.error(redact(error)); app.exit(1); return; }
-    dialog.showErrorBox('桌面程序启动失败', redact(error)); quitting = true; app.quit();
+    dialog.showErrorBox('桌面程序启动失败', `${redact(error)}\n\n启动日志：${path.join(userData, 'startup.log')}`);
+    quitting = true; app.quit();
   });
 }
