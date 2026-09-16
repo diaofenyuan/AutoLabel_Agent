@@ -3,6 +3,9 @@ import type { ChatSession as StoredChatSession } from '../../shared/chat';
 import ConfigurationView from './ConfigurationView';
 import ReferencePicker from './ReferencePicker';
 import ResultCard from './ResultCard';
+import VideoImport from './VideoImport';
+import { DropOverlay } from './fileDrop';
+import { useChatFileDrop } from './chatDrop';
 import { useEffect, useRef } from 'react';
 import { MessageSquare, Settings2, FolderOpen, Sparkles } from 'lucide-react';
 import { blankChatSession, useApp, type ChatSession } from './context';
@@ -16,10 +19,13 @@ import { Composer, Button, Empty } from './ui';
  * 消息落盘由主进程负责，这里只在首次打开某条会话时读回一次，之后以内存状态为准。
  */
 export default function ChatPanel({ compact = false, assetId, sessionId }: { compact?: boolean; assetId?: string; sessionId?: string }) {
-  const { project, prefs, notify, navigate, chats, setChats, assets, assetTotal, selectedAssetIds, assetsLoading, providers, events, activeSessionId, refreshChatSessions } = useApp();
+  const { project, prefs, notify, navigate, chats, setChats, assets, assetTotal, selectedAssetIds, assetsLoading, providers, events, activeSessionId, refreshChatSessions, setMediaJob, setMediaTaskId } = useApp();
   const chatConfig=resolveConfiguration('chat',prefs,project?.settings);
   const annotationConfig=resolveConfiguration('annotation',prefs,project?.settings);
   const aiConfigured = useAiConfigured();
+  // 拖入文件只在会话页生效；工作台里的紧凑面板由工作台自己管导入。
+  const drop = useChatFileDrop();
+  const dropActive = compact ? false : drop.active;
   const key = sessionId ?? activeSessionId;
   const sessionOverride = key ? chats[key] : undefined;
   // 会话级覆盖优先，未改过就用设置里的默认值（见实施计划 6.2）。
@@ -110,7 +116,8 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
   };
   for (const provider of providers) if (provider.hasCredential) addModel(provider.id, provider.model);
   addModel(selectedProviderId, selectedModel);
-  return <div className={`chat-panel ${compact ? 'compact' : ''}`}>
+  return <div className={`chat-panel ${compact ? 'compact' : ''} ${dropActive ? 'drop-active' : ''}`} {...(compact ? {} : drop.handlers)}>
+    {!compact && <DropOverlay visible={dropActive} />}
     <div className="chat-messages" aria-live="polite">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><Button onClick={() => void navigate('settings')}><Settings2 size={14} />配置对话模型</Button></Empty> : session.messages.map((message,i) => <div className={`chat-message ${message.role}`} key={i}><div className="chat-message-head"><span className={`chat-avatar ${message.role}`} aria-hidden="true">{message.role === 'assistant' ? <Sparkles size={12} /> : '你'}</span><small>{message.role === 'user' ? '你' : '标注助手'}</small></div><p>{message.content}</p></div>)}{session.busy && session.streamingText && <div className="chat-message assistant streaming"><div className="chat-message-head"><span className="chat-avatar assistant" aria-hidden="true"><Sparkles size={12} /></span><small>标注助手</small></div><p>{session.streamingText}</p></div>}{session.busy && <div className="chat-wait"><span className="waiting-dots">•••</span>{session.cancelRequested ? '正在请求停止 · 已发送请求的结果仍需核对' : chatStatus(events, session.id)} · {session.runningScope}</div>}
       {/* 结果卡片跟着会话走：已经有回复且绑定了项目时才展开实际结果，避免空转读取。 */}
       {!compact && project && session.messages.some(message => message.role === 'assistant') && <ResultCard project={project} />}</div>
@@ -119,6 +126,8 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
         ? <select aria-label="对话模型" title="本次对话使用的模型" disabled={session.busy} value={`${selectedProviderId}|${selectedModel}`} onChange={e => { const [providerId, model] = e.target.value.split('|'); update({ providerId, model }); }}>{options.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}</select>
         : <button onClick={() => void navigate('settings')}>{aiConfigured ? '选择模型' : '配置 AI'}</button>}
       <select aria-label="思考深度" title="助手投入的思考与自检力度" disabled={session.busy} value={depth} onChange={e => update({ depth: e.target.value as ThinkingDepth })}>{(['fast', 'standard', 'deep'] as const).map(key => <option key={key} value={key}>{thinkingDepthNames[key]}</option>)}</select></div></Composer>
+    {drop.video && <VideoImport key={drop.video.path} projectId={drop.video.projectId} initialSourcePath={drop.video.path} onClose={drop.closeVideo}
+      onCreated={(job, temporarySource) => { setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource }); drop.closeVideo(); notify('已创建抽帧任务，进度在任务里查看。'); }} />}
   </div>;
 }
 

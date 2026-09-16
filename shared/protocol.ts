@@ -62,6 +62,10 @@ export interface DesktopBridge {
   restartEngine(): Promise<EngineStatus>;
   setWindowDirty(dirty: boolean): Promise<void>;
   windowAction(action: 'minimize' | 'maximize' | 'close'): Promise<void>;
+  /** 拖入的 File 拿不到磁盘路径（Electron 32 起已移除 File.path），必须由 preload 解析。 */
+  pathForFile?(file: File): string;
+  /** 拖入等于用户显式选择：把文件登记进桌面授权表，否则后续命令会以「路径未授权」被拒。 */
+  grantDroppedFiles?(paths: string[]): Promise<{ granted: string[]; rejected: string[] }>;
 }
 
 declare global { interface Window { autoLabel?: DesktopBridge } }

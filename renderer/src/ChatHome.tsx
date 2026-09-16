@@ -4,6 +4,9 @@ import { useApp } from './context';
 import { request, errorMessage, getBridge } from './bridge';
 import { Composer } from './ui';
 import { AiSetupNotice } from './AiSetup';
+import { DropOverlay } from './fileDrop';
+import { useChatFileDrop } from './chatDrop';
+import VideoImport from './VideoImport';
 import type { Project } from './types';
 
 /** 从导入路径里取一个像样的项目名：用文件所在文件夹名，取不到就退回通用名。 */
@@ -19,9 +22,10 @@ function folderName(file: string): string {
  * 输入一句话就按描述建好项目，并把这句话作为该项目的第一条指令发出去。
  */
 export default function ChatHome() {
-  const { projects, openProject, refreshProjects, notify } = useApp();
+  const { projects, openProject, refreshProjects, notify, setMediaJob, setMediaTaskId } = useApp();
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const drop = useChatFileDrop();
   // 「继续 <最近项目>」按最近更新的项目走，没有项目时这一项不出现。
   const lastProject = [...projects].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))[0];
 
@@ -59,7 +63,8 @@ export default function ChatHome() {
     finally { setBusy(false); }
   }
 
-  return <div className="chat-home">
+  return <div className={`chat-home ${drop.active ? 'drop-active' : ''}`} {...drop.handlers}>
+    <DropOverlay visible={drop.active} />
     <div className="chat-welcome">
       <h1>今天要标注什么？</h1>
       <AiSetupNotice />
@@ -70,6 +75,9 @@ export default function ChatHome() {
         <button disabled={busy} onClick={() => void importImages()}><ImageIcon size={14} />导入图片开始标注</button>
         {lastProject && <button disabled={busy} onClick={() => void openProject(lastProject).catch(e => notify(errorMessage(e), true))}>继续 {lastProject.name}</button>}
       </div>
+      <p className="muted tiny">也可以把图片或视频直接拖进来，会新建项目并入库。</p>
     </div>
+    {drop.video && <VideoImport key={drop.video.path} projectId={drop.video.projectId} initialSourcePath={drop.video.path} onClose={drop.closeVideo}
+      onCreated={(job, temporarySource) => { setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource }); drop.closeVideo(); notify('已创建抽帧任务，进度在任务里查看。'); }} />}
   </div>;
 }

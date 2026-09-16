@@ -28,9 +28,11 @@ function transcodeCommand(sourcePath: string, targetPath: string) {
   return `ffmpeg -y -i "${sourcePath}" -map 0:v:0 -c:v libx264 -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1" -an -sn "${targetPath}"`;
 }
 
-export default function VideoImport({ projectId, onClose, onCreated }: { projectId: string; onClose: () => void; onCreated: (job: MediaJob, temporarySource?: string) => void }) {
+export default function VideoImport({ projectId, initialSourcePath, onClose, onCreated }: {
+  projectId: string; initialSourcePath?: string; onClose: () => void; onCreated: (job: MediaJob, temporarySource?: string) => void;
+}) {
   const { notify, project, navigate } = useApp();
-  const [sourcePath, setSourcePath] = useState(''), [inspection, setInspection] = useState<VideoInspection | null>(null), [error, setError] = useState('');
+  const [sourcePath, setSourcePath] = useState(initialSourcePath ?? ''), [inspection, setInspection] = useState<VideoInspection | null>(null), [error, setError] = useState('');
   const [inspecting, setInspecting] = useState(false), [busy, setBusy] = useState(false);
   const [transcodePath, setTranscodePath] = useState(''), [transcoding, setTranscoding] = useState(false), [elapsed, setElapsed] = useState(0);
   const [density, setDensity] = useState<VideoDensity>('standard'), [customMode, setCustomMode] = useState<'interval' | 'every_n' | 'fps'>('interval'), [customValue, setCustomValue] = useState('1');
@@ -45,6 +47,8 @@ export default function VideoImport({ projectId, onClose, onCreated }: { project
     void listRecipes().then(items => { if (live) setRecipes(items); }).catch(() => { /* 无配方时按默认参数手动抽帧。 */ });
     return () => { live = false; };
   }, []);
+  // 拖入视频时直接把路径带进来并立即检查，省掉「再点一次选择文件」。
+  useEffect(() => { if (initialSourcePath) void inspect(initialSourcePath); }, [initialSourcePath]);
   const [advanced, setAdvanced] = useState(false), [command, setCommand] = useState('');
   const [whole, setWhole] = useState(true), [ranges, setRanges] = useState<VideoTimeRange[]>([{ start: 0, end: 1 }]);
   const [resize, setResize] = useState(false), [width, setWidth] = useState('640'), [height, setHeight] = useState('640'), [fit, setFit] = useState<'contain' | 'stretch'>('contain');

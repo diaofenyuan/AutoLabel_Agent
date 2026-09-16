@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { DesktopBridge, EngineEvent, EngineStatus, AgentEvent, FileSelection } from '../shared/protocol';
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -32,5 +32,8 @@ const bridge: DesktopBridge = Object.freeze({
   restartEngine: () => invoke<EngineStatus>('autolabel:restart-engine'),
   setWindowDirty: (dirty: boolean) => invoke<void>('autolabel:window-dirty', dirty),
   windowAction: (action: 'minimize' | 'maximize' | 'close') => invoke<void>('autolabel:window-action', action),
+  // 拖入的 File 只有渲染进程能拿到；路径必须由 preload 的 webUtils 解析（Electron 32 起已无 File.path）。
+  pathForFile: (file: File) => webUtils.getPathForFile(file),
+  grantDroppedFiles: (paths: string[]) => invoke<{ granted: string[]; rejected: string[] }>('autolabel:grant-dropped-files', paths),
 });
 contextBridge.exposeInMainWorld('autoLabel', bridge);

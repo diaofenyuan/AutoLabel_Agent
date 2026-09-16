@@ -525,6 +525,26 @@ function registerIpc(): void {
     if (typeof dirty !== 'boolean') throw new DesktopError('INVALID_PAYLOAD', '窗口状态无效');
     rendererDirty = dirty;
   });
+  /**
+   * 拖入对话的文件与文件选择器同属用户显式动作，按同样的规则登记授权。
+   * 类型只认图片与视频（其余由界面明确告知不支持），授权范围由主进程按扩展名判定，不交给渲染层。
+   */
+  handle('autolabel:grant-dropped-files', async (_event, values) => {
+    if (!Array.isArray(values) || !values.length || values.length > 500) throw new DesktopError('INVALID_PAYLOAD', '拖入的文件数量无效');
+    const granted: string[] = []; const rejected: string[] = [];
+    for (const value of values) {
+      if (typeof value !== 'string' || !value || value.length > 32767 || !path.isAbsolute(value)) { rejected.push(String(value).slice(0, 200)); continue; }
+      const extension = path.extname(value).slice(1).toLowerCase();
+      const kind = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff'].includes(extension) ? 'images'
+        : ['mp4', 'avi', 'mov', 'mkv', 'webm', 'm4v', 'flv', 'wmv', 'mpg', 'mpeg', 'ts'].includes(extension) ? 'video' : '';
+      if (!kind) { rejected.push(path.basename(value)); continue; }
+      try {
+        if (!(await stat(value)).isFile()) { rejected.push(path.basename(value)); continue; }
+        granted.push(await grants.add(value, kind));
+      } catch { rejected.push(path.basename(value)); }
+    }
+    return { granted, rejected };
+  });
   handle('autolabel:choose-files', async (_event, options) => {
     const parsed = fileSelectionSchema.safeParse(options);
     if (!parsed.success) throw new DesktopError('INVALID_PAYLOAD', '文件选择类型无效');
