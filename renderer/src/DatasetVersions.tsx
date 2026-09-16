@@ -249,13 +249,18 @@ export function DatasetVersionDialog({ project, onClose, onOpenTemplate, onOpenC
             <label>测试集比例<input type="number" min={0} max={1} step={0.05} value={recipe.test} onChange={e => patch({ test: e.target.value })} placeholder="0.1" /></label>
           </div>
           <label className="recipe-strict"><input type="checkbox" checked={recipe.strict} onChange={e => patch({ strict: e.target.checked })} />严格防泄漏：跨划分出现近重复时阻断生成，不静默放行</label>
-          <p className="muted tiny">来源组不可拆分，分组约束优先于比例；无法达标时版本会如实报告实际比例与未达标项。</p>
+          {/* 「来源组」在界面上反复出现却从未被解释过；比例框显示的 0.7/0.2/0.1 也只是 placeholder，
+              用户会以为自己设过。两件事都在这里一次说清。 */}
+          <p className="muted tiny">来源组：一组必须留在同一划分里的素材。普通图片按内容指纹各自成组；同一个视频抽出的所有帧属于同一个来源组，不可拆分。</p>
+          <p className="muted tiny">三个比例留空即采用引擎默认 0.7 / 0.2 / 0.1（输入框里显示的就是默认值）。划分以来源组为最小单位，分组约束优先于比例；无法达标时版本会如实报告实际比例与未达标项。</p>
         </details>
-        <div className="modal-actions"><Button type="button" onClick={() => { setCreating(false); setPreflight(null); setRecipe(emptyRecipe); }}>取消</Button><Button busy={busy} onClick={() => void preflightCurrent()}>检查数据源</Button><Button className="primary" busy={busy} type="submit">生成版本</Button></div>
+        <div className="modal-actions"><Button type="button" onClick={() => { setCreating(false); setPreflight(null); setRecipe(emptyRecipe); }}>取消</Button><Button type="button" busy={busy} onClick={() => void preflightCurrent()}>检查数据源</Button><Button className="primary" busy={busy} type="submit">生成版本</Button></div>
         {preflight && <div className="version-preview"><p>可用素材 {String(preflight.assets ?? 0)} 张 · 来源组 {String(preflight.groups ?? 0)} 个 · 范围外 {String(preflight.excluded ?? 0)} 张</p>
           {!!preflight.transformPreview && (preflight.transformPreview as Record<string, unknown>).enabled === true
             && <p>按当前转换预计 {String((preflight.transformPreview as Record<string, unknown>).estimatedItems ?? '—')} 个版本项（含变体）</p>}
           {!!preflight.splitPreview && <p>预计划分：{(['train', 'val', 'test'] as const).map(key => `${key} ${String(((preflight.splitPreview as { actualGroups?: Record<string, unknown> }).actualGroups ?? {})[key] ?? '—')} 组`).join(' · ')}</p>}
+          {/* 来源组不足是单视频项目最常见的困惑：划分必然失衡，但界面上没有任何解释。 */}
+          {Number(preflight.groups ?? 0) > 0 && Number(preflight.groups ?? 0) < 3 && <p className="muted tiny">当前只有 {String(preflight.groups)} 个来源组，铺不满 train / val / test：来源组不可拆分，所以会有划分拿不到数据。替代方案是把同一段视频的帧按时间或帧号切成多段再分别导入（每段各自成一个来源组），或改用「数据导出」按图片随机划分。</p>}
           {/* 遗漏范围给中文标签，并带上这一类原因能走的下一步：视频帧只保留「改用数据导出」这条真实出路。 */}
           {Object.keys(preflightReasons(preflight)).length > 0 && <div className="version-preview-block">
             <p>遗漏范围（{String(preflight.excludedTotal ?? preflight.excluded ?? 0)} 张）</p>

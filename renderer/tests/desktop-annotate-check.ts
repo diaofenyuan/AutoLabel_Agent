@@ -148,6 +148,28 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
     assert.ok(history.length >= 3 && history[0].version === confirmed.version, `标注历史应能查到新版本，实际：${JSON.stringify(history.map(v => v.version))}`);
     checks.push({ check: 'annotate-reopen-visible', historyVersions: history.length });
 
+    // ===== 划分口径与来源组：概念要在界面上可读到，来源组不足要主动提示 =====
+    await button('数据集版本');
+    await waitFor(`!!${dialog}&&${dialog}.innerText.includes('数据集版本')`);
+    await button('新建版本', dialog);
+    await js(`[...${dialog}.querySelectorAll('details')].forEach(d=>d.setAttribute('open',''))`);
+    const splitText = await js<string>(`${dialog}.innerText`);
+    assert.ok(splitText.includes('来源组：一组必须留在同一划分里的素材'), `划分区应定义来源组，实际：${splitText.slice(0, 600)}`);
+    assert.ok(splitText.includes('同一个视频抽出的所有帧属于同一个来源组'), '来源组的定义应说清视频帧这一条');
+    assert.ok(splitText.includes('留空即采用引擎默认 0.7 / 0.2 / 0.1'), '比例框的默认值必须写清楚，避免「看起来填过了」');
+    await button('检查数据源', dialog);
+    await waitFor(`${dialog}.innerText.includes('可用素材')`, 40000);
+    // 检查必须只检查：这个按钮在 form 里，漏了 type="button" 会被浏览器当成提交，点一下就建出一个版本。
+    const versionCount = await js<number>(`${dialog}.querySelectorAll('.training-card').length`);
+    assert.equal(versionCount, 0, `点「检查数据源」不应生成版本，实际出现了 ${versionCount} 个`);
+    const preflightText = await js<string>(`${dialog}.innerText`);
+    // 这个项目只有 1 个已标注素材 → 1 个来源组，划分必然铺不满三档，界面必须主动说清并给替代方案。
+    assert.ok(/当前只有 \d+ 个来源组/.test(preflightText), `来源组不足时应主动提示，实际：${preflightText.slice(0, 600)}`);
+    assert.ok(preflightText.includes('替代方案'), '提示里应给出替代方案而不是只报问题');
+    checks.push({ check: 'split-vocabulary', sourceGroupDefined: true, ratioDefaultDocumented: true, insufficientGroupsExplained: true, checkButtonDoesNotCreateVersion: versionCount === 0 });
+    await js(`document.querySelector('dialog[open] button[aria-label="关闭弹窗"]').click()`);
+    await waitFor(`!document.querySelector('dialog[open]')`);
+
     // ===== 文案一致性：不再宣传不可用的快捷键 =====
     await js(`[...document.querySelectorAll('.topbar-actions button')].find(b=>b.getAttribute('aria-label')==='快捷键与帮助').click()`);
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('快捷键与帮助')`);
