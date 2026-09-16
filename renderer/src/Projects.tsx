@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { ArrowRight, Plus, FolderOpen, Image, Info, Scan, Layers } from 'lucide-react';
+import { ArrowRight, Plus, FolderOpen, Image, Scan, Layers } from 'lucide-react';
 import { useApp } from './context';
+import { AiSetupNotice } from './AiSetup';
 import { DatasetVersionDialog } from './DatasetVersions';
 import { request, errorMessage, isDemo } from './bridge';
 import { Button, Composer, Empty, Field, Modal, PageHeader, SearchField } from './ui';
@@ -36,7 +37,7 @@ export function Projects() {
   const list = projects.filter(p => `${p.name} ${p.description}`.toLowerCase().includes(search.toLowerCase()));
   return <div className="content projects-page">
     <PageHeader title="项目中心" description="在本地管理素材、标注和数据集" actions={<Button className="primary" onClick={() => setCreate(true)}><Plus size={15} />新建项目</Button>} />
-    <div className="getting-started"><Info size={16} /><span>还没有 API Key？可以先体验人工标注。</span><button className="text-button" disabled={busy} onClick={() => void example()}>打开示例<ArrowRight size={14} /></button></div>
+    <AiSetupNotice><button className="text-button" disabled={busy} onClick={() => void example()}>打开示例<ArrowRight size={14} /></button></AiSetupNotice>
     <div className="section-toolbar"><h2>最近的项目 <span className="count">{projects.length}</span></h2><SearchField value={search} onChange={setSearch} placeholder="搜索项目" /></div>
     {loading ? <div className="skeleton-list">{[1,2,3].map(n => <div className="skeleton" key={n} />)}</div> : list.length ? <div className="project-list">{list.map(project => <div className="project-row" key={project.id}><button className="project-entry" onClick={() => void openProject(project).catch(e => notify(errorMessage(e), true))}><div className="project-thumb">{isDemo && project.settings.demoExample ? <img src="./example-street.png" alt="合成城市道路示例" /> : <FolderOpen size={24} strokeWidth={1.4} />}</div><div className="project-info"><h3>{project.name}</h3><p>{project.taskType.toUpperCase()}<span>/</span>{project.assetCount} 张图片<span>/</span>{project.confirmedCount} 已确认</p>{project.description && <small>{project.description}</small>}</div><span className="project-open">打开<ArrowRight size={16} /></span></button><Button onClick={() => setVersionProject(project)}><Layers size={14} />数据集版本</Button></div>)}</div> : <Empty icon={<FolderOpen size={28} />} title={search ? '没有匹配的项目' : '从一个项目开始'} description={search ? '试试其他名称，或清空搜索。' : '创建项目后，导入图片并开始人工标注。'}><Button onClick={() => search ? setSearch('') : setCreate(true)}>{search ? '清空搜索' : '创建项目'}</Button></Empty>}
     <div className="project-composer"><Composer value={description} onChange={setDescription} onSend={() => { setName(description.split('\n')[0].slice(0,60)); setCreate(true); }} placeholder="描述一个新项目，或者从导入图片开始…"><span><Image size={14} />创建项目时保存为项目描述</span></Composer><div className="suggestions"><Button onClick={() => setCreate(true)}><Plus size={14} />创建项目</Button><Button busy={busy} onClick={() => void example()}><Scan size={14} />打开人工示例</Button></div></div>

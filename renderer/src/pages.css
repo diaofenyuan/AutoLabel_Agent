@@ -157,7 +157,7 @@
 /* 首页引导条：在轻量界面中提供明确的下一步，同时保持 Codex 式克制层次。 */
 .getting-started{position:relative;overflow:hidden;background:linear-gradient(100deg,color-mix(in srgb,var(--accent-bg) 64%,var(--surface)),var(--surface));border:1px solid color-mix(in srgb,var(--accent) 13%,var(--border));box-shadow:0 6px 22px color-mix(in srgb,var(--accent) 4%,transparent);animation:page-in .22s ease-out}
 .getting-started::after{content:"";position:absolute;width:160px;height:160px;right:-80px;top:-85px;border:1px solid color-mix(in srgb,var(--accent) 16%,transparent);border-radius:50%;animation:empty-drift 8s ease-in-out -2s infinite}
-.getting-started>svg,.getting-started>span,.getting-started .text-button{position:relative;z-index:1}.getting-started>svg{color:var(--accent)}
+.getting-started>svg,.getting-started>span,.getting-started .text-button,.getting-started>.icon-button{position:relative;z-index:1}.getting-started>svg{color:var(--accent)}.getting-started>.icon-button{margin-left:auto}
 .empty-actions .empty-roadmap{display:flex;align-items:center;gap:7px;margin-top:7px;color:var(--muted);font-size:10px}
 .empty-roadmap span{padding:5px 8px;border:1px solid color-mix(in srgb,var(--accent) 15%,var(--border));border-radius:7px;background:color-mix(in srgb,var(--bg) 65%,transparent);white-space:nowrap}.empty-roadmap>svg{color:var(--accent);opacity:.75;transform:rotate(45deg)}
 .settings-body{animation:settings-in .22s ease-out}

@@ -21,6 +21,8 @@ export interface Preferences {
   chatProviderId: string; chatModel: string; annotationProviderId: string; annotationModel: string;
   /** 训练默认值：设备与数据加载进程数只作为新建训练的初值，并发上限与进度保留由引擎在启动时读取。 */
   trainingDevice: string; trainingWorkers: number; trainingConcurrency: number; trainingRetentionDays: number;
+  /** 未配置 AI 时的一次性引导是否已被用户关掉；凭据配好后引导由凭据状态直接隐藏，不看这个值。 */
+  aiSetupDismissed?: boolean;
   [key: string]: unknown;
 }
 export const defaultPreferences: Preferences = {
