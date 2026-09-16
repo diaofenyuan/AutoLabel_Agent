@@ -532,13 +532,24 @@ const agentCommands = new Set(['provider.list', 'provider.capabilities', 'chat.s
   'flow.capabilities', 'flow.preflight', 'flow.create', 'flow.get', 'flow.list', 'flow.artifact', 'flow.pause', 'flow.resume', 'flow.cancel', 'flow.retry', 'flow.rerun',
   'local.runtime.get', 'local.model.get', 'media.job.get', 'media.job.list', 'media.video.frames', 'media.screening.result', 'media.screening.create',
   'track.timeline.list', 'track.timeline.get', 'track.timeline.frames', 'track.list', 'track.get', 'track.keyframe.list',
-  'track.generation.list', 'track.generation.get', 'track.generation.results', 'track.generate.preview', 'track.generate', 'track.generation.cancel']);
+  'track.generation.list', 'track.generation.get', 'track.generation.results', 'track.generate.preview', 'track.generate', 'track.generation.cancel',
+  // 训练：只放开查询与触发（数据集快照只能由已生成的数据集版本建立，训练任务只提交与取消）。
+  // 训练执行体不受影响：设备互斥、不可变快照、不计 API 预算、OOM 不自动重跑等约束都在引擎侧。
+  // 目录上传快照、任务重试/删除、权重登记与产物目录设置仍只由用户显式操作。
+  'dataset.version.list', 'dataset.version.get',
+  'training.dataset.list', 'training.dataset.get', 'training.dataset.create',
+  'training.job.preflight', 'training.job.create', 'training.job.list', 'training.job.get', 'training.job.metrics', 'training.job.cancel']);
 
 export function assertAgentCommand(command: unknown, payload?: unknown): asserts command is string {
   // 人工真值和复核结论只能由用户显式提交，不能随界面白名单自动开放给模型。
   if (typeof command !== 'string' || !agentCommands.has(command)) throw new DesktopError('AGENT_COMMAND_DENIED', '此操作不在 Agent 工具范围内');
   if (command === 'evaluationSet.get' && payload && typeof payload === 'object' && Object.hasOwn(payload, 'versionId')) {
     throw new DesktopError('AGENT_COMMAND_DENIED', 'Agent 仅可读取评测集摘要，不能读取人工真值清单');
+  }
+  // 训练数据快照只能来自已生成的数据集版本：上传目录、导出记录等来源需要用户先在选择器里授权路径。
+  if (command === 'training.dataset.create' && payload && typeof payload === 'object'
+    && (payload as Record<string, unknown>).source !== 'version') {
+    throw new DesktopError('AGENT_COMMAND_DENIED', 'Agent 只能从已生成的数据集版本建立训练快照');
   }
   if (command.startsWith('flow.') && payload && typeof payload === 'object') {
     const input = payload as Record<string, unknown>;

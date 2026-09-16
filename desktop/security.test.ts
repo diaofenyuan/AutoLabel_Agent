@@ -378,6 +378,24 @@ test('诊断不保留令牌、认证头、URL 与个人绝对路径', () => {
   for (const secret of ['abc123', 'topsecret', 'example.com', 'private']) assert.equal(result.includes(secret), false);
 });
 
+test('训练只放开触发与查询，数据快照必须来自已生成的数据集版本', () => {
+  const parameters = { epochs: 10, device: 'gpu-auto', batch: 'auto' };
+  assert.doesNotThrow(() => validateCommand('training.job.create', { datasetId: 'd', parameters, confirm: true }));
+  assert.throws(() => validateCommand('training.job.create', { datasetId: 'd', parameters }), /格式不正确/);
+  assert.throws(() => validateCommand('training.job.create', { datasetId: 'd', confirm: true, datasetDir: 'C:\\private' }), /格式不正确/);
+  assert.doesNotThrow(() => validateCommand('training.dataset.create', { projectId: 'p', source: 'version', versionId: 'v' }));
+  for (const command of ['dataset.version.list', 'dataset.version.get', 'training.dataset.list', 'training.dataset.get', 'training.job.preflight',
+    'training.job.create', 'training.job.list', 'training.job.get', 'training.job.metrics', 'training.job.cancel']) {
+    assert.doesNotThrow(() => assertAgentCommand(command, {}), command);
+  }
+  assert.doesNotThrow(() => assertAgentCommand('training.dataset.create', { source: 'version', versionId: 'v' }));
+  for (const source of ['upload', 'export']) assert.throws(() => assertAgentCommand('training.dataset.create', { source, versionId: 'v' }), /数据集版本/);
+  for (const command of ['dataset.version.create', 'dataset.version.preflight', 'dataset.version.cancel', 'dataset.version.delete', 'dataset.version.items',
+    'training.job.retry', 'training.job.delete', 'training.job.registerModel', 'training.job.log', 'training.root.save']) {
+    assert.throws(() => assertAgentCommand(command, {}), /Agent 工具范围/, command);
+  }
+});
+
 test('媒体抽帧和筛选严格校验范围，不接受私有路径与多种抽帧模式混用', () => {
   const input = { projectId: 'project', sourcePath: 'C:\\chosen.mp4', parameters: { mode: 'interval', intervalSeconds: 1, ranges: [{ start: 0, end: 3 }] } };
   assert.doesNotThrow(() => validateCommand('media.video.create', input));

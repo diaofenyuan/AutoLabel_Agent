@@ -4,6 +4,7 @@ import { FLOW_TOOL_DEFINITIONS } from './flow-tools.ts';
 import { LOCAL_TOOL_DEFINITIONS } from './inference-tools.ts';
 import { MEDIA_TOOL_DEFINITIONS } from './media-tools.ts';
 import { TRACK_TOOL_DEFINITIONS } from './track-tools.ts';
+import { TRAINING_TOOL_DEFINITIONS } from './training-tools.ts';
 import type { AgentContext, EngineClient } from './types.ts';
 import { AgentError, fields, id, ids, integer, object, text } from './validation.ts';
 
@@ -215,6 +216,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ...LOCAL_TOOL_DEFINITIONS,
   ...MEDIA_TOOL_DEFINITIONS,
   ...TRACK_TOOL_DEFINITIONS,
+  ...TRAINING_TOOL_DEFINITIONS,
   {
     name: 'project_summary', description: '读取当前项目类别、素材数量和标注状态。',
     parameters: schema({}), mutation: false,
