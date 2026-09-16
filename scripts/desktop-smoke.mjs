@@ -214,6 +214,9 @@ if (annotateOnly) {
   // 文案不再宣传不可用快捷键。
   assert.equal(byCheck.get('shortcut-copy-matches-capability')?.helpGhosts, 0);
   assert.equal(byCheck.get('shortcut-copy-matches-capability')?.settingsGhosts, 0);
+  // AI 能力验证必须如实说明测试图尺寸与结论边界，超时设置要能被找到。
+  assert.equal(byCheck.get('ai-capability-honesty')?.rows, 6);
+  assert.equal(byCheck.get('ai-capability-honesty')?.timeoutDiscoverable, true);
   console.log(`素材人工标注入口与文案一致性检查通过：${output}`); process.exit(0);
 }
 if (trainingUiOnly) { assert.equal(result.passed, true); assert.ok(['ready', 'invalid'].includes(result.dataset.status)); assert.equal(result.readOnly, true); console.log(`训练改由对话发起后的只读看板检查通过：${output}`); process.exit(0); }

@@ -170,6 +170,18 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
     }
     checks.push({ check: 'shortcut-copy-matches-capability', helpGhosts: 0, settingsGhosts: 0 });
 
+    // ===== AI 配置：能力验证要如实说明测试图很小，且超时设置可找到 =====
+    await js(`[...document.querySelectorAll('.settings-tabs button')].find(b=>b.innerText.trim()==='软件 AI 配置').click()`);
+    await waitFor(`!!document.querySelector('.capability-table')`);
+    const capabilityRows = await js<string[]>(`[...document.querySelectorAll('.capability-row>span:first-child')].map(e=>e.innerText.trim())`);
+    assert.deepEqual(capabilityRows, ['连接', '文本输入', '图片输入', '多图输入', '结构化输出', '工具调用'], `能力清单应与引擎支持的一致，实际：${json(capabilityRows)}`);
+    const capabilityNote = await js<string>(`document.querySelector('.model-section>.muted')?.innerText ?? ''`);
+    assert.ok(capabilityNote.includes('64×64'), `能力验证必须说明测试图尺寸，实际：${capabilityNote}`);
+    assert.ok(capabilityNote.includes('不代表真实尺寸的大图不会超时'), `能力验证必须说明结论边界，实际：${capabilityNote}`);
+    // 超时藏在折叠区里也要能被找到：折叠按钮文案要写清里面有什么。
+    assert.ok(await js<boolean>(`[...document.querySelectorAll('.advanced-toggle')].some(b=>b.innerText.includes('超时'))`), '高级请求配置的入口应写明包含超时设置');
+    checks.push({ check: 'ai-capability-honesty', rows: capabilityRows.length, timeoutDiscoverable: true });
+
     await writeFile(output, json({ checks, passed: true }));
   } catch (error) {
     await writeFile(output.replace(/\.json$/, '-failure.png'), (await window.webContents.capturePage()).toPNG());
