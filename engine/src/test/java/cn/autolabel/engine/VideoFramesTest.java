@@ -48,7 +48,8 @@ public final class VideoFramesTest {
     private static void geometry()throws Exception{
         Path rotated=root.resolve("rotated.mp4"),mirrored=root.resolve("mirrored.mp4"),reference=root.resolve("autorotated.png"),widePixels=root.resolve("wide-pixels.mp4"),duplicatePts=root.resolve("duplicate-pts.mkv");
         run("-display_rotation","90","-i",vfr.toString(),"-map","0:v:0","-c","copy",rotated.toString());
-        run("-display_hflip","-i",vfr.toString(),"-map","0:v:0","-c","copy",mirrored.toString());
+        // 90/-90 的显示矩阵第三列是平移量，且随画面尺寸变化：这是手机竖屏视频被拒的真实原因。
+        run("-display_rotation","90","-display_hflip","-i",vfr.toString(),"-map","0:v:0","-c","copy",mirrored.toString());
         run("-i",rotated.toString(),"-frames:v","1","-c:v","png",reference.toString());
         run("-f","lavfi","-i","testsrc2=duration=0.5:size=64x48:rate=10","-vf","setsar=2/1","-c:v","libx264","-threads","1",widePixels.toString());
         run("-f","lavfi","-i","testsrc2=duration=0.5:size=64x48:rate=10","-vf","setpts=floor(N/2)","-fps_mode","passthrough","-c:v","ffv1","-threads","1",duplicatePts.toString());
@@ -57,10 +58,97 @@ public final class VideoFramesTest {
             VideoFrames.Extraction result=helper.extract(fixed,root.resolve("rotated-output"),null);JsonObject item=items(result).getFirst();BufferedImage expected=ImageIO.read(reference.toFile()),actual=ImageIO.read(result.manifestPath().getParent().resolve(Json.required(item,"imagePath")).toFile());
             check(expected.getWidth()==actual.getWidth()&&expected.getHeight()==actual.getHeight(),"actual rotated dimensions match ffmpeg autorotation");int unequal=0;for(int y=0;y<actual.getHeight();y++)for(int x=0;x<actual.getWidth();x++)if(expected.getRGB(x,y)!=actual.getRGB(x,y))unequal++;expected.flush();actual.flush();check(unequal==0,"explicit rotation pixels match default decoder display orientation");
             check(Json.array(fixed,"codedVideoToFrame").equals(Json.arr(0.0,1.0,0.0,-1.0,0.0,64.0)),"coded video to extracted frame matrix retains pixel-edge convention");rejects("video_rotation_unsupported",()->helper.inspect(request(mirrored),10000));
+            angles(helper);
             JsonObject resized=request(vfr);resized.add("outputSize",Json.obj("width",32,"height",32,"fit","contain"));resized.addProperty("format","jpg");JsonObject scaled=helper.inspect(resized,10000);VideoFrames.Extraction small=helper.extract(scaled,root.resolve("scaled-jpeg"),null);check(Json.integer(scaled,"outputWidth",0)==32&&Json.integer(scaled,"outputHeight",0)==24&&items(small).size()==4,"aspect-preserving resized JPEG has correct time identity");
             JsonObject pixels=request(widePixels);pixels.add("ranges",Json.arr(Json.obj("start",0,"end",0.3)));JsonObject square=helper.inspect(pixels,10000);check(Json.integer(square,"outputWidth",0)==128&&Json.integer(square,"outputHeight",0)==48&&Json.array(square,"codedVideoToFrame").equals(Json.arr(2.0,0.0,0.0,0.0,1.0,0.0)),"non-square SAR is represented by pixel scaling and matrix");check(items(helper.extract(square,root.resolve("square-pixels"),null)).size()==2,"non-square pixel input produces actual normalized frames");
             JsonObject duplicate=request(duplicatePts);duplicate.add("ranges",Json.arr(Json.obj("start",0,"end",0.5)));JsonObject badTime=helper.inspect(duplicate,10000);rejects("video_timestamp_invalid",()->helper.extract(badTime,root.resolve("bad-time"),null));check(!Files.exists(root.resolve("bad-time/complete.json")),"real duplicate timestamps cannot be marked complete");
         }
+    }
+
+    /**
+     * 显示矩阵判定专项：标准 4 个角度都必须识别，且第三列平移量（随画面尺寸缩放的真实值，
+     * 如 2160×65536=141557760）不得影响判定；镜像与非标准角度必须继续拒绝。
+     */
+    private static void angles(VideoFrames helper)throws Exception{
+        // 标准 4 个角度：逐一生成真实带 display matrix 的视频并核对识别结果与输出尺寸。
+        for(int degrees:new int[]{0,90,180,270}){
+            Path video=root.resolve("angle-"+degrees+".mp4");
+            run("-display_rotation",Integer.toString(degrees),"-i",vfr.toString(),"-map","0:v:0","-c","copy",video.toString());
+            JsonObject fixed=helper.inspect(request(video),10000);
+            check(Json.integer(fixed,"rotation",-1)==((degrees%360)+360)%360,"standard "+degrees+" degree matrix is accepted");
+            boolean swap=degrees%180!=0;
+            check(Json.integer(fixed,"outputWidth",0)==(swap?48:64)&&Json.integer(fixed,"outputHeight",0)==(swap?64:48),"standard "+degrees+" degree matrix swaps output dimensions exactly when it should");
+            check(determinant(video)>0,"accepted matrix of "+degrees+" degrees is not mirrored");
+        }
+        // 真实手机竖屏的显示矩阵带非零平移列（2160×65536=141557760），这是被拒的直接原因。
+        // 平移列不参与判定，同一方向无论平移多少都必须识别为同一角度；用真实值直接核对，
+        // 不依赖 ffmpeg 是否写出该平移。
+        check(matrixRotation(0,65536,141557760,-65536,0,0,0,0,1073741824)==270,"real 141557760 translation does not change the 270 degree identity");
+        check(matrixRotation(0,65536,0,-65536,0,0,0,0,1073741824)==270,"zero translation yields the same 270 degree identity");
+        check(matrixRotation(-65536,0,-131072,0,-65536,131072,0,0,1073741824)==180,"180 degree matrix with translations stays 180 degrees");
+        check(matrixRotation(-65536,0,-131072,0,65536,131072,0,0,1073741824)==-1,"mirrored matrix is not reported as a supported angle");
+        check(matrixRotation(46340,-46340,0,46340,46340,0,0,0,1073741824)==-1,"45 degree matrix is not reported as a supported angle");
+        // 镜像必须拒绝。hflip/vflip 的行列式为负：vflip 的 ffprobe rotation 报告为 0，
+        // 所以按 rotation 字段判定会漏掉它，只有旋转子矩阵比对才能拦住。
+        for(String[] item:List.of(new String[]{"hflip","-display_hflip"},new String[]{"vflip","-display_vflip"})){
+            Path video=root.resolve("mirror-"+item[0]+".mp4");
+            run(item[1],"-i",vfr.toString(),"-map","0:v:0","-c","copy",video.toString());
+            check(determinant(video)<0,"real "+item[0]+" fixture is an actual mirror");
+            rejects("video_rotation_unsupported",()->helper.inspect(request(video),10000));
+        }
+        // 非标准角度必须拒绝：旋转子矩阵不再是 0/±65536 的组合。
+        Path odd=root.resolve("angle-45.mp4");
+        run("-display_rotation","45","-i",vfr.toString(),"-map","0:v:0","-c","copy",odd.toString());
+        check(determinant(odd)>0,"45 degree fixture is not a mirror but is still unsupported");
+        rejects("video_rotation_unsupported",()->helper.inspect(request(odd),10000));
+    }
+    /**
+     * 复刻 rotation() 的比对规则：只比旋转/镜像子矩阵与 a33，跳过平移列与两个恒定 0。
+     * 返回角度，不支持时返回 -1。矩阵按行主序给出 9 个元素。
+     */
+    private static int matrixRotation(long...values){
+        long[][] supported={{65536,0,0,0,65536,0,0,0,1073741824},{0,-65536,0,65536,0,0,0,0,1073741824},{-65536,0,0,0,-65536,0,0,0,1073741824},{0,65536,0,-65536,0,0,0,0,1073741824}};
+        int[] direction={0,1,3,4,8};
+        for(int i=0;i<supported.length;i++){boolean same=true;for(int j:direction)same&=values[j]==supported[i][j];if(same)return i*90;}
+        return -1;
+    }
+    /** 直接读 ffprobe 的 displaymatrix 文本并返回第 3 行第 1 列（索引 6，x 方向平移分量）。 */
+    private static long translation(Path video)throws Exception{
+        for(String line:matrixText(video).strip().split("\\R"))if(line.contains("00000002"))return Long.parseLong(line.substring(line.indexOf(':')+1).strip().split("\\s+")[0]);
+        return 0;
+    }
+    /** 旋转子矩阵 a·e − b·d 的符号：正为纯旋转，负为镜像（含 180 度旋转叠加镜像）。 */
+    private static long determinant(Path video)throws Exception{
+        List<Long> values=matrix(video);
+        return values.get(0)*values.get(4)-values.get(1)*values.get(3);
+    }
+    /**
+     * 读取显示矩阵的 9 个数值；无显示矩阵时按单位矩阵处理（尺度 65536 的 Q32 定点）。
+     * 注意 -show_entries stream_side_data=displaymatrix 只回 displaymatrix 字段本身，
+     * 不含 side_data_type，因此这里不能按类型筛选。
+     */
+    private static List<Long> matrix(Path video)throws Exception{
+        String text=matrixText(video);
+        if(text.isBlank())return List.of(65536L,0L,0L,0L,65536L,0L,0L,0L,1073741824L);
+        List<Long> numbers=new ArrayList<>();for(String line:text.strip().split("\\R")){int colon=line.indexOf(':');
+            for(String value:line.substring(colon+1).strip().split("\\s+"))numbers.add(Long.parseLong(value));}
+        return numbers;
+    }
+    /** 取第一条 display matrix 的原始文本；没有则返回空串。 */
+    private static String matrixText(Path video)throws Exception{
+        String json=probe("-show_entries","stream_side_data=displaymatrix","-of","json",video.toString());
+        JsonObject stream=Json.parse(json).getAsJsonArray("streams").get(0).getAsJsonObject();
+        for(JsonElement element:Json.array(stream,"side_data_list")){JsonObject side=element.getAsJsonObject();
+            if(side.has("displaymatrix"))return Json.required(side,"displaymatrix");}
+        return "";
+    }
+    private static String probe(String...args)throws Exception{
+        List<String> command=new ArrayList<>(List.of(ffprobe.toString(),"-hide_banner","-v","error"));command.addAll(List.of(args));
+        Process process=new ProcessBuilder(command).redirectErrorStream(true).start();
+        String output=new String(process.getInputStream().readNBytes(1024*1024),StandardCharsets.UTF_8);
+        if(!process.waitFor(30,TimeUnit.SECONDS)){process.destroyForcibly();throw new AssertionError("ffprobe timed out");}
+        if(process.exitValue()!=0)throw new AssertionError(output);
+        return output;
     }
 
     private static void limitsAndCancellation()throws Exception{

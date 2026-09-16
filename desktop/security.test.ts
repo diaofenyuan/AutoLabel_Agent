@@ -412,7 +412,9 @@ test('媒体抽帧和筛选严格校验范围，不接受私有路径与多种�
   assert.throws(() => validateCommand('media.job.resolve', { jobId: 'job' }));
   for (const field of ['ffmpegPath', 'ffprobePath', 'mediaFfmpegPath', 'mediaFfprobePath']) assert.throws(() => validateCommand('settings.save', { settings: { desktop: { nested: { [field]: 'C:\\tool.exe' } } } }));
   assert.throws(() => assertAgentCommand('media.runtime.configure', { ffmpegPath: null, ffprobePath: null }));
-  assert.throws(() => assertAgentCommand('media.video.create', input));
+  // media.video.create 开放给 Agent 的前提是 PathGrants 只放行用户已授权（kind=video）的路径；
+  // 授权本身仍只能由文件选择器或拖拽产生，见下方「视频探测和创建只能读取原生视频选择授权」用例。
+  assert.doesNotThrow(() => assertAgentCommand('media.video.create', input));
   for (const command of ['media.job.get', 'media.job.list', 'media.video.frames', 'media.screening.result', 'media.screening.create']) assert.doesNotThrow(() => assertAgentCommand(command));
   const definition = { version: 1, name: '媒体导入', steps: [{ id: 'import.1', kind: 'import', enabled: true, parameters: { mediaJobId: 'job' } }] };
   const flow = { projectId: 'project', definition, input: { source: 'project', selection: 'all' } };

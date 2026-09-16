@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Image as ImageIcon } from 'lucide-react';
+import { Image as ImageIcon, Film } from 'lucide-react';
 import { useApp } from './context';
 import { request, errorMessage, getBridge } from './bridge';
 import { Composer } from './ui';
@@ -27,6 +27,8 @@ export default function ChatHome() {
   const { projects, openProject, refreshProjects, notify, setMediaJob, setMediaTaskId, prefs, savePrefs, providers, navigate } = useApp();
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  // 欢迎页还没有项目时，用户点「选择视频抽帧」要先有一个项目承载抽帧产物；这里存下这次点击建好的项目与选中路径。
+  const [videoStart, setVideoStart] = useState<{ projectId: string; path: string } | null>(null);
   const drop = useChatFileDrop();
   // 欢迎页还没有会话，选择模型与深度即写入默认值：新建会话与任务都以它为初值。
   const choice = { providerId: prefs.chatProviderId, model: prefs.chatModel, depth: prefs.chatThinkingDepth ?? 'standard' };
@@ -71,6 +73,22 @@ export default function ChatHome() {
     finally { setBusy(false); }
   }
 
+  /** 「选择视频抽帧」：先选视频，再按视频所在文件夹建项目，随后进入抽帧面板。与图片导入同一条授权链路。 */
+  async function selectVideo() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const paths = await (await getBridge()).chooseFiles({ kind: 'video' });
+      if (!paths.length) return;
+      const created = await request<Project>('project.create', { name: folderName(paths[0]), taskType: 'detect' });
+      // 先刷新项目列表：侧栏会话是按项目归组的，列表落后会把新项目的会话显示成「项目已删除」。
+      await refreshProjects();
+      // 抽帧在面板里检查和设参，此处只把项目与已授权路径交给它，不预先建任务。
+      setVideoStart({ projectId: created.id, path: paths[0] });
+    } catch (e) { notify(errorMessage(e), true); }
+    finally { setBusy(false); }
+  }
+
   return <div className={`chat-home ${drop.active ? 'drop-active' : ''}`} {...drop.handlers}>
     <DropOverlay visible={drop.active} />
     <div className="chat-welcome">
@@ -78,6 +96,7 @@ export default function ChatHome() {
       <AiSetupNotice />
       <div className="chat-suggestions" aria-label="建议">
         <button disabled={busy} onClick={() => void importImages()}><ImageIcon size={14} />导入图片开始标注</button>
+        <button disabled={busy} onClick={() => void selectVideo()}><Film size={14} />选择视频抽帧</button>
         {lastProject && <button disabled={busy} onClick={() => void openProject(lastProject).catch(e => notify(errorMessage(e), true))}>继续 {lastProject.name}</button>}
       </div>
       <p className="muted tiny">也可以把图片或视频直接拖进来，会新建项目并入库；长任务在对话里选流程发起。</p>
@@ -96,12 +115,17 @@ export default function ChatHome() {
         <span className="muted tiny">这里的默认值用于新建的对话与任务</span>
       </div>
     </footer>
-    {drop.video && <VideoImport key={drop.video.path} projectId={drop.video.projectId} initialSourcePath={drop.video.path} onClose={drop.closeVideo}
-      onCreated={(job, temporarySource) => {
-        setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource }); drop.closeVideo();
-        // 欢迎页拖入视频后同样送到概览：抽帧在后台跑，用户先看到素材落点，再回对话说要标什么。
-        notify('已创建抽帧任务，素材入库后出现在这里；进度可在侧栏「任务」里查看。');
-        void navigate('overview');
-      }} />}
+    {/* 拖入视频与点击「选择视频抽帧」都走同一个抽帧面板：区别只在于项目是拖放时建的还是按钮提前建好的。 */}
+    {(drop.video ?? videoStart) && (() => {
+      const source = drop.video ?? videoStart!;
+      const close = () => { if (drop.video) drop.closeVideo(); else setVideoStart(null); };
+      return <VideoImport key={source.path} projectId={source.projectId} initialSourcePath={source.path} onClose={close}
+        onCreated={(job, temporarySource) => {
+          setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource }); close();
+          // 抽帧在后台跑，用户先看到素材落点，再回对话说要标什么。
+          notify('已创建抽帧任务，素材入库后出现在这里；进度可在侧栏「任务」里查看。');
+          void navigate('overview');
+        }} />;
+    })()}
   </div>;
 }

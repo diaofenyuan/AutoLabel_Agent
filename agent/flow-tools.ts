@@ -23,7 +23,7 @@ const transformOperations = { type: ['array', 'null'], maxItems: 30, items: { an
   schema({ kind: choice(['tile']), width: dimension, height: dimension, overlapX: number(0, 19999), overlapY: number(0, 19999) }),
 ] } };
 const stepParameters = {
-  import: { mediaJobId: { ...nullableString, description: '用户已在媒体任务中完成的视频抽帧任务；必须同项目且产物已提交，不接受文件路径。' } },
+  import: { mediaJobId: { ...nullableString, description: '用户已完成的视频抽帧任务；须同项目且产物已提交。视频抽帧本身需用户点击「选择视频抽帧」或拖入视频发起，助手不能代选本地文件。此参数只接受任务标识，不接受文件路径。' } },
   transform: { operations: transformOperations, background: { type: ['string', 'null'], pattern: '^#[0-9a-fA-F]{6}$' } },
   local: { modelId: nullableString, modelVersion: number(1, 2147483647), device: { type: ['string', 'null'], pattern: '^(cpu|0|[1-9][0-9]{0,2})$' },
     classMap: { type: ['array', 'null'], maxItems: 10000, description: '逐一列出模型全部类别；忽略类别也须明确设 projectClassId 为 null。',
@@ -320,7 +320,7 @@ async function videoImport(jobId: string, env: ToolEnvironment, targetIds?: stri
     for (const frame of page.items) {
       if (frame.sourceVideoId !== source.sourceVideoId) throw new AgentError('MEDIA_RESPONSE_INVALID', '视频帧来源与媒体任务不一致');
       if (typeof frame.assetId !== 'string' || !scope.has(frame.assetId))
-        throw new AgentError('MEDIA_IMPORT_SCOPE_REQUIRED', '此视频包含未入库或当前范围外的帧，请先在媒体界面导入并调整助手素材范围');
+        throw new AgentError('MEDIA_IMPORT_SCOPE_REQUIRED', '此视频包含未入库或当前范围外的帧，请在素材任务详情里将其导入项目，并把助手素材范围调到包含这些帧');
       const frameId = id(frame.frameId, '视频帧');
       if (seen.has(frameId)) throw new AgentError('MEDIA_RESPONSE_INVALID', '视频帧跨页重复'); seen.add(frameId);
     }

@@ -90,6 +90,7 @@ final class ProjectDeletion {
 
     JsonObject delete(JsonObject p)throws Exception{
         String pid=Json.required(p,"projectId");
+        // 确认名称改为可选：界面已不再要求输入，但保留显式传入时的比对能力，兼容既有调用方与脚本。
         String confirm=Json.str(p,"confirmName","");
         boolean removeManaged=Json.bool(p,"removeManagedFiles",false);
         List<Path> files=new ArrayList<>();
@@ -100,7 +101,7 @@ final class ProjectDeletion {
             if(row==null)throw new ApiError(404,"project_not_found","项目不存在或已删除。");
             JsonObject project=Json.parse(Json.required(row,"data"));
             String name=Json.str(project,"name","");
-            if(!name.equals(confirm))throw new ApiError(409,"project_confirm_mismatch","项目名称输入不一致，未执行删除。");
+            if(!confirm.isEmpty()&&!name.equals(confirm))throw new ApiError(409,"project_confirm_mismatch","项目名称输入不一致，未执行删除。");
             JsonArray blockers=blockers(c,pid);
             if(!blockers.isEmpty())throw new ApiError(409,"project_delete_blocked","项目仍有进行中的任务，请先结束或取消。");
             if(removeManaged)files.addAll(managedFiles(c,pid));

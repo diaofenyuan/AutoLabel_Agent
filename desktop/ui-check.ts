@@ -261,7 +261,7 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   })()`);
   if (reducedMotion.enabled.root !== 'true' || reducedMotion.enabled.checked !== 'true' || reducedMotion.disabled.root !== 'false' || reducedMotion.disabled.checked !== 'false') throw new Error('减少动画开关未正确控制页面动画');
   results.push({check:'reduced-motion', ...reducedMotion});
-  // R5 项目删除：必须给出影响清单与名称确认，名称不符时不得继续到删除选项。
+  // R5 项目删除：必须给出影响清单，且不再要求输入项目名，可直接进入删除选项。
   const removal = await window.webContents.executeJavaScript(`(async()=>{
     const button=[...document.querySelectorAll('button[title="删除项目…"]')][0];
     if(!button)return {opened:false};
@@ -272,20 +272,20 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
     const tabs=[...dialog.querySelectorAll('.tabs button')].map(node=>({label:node.innerText.trim(),disabled:node.disabled}));
     const counts=dialog.querySelector('.deletion-counts')?.innerText.trim()??'';
     const managed=dialog.innerText.includes('受管文件占用');
-    const next=[...dialog.querySelectorAll('button')].find(node=>node.innerText.trim()==='下一步：输入项目名');
+    const next=[...dialog.querySelectorAll('button')].find(node=>node.innerText.trim()==='下一步：删除选项');
+    const nextEnabled=!!next&&!next.disabled;
     next?.click();
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-    const input=dialog.querySelector('[aria-label="确认项目名称"]');
-    const setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
-    const submit=()=>[...dialog.querySelectorAll('button')].find(node=>node.innerText.trim()==='下一步：删除选项');
-    setter.call(input,'错误的项目名'); input.dispatchEvent(new Event('input',{bubbles:true}));
-    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-    const mismatched=!!submit()?.disabled;
-    return {opened:true,tabs,counts:counts.split('\\n').slice(0,3),managed,mismatched};
+    // 删除选项页应直接可达，且不再出现名称输入框。
+    const nameInput=!!dialog.querySelector('[aria-label="确认项目名称"]');
+    const options=dialog.innerText.includes('同时删除受管文件');
+    return {opened:true,tabs,counts:counts.split('\\n').slice(0,3),managed,nextEnabled,nameInput,options};
   })()`);
-  if (!removal.opened || removal.tabs?.length !== 3 || removal.tabs.some((tab: { label: string }, index: number) => !tab.label.startsWith(`${index + 1}. `))) throw new Error('项目删除弹窗步骤不完整');
+  if (!removal.opened || removal.tabs?.length !== 2 || removal.tabs.some((tab: { label: string }, index: number) => !tab.label.startsWith(`${index + 1}. `))) throw new Error('项目删除弹窗步骤不完整');
   if (!removal.managed || !removal.counts?.length) throw new Error('项目删除弹窗缺少影响清单');
-  if (!removal.mismatched) throw new Error('项目名称不符时不应允许进入删除选项');
+  if (!removal.nextEnabled) throw new Error('影响清单页应可直接进入删除选项');
+  if (removal.nameInput) throw new Error('项目删除不应再要求输入项目名称');
+  if (!removal.options) throw new Error('删除选项页缺少删除范围选项');
   results.push({check:'project-deletion', ...removal});
   await window.webContents.executeJavaScript(`(()=>{const dialog=document.querySelector('dialog[open]');
     [...(dialog?.querySelectorAll('button')??[])].find(node=>node.innerText.trim()==='取消'||node.innerText.trim()==='上一步')?.click();})()`);

@@ -1,7 +1,7 @@
 {
   "name": "autolabel-assistant",
   "productName": "自动标注小助手",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "本地图片管理、人工标注与 AI 辅助标注桌面工具",
   "author": "AutoLabel",
   "private": true,

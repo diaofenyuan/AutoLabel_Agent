@@ -12,6 +12,9 @@ tmp/
 *.pyc
 *.tsbuildinfo
 
+# PowerShell 重定向误写产生的空名/特殊名文件（曾误提交过 $null）
+$null
+
 # 本地环境与编辑器
 .env
 .env.*
@@ -19,6 +22,10 @@ tmp/
 .idea/
 .vscode/
 .DS_Store
+
+# 本地工具产物：IDE 审计日志/记忆与偏好画像，属于个人数据而非项目源码
+.workbuddy/
+.commandcode/
 
 # 用户明确不上传的需求/计划文件
 SPEC.md

@@ -6,7 +6,9 @@ const root = process.cwd();
 const installer = path.join(root, 'build', 'installer.nsh');
 const builder = path.join(root, 'build', 'electron-builder.cjs');
 const releaseDir = path.resolve(process.env.AUTOLABEL_RELEASE_DIR || path.join(root, 'build', 'release'));
-const packageFile = path.join(releaseDir, 'AutoLabel-Setup-0.1.0-x64.exe');
+// 安装包文件名含版本号，从 package.json 推导而非硬编码，避免递增版本后此处失配。
+const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const packageFile = path.join(releaseDir, `AutoLabel-Setup-${version}-x64.exe`);
 const unpackedExe = path.join(releaseDir, 'win-unpacked', '自动标注小助手.exe');
 
 const requireFile = (file) => {

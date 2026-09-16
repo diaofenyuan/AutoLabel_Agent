@@ -23,8 +23,27 @@ public final class EngineTest {
     static JsonObject command(Engine e,String command,JsonObject payload)throws Exception{return obj(e.command(command,payload));}
     static JsonObject command(Engine e,String command)throws Exception{return command(e,command,new JsonObject());}
     static void error(String code,Runnable runnable){try{runnable.run();throw new AssertionError("Expected "+code);}catch(ApiError e){check(e.code.equals(code),"Expected "+code+" got "+e.code);}}
+    /**
+     * 每次验证都在 engine/build/verification 下新建 run-<时间戳>，长期累积会占用数 GB。
+     * 这里只保留最近若干次运行（失败运行同样计数），超出部分按名字里的时间戳从旧到新删除。
+     * 判定失败不阻断测试：清理属于卫生工作，不应让一次验证因为目录被占用而失败。
+     */
+    private static void pruneVerification(Path base,int keep){
+        try{
+            List<Path> runs=new ArrayList<>();
+            try(var entries=Files.list(base)){entries.filter(Files::isDirectory).filter(path->path.getFileName().toString().startsWith("run-")).forEach(runs::add);}
+            runs.sort(Comparator.comparingLong((Path path)->{try{return Long.parseLong(path.getFileName().toString().substring(4));}catch(NumberFormatException unknown){return 0L;}}).reversed());
+            for(int i=keep;i<runs.size();i++){
+                Path stale=runs.get(i);
+                try(var walk=Files.walk(stale)){for(Path path:walk.sorted(Comparator.reverseOrder()).toList())try{Files.deleteIfExists(path);}catch(IOException ignored){}}
+            }
+        }catch(IOException ignored){}
+    }
     public static void main(String[] args)throws Exception{
-        root=Path.of("engine/build/verification").toAbsolutePath().resolve("run-"+System.currentTimeMillis());Files.createDirectories(root);
+        Path base=Path.of("engine/build/verification").toAbsolutePath();
+        // 先创建本次运行目录再裁剪，否则稳态会是 keep+1（本次运行总在裁剪之后新建）。
+        root=base.resolve("run-"+System.currentTimeMillis());Files.createDirectories(root);
+        pruneVerification(base,20);
         if(args.length>0&&args[0].equals("training-datasets")){TrainingDatasetsTest.run(root);System.out.println("PASS "+assertions+" training dataset assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("materials-root")){MaterialsRootTest.run(root);System.out.println("PASS "+assertions+" materials root assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("training-root")){TrainingRootTest.run(root);System.out.println("PASS "+assertions+" training root assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}

@@ -1,6 +1,6 @@
 import type { MediaJob, ScreeningParameters, ScreeningSection } from '../shared/media.ts';
 import type { ToolDefinition, ToolEnvironment } from './tools.ts';
-import { AgentError, fields, id, ids, integer, object } from './validation.ts';
+import { AgentError, fields, id, ids, integer, object, text } from './validation.ts';
 
 const schema = (properties: Record<string, unknown>) => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 const nullableBoolean = { type: ['boolean', 'null'] };
@@ -39,6 +39,24 @@ function uniqueIds(value: unknown, label: string, allowEmpty = false) {
 }
 function allowed(env: ToolEnvironment) {
   return env.context.assetIds == null ? undefined : new Set(uniqueIds(env.context.assetIds, '助手素材范围'));
+}
+// 抽帧时间参数用浮点（间隔秒、目标帧率），不能走 integer；非有限值一律拒绝，避免 NaN/Infinity 进入引擎。
+function finite(value: unknown, label: string, minimum: number, maximum: number) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum)
+    throw new AgentError('INVALID_ARGUMENT', `${label}超出允许范围`);
+  return value;
+}
+// 时间段必须有序且不重叠：与桌面校验同规则，避免引擎侧报出更难理解的错误。
+function videoRanges(value: unknown) {
+  if (!Array.isArray(value) || !value.length || value.length > 32) throw new AgentError('INVALID_ARGUMENT', '时间段必须为 1～32 段');
+  let previousEnd = 0;
+  return value.map((item, index) => {
+    const raw = object(item, '时间段'), start = finite(raw.start, '时间段起点', 0, 604800), end = finite(raw.end, '时间段终点', 0, 604800);
+    if (start >= end) throw new AgentError('INVALID_ARGUMENT', '时间段结束值须大于开始值');
+    if (index && start < previousEnd) throw new AgentError('INVALID_ARGUMENT', '时间段须按时间排序且不能重叠');
+    previousEnd = end;
+    return { start, end };
+  });
 }
 function assertScope(assetIds: string[], env: ToolEnvironment) {
   const scope = allowed(env);
@@ -93,7 +111,7 @@ export async function completedVideoJob(env: ToolEnvironment, jobId: string): Pr
   const result = await mediaJob(env, jobId);
   if (result.kind !== 'video_extract') throw new AgentError('MEDIA_JOB_KIND_INVALID', '流程导入需要已提取的视频任务');
   if (result.status !== 'completed' || !result.artifactCommitted)
-    throw new AgentError('MEDIA_ARTIFACT_REQUIRED', '视频任务尚未成功提交抽帧产物，请先在媒体任务中完成提取');
+    throw new AgentError('MEDIA_ARTIFACT_REQUIRED', '视频任务尚未成功提交抽帧产物，请等待现有任务完成后再导入');
   return result;
 }
 function jobSummary(value: MediaJob) {
@@ -186,7 +204,7 @@ function screeningRow(value: unknown, section: ScreeningSection, env: ToolEnviro
 }
 
 export const MEDIA_TOOL_DEFINITIONS: ToolDefinition[] = [
-  { name: 'list_media_jobs', description: '分页读取当前项目媒体任务的真实状态与提交标记。completed/ready 不代表素材已入库；assetsCommitted 才表示已入库。不会配置工具或读取文件路径。',
+  { name: 'list_media_jobs', description: '分页读取当前项目媒体任务的真实状态与提交标记。completed/ready 不代表素材已入库；assetsCommitted 才表示已入库。不会配置工具或读取文件路径。此工具只读：新建视频抽帧任务必须由用户点击「选择视频抽帧」或把视频拖进对话区发起，助手不能代选本地文件，也不要让用户去素材任务面板找创建入口。',
     parameters: schema({ kind: { type: ['string', 'null'], enum: [...kinds, null] }, offset: int(0, 2147483647), limit: int(1, 100) }), mutation: false,
     async execute(args, env) {
       fields(args, ['kind', 'offset', 'limit']);
@@ -195,6 +213,36 @@ export const MEDIA_TOOL_DEFINITIONS: ToolDefinition[] = [
       const records = result.items.map(value => job(value, env));
       if (new Set(records.map(value => value.id)).size !== records.length || args.kind != null && records.some(value => value.kind !== args.kind)) invalid('媒体任务分页重复或类型不匹配');
       return { ...pagination(result.total, offset, limit, records.length), items: records.map(jobSummary) };
+    } },
+  { name: 'create_video_job', description: '为一个已授权的视频提交抽帧任务，返回真实 job，需后续查询帧结果。sourcePath 必须是用户已通过「选择视频抽帧」或拖拽授权过的本地视频路径：助手不能自行指定任意本地文件，也不能凭已读到的任务信息反推路径；若用户尚未选择文件，应提示其先选择，不要把路径猜测出来提交。',
+    parameters: schema({ sourcePath: { type: 'string', minLength: 1, maxLength: 32767 }, mode: { type: 'string', enum: ['interval', 'every_n', 'fps'] },
+      intervalSeconds: { type: ['number', 'null'], minimum: 0.001, maximum: 604800 }, everyNFrames: int(1, 1000000),
+      targetFps: { type: ['number', 'null'], minimum: 0.001, maximum: 240 },
+      ranges: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'object', properties: { start: { type: 'number', minimum: 0 }, end: { type: 'number', minimum: 0 } },
+        required: ['start', 'end'], additionalProperties: false } },
+      streamIndex: int(0, 65535), format: { type: ['string', 'null'], enum: ['png', 'jpg', null] }, jpegQuality: int(2, 31),
+      maxFrames: int(1, 10000), timeoutMs: int(1, 86400000) }), mutation: true,
+    async execute(args, env) {
+      fields(args, ['sourcePath', 'mode', 'intervalSeconds', 'everyNFrames', 'targetFps', 'ranges', 'streamIndex', 'format', 'jpegQuality', 'maxFrames', 'timeoutMs']);
+      const sourcePath = text(args.sourcePath, '视频路径', 32767);
+      // 抽帧模式三选一，与桌面校验保持一致：混用会被引擎拒绝，这里提前给出可读原因。
+      const mode = args.mode as string, parameters: Record<string, unknown> = { mode };
+      if (mode === 'interval') parameters.intervalSeconds = finite(args.intervalSeconds, '抽帧间隔', 0.001, 604800);
+      else if (mode === 'every_n') parameters.everyNFrames = integer(args.everyNFrames, '抽帧帧间隔', 1, 1000000);
+      else if (mode === 'fps') parameters.targetFps = finite(args.targetFps, '目标帧率', 0.001, 240);
+      else throw new AgentError('INVALID_ARGUMENT', '抽帧模式只支持 interval、every_n 或 fps');
+      if (args.ranges != null) parameters.ranges = videoRanges(args.ranges);
+      for (const [key, maximum] of [['streamIndex', 65535], ['jpegQuality', 31], ['maxFrames', 10000], ['timeoutMs', 86400000]] as const)
+        if (args[key] != null) parameters[key] = integer(args[key], key, key === 'jpegQuality' ? 2 : 1, maximum);
+      if (args.format != null) {
+        if (!['png', 'jpg'].includes(args.format as string)) throw new AgentError('INVALID_ARGUMENT', '输出格式只支持 png 或 jpg');
+        parameters.format = args.format;
+      }
+      // sourcePath 的授权校验由桌面侧 PathGrants 完成（仅接受 kind 为 video 的已授权路径），
+      // 引擎与 Agent 都不接受任意本地路径，这里不做也不应做路径推断。
+      const result = job(await mediaRequest(env, 'media.video.create', { projectId: projectId(env), sourcePath, parameters }), env);
+      if (result.kind !== 'video_extract') invalid('引擎没有返回视频抽帧任务');
+      return { submitted: true, job: jobSummary(result) };
     } },
   { name: 'get_media_job', description: '读取同项目媒体任务状态、真实进度和是否提交产物/入库，不将后台执行中或 ready 状态宣称已完成导入。', parameters: schema(jobProperties), mutation: false,
     async execute(args, env) { fields(args, ['jobId']); return jobSummary(await mediaJob(env, id(args.jobId, '媒体任务'))); } },

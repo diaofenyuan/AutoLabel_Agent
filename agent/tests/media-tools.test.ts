@@ -51,6 +51,10 @@ function fixture(context: AgentContext = {}) {
     if (command === 'asset.get') { if (state.abortAfterAsset) abort.abort(); return { id: payload.assetId, projectId: state.assetProject } as T; }
     if (command === 'media.screening.create') return { ...state.screening, status: 'queued', stage: 'queued', artifactCommitted: false,
       canCancel: true, parameters: payload.parameters, progress: { phase: 'queued', completed: 0, total: null } } as T;
+    // 抽帧创建返回与真实引擎同形状的 job 摘要，并回显提交的参数以便核对纯函数式的参数构建。
+    if (command === 'media.video.create') return { ...state.jobs[0], projectId: payload.projectId, status: 'queued', stage: 'queued',
+      artifactCommitted: false, assetsCommitted: false, canCancel: true, canImport: false, parameters: payload.parameters,
+      progress: { phase: 'queued', completed: 0, total: null } } as T;
     throw new Error(`非授权命令：${command}`);
   } };
   const environment: ToolEnvironment = { engine, context, projectId: 'project', signal: abort.signal, openAsset() {} };
@@ -159,6 +163,40 @@ test('筛选阈值和 native 工具 schema 严格，不开放配置路径或隐�
     for (const child of Object.values(raw)) if (Array.isArray(child)) child.forEach(strict); else strict(child);
   }
   MEDIA_TOOL_DEFINITIONS.forEach(value => strict(value.parameters));
-  assert.deepEqual(MEDIA_TOOL_DEFINITIONS.filter(value => value.mutation).map(value => value.name), ['preview_image_screening']);
+  // create_video_job 是写操作但只消费用户已授权路径：授权本身仍由桌面文件选择器产生，
+  // 因此它出现在写入工具集合中是预期的，判定依据见 desktop/security.test.ts 的授权用例。
+  assert.deepEqual(MEDIA_TOOL_DEFINITIONS.filter(value => value.mutation).map(value => value.name), ['create_video_job', 'preview_image_screening']);
   assert.equal(f.calls.length, 0);
+});
+
+test('抽帧任务只提交已授权路径与单一模式，参数范围在提交前校验', async () => {
+  const f = fixture();
+  // 三种模式各自只带上自己的参数，不把无关字段混进 payload。
+  for (const [args, expected] of [[{ sourcePath: 'C:\\chosen.mp4', mode: 'interval', intervalSeconds: 1.5 }, { mode: 'interval', intervalSeconds: 1.5 }],
+    [{ sourcePath: 'C:\\chosen.mp4', mode: 'every_n', everyNFrames: 30 }, { mode: 'every_n', everyNFrames: 30 }],
+    [{ sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 2 }, { mode: 'fps', targetFps: 2 }]] as const) {
+    f.calls.length = 0;
+    const created = await tool('create_video_job').execute(args, f.environment) as RecordValue;
+    assert.equal(created.submitted, true);
+    assert.equal(f.calls[0].command, 'media.video.create');
+    assert.deepEqual(f.calls[0].payload, { projectId: 'project', sourcePath: args.sourcePath, parameters: expected });
+  }
+  // 时间段必须有序、不重叠，且与其余输出选项一起透传。
+  f.calls.length = 0;
+  await tool('create_video_job').execute({ sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1,
+    ranges: [{ start: 0, end: 2 }, { start: 2, end: 4 }], format: 'jpg', jpegQuality: 3, maxFrames: 50 }, f.environment);
+  assert.deepEqual(f.calls[0].payload.parameters, { mode: 'fps', targetFps: 1, ranges: [{ start: 0, end: 2 }, { start: 2, end: 4 }],
+    format: 'jpg', jpegQuality: 3, maxFrames: 50 });
+  for (const args of [{ sourcePath: 'C:\\chosen.mp4', mode: 'interval' }, { sourcePath: 'C:\\chosen.mp4', mode: 'mix', intervalSeconds: 1 },
+    { sourcePath: 'C:\\chosen.mp4', mode: 'every_n', everyNFrames: 0 }, { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: Number.POSITIVE_INFINITY },
+    { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, ranges: [{ start: 2, end: 1 }] },
+    { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, ranges: [{ start: 0, end: 3 }, { start: 2, end: 4 }] },
+    { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, format: 'webp' },
+    { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, maxFrames: 0 },
+    { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, jpegQuality: 1 },
+    { sourcePath: '', mode: 'fps', targetFps: 1 }, { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, outputPath: 'C:\\out' }])
+    await assert.rejects(tool('create_video_job').execute(args, f.environment), /整数|不支持的参数|INVALID_ARGUMENT|超出允许范围|不能为空|时间段|抽帧模式|输出格式/, JSON.stringify(args));
+  // 引擎返回非抽帧任务时必须失败，不能把筛选任务当抽帧成功上报。
+  f.state.jobs[0].kind = 'image_screening';
+  await assert.rejects(tool('create_video_job').execute({ sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1 }, f.environment), /没有返回视频抽帧任务/);
 });

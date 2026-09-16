@@ -55,10 +55,25 @@ if (manualOnly || updateUiOnly || runControlOnly || mediaOnly) {
 }
 // 受限或显卡不可用环境（Chromium GPU 进程无法启动）可显式追加开关：
 // AUTOLABEL_EXTRA_LAUNCH_ARGS="--no-sandbox --in-process-gpu --disable-gpu"
-const extraLaunchArgs = (process.env.AUTOLABEL_EXTRA_LAUNCH_ARGS || '').split(/\s+/).filter(Boolean);
-args.push(...extraLaunchArgs);
-const run = async runArgs => {
-const child = spawn(executable, runArgs, { cwd: root, env, windowsHide: true, stdio: 'inherit' });
+const explicitLaunchArgs = (process.env.AUTOLABEL_EXTRA_LAUNCH_ARGS || '').trim();
+// GPU 降级开关：无显卡通道的机器（虚拟化 / 远程会话 / 无驱动）上 Chromium GPU 进程起不来，
+// 会在窗口创建前直接崩溃（退出码 0x80000003）并伴随 gpu_process_host 报错。这类机器是常见
+// 验收环境，因此不要求人工设置环境变量，而是在首次失败后按特征自动重试一次。
+const GPU_FALLBACK_ARGS = ['--no-sandbox', '--in-process-gpu', '--disable-gpu'];
+// 只有显式传入才采用人工配置，避免与自动降级重复叠加同一个开关。
+args.push(...(explicitLaunchArgs ? explicitLaunchArgs.split(/\s+/).filter(Boolean) : []));
+// 仅当调用方未显式配置时才在失败后自动降级；已显式配置的环境保持原有行为，不做二次重试。
+const allowAutoFallback = !explicitLaunchArgs;
+// lastOutput 用于在刻意捕获输出时（GPU 失败判定）回传本次运行的日志。
+let lastOutput = '';
+const run = async (runArgs, collect) => {
+lastOutput = '';
+const stdio = collect ? ['ignore', 'pipe', 'pipe'] : 'inherit';
+const child = spawn(executable, runArgs, { cwd: root, env, windowsHide: true, stdio });
+if (collect) {
+  const sink = chunk => { lastOutput += chunk.toString(); };
+  child.stdout.on('data', sink); child.stderr.on('data', sink);
+}
 return new Promise((resolve, reject) => {
   // 打包态首次启动（解压 asar 与初始化运行时）可能超过默认 60 秒，受限环境可显式放宽。
   const timeoutMs = Number(process.env.AUTOLABEL_SMOKE_TIMEOUT ?? 60000);
@@ -67,7 +82,20 @@ return new Promise((resolve, reject) => {
   child.once('exit', code => { clearTimeout(timeout); resolve(code); });
 });
 };
-const exit = await run(args);
+// 判定是否为 GPU 通道不可用导致的启动失败，而非业务断言失败。
+const isGpuLaunchFailure = code => code !== 0 && (
+  /gpu_process_host|GPU process isn't usable|GPU process exited unexpectedly/i.test(lastOutput) ||
+  // Node 在 Windows 上把原生崩溃码 0x80000003 呈现为无符号形态 2147483651。
+  code === 2147483651
+);
+// 已生效的降级开关：需要传给同一脚本内的后续启动（如 ui-check 的重启持久化校验）。
+let activeFallbackArgs = [];
+let exit = await run(args, allowAutoFallback);
+if (allowAutoFallback && isGpuLaunchFailure(exit)) {
+  console.log('检测到 GPU 通道不可用，自动附加降级开关重试一次。');
+  activeFallbackArgs = GPU_FALLBACK_ARGS;
+  exit = await run([...args, ...activeFallbackArgs], false);
+}
 assert.equal(exit, 0);
 let result = JSON.parse(await readFile(output, 'utf8'));
 if (release7bOnly) {
@@ -122,7 +150,9 @@ if (uiOnly) {
   const example = result.pages.find(page => page.check === 'manual-example');
   assert.ok(example?.image?.loaded && String(example.mediaUrl).startsWith('autolabel-media://asset/'));
   assert.ok(pages.some(page => page.page === 'overview'));
-  assert.equal(await run(args.map(arg => arg === '--desktop-ui-check' ? '--desktop-ui-resume' : arg)), 0);
+  // 重启持久化校验是同一验收流程内的第二次启动，需沿用本次已生效的降级开关，
+  // 否则无 GPU 环境会在这一步重新崩掉。
+  assert.equal(await run(args.map(arg => arg === '--desktop-ui-check' ? '--desktop-ui-resume' : arg).concat(activeFallbackArgs)), 0);
   result = JSON.parse(await readFile(output, 'utf8')); assert.equal(result.restartPersistence.restored, true);
   console.log(`主导航与人工示例检查通过：${output}`); process.exit(0);
 }

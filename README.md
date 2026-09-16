@@ -2,7 +2,7 @@
 
 Windows 中文桌面标注工具，采用 Electron、React、TypeScript、Java 21 和 SQLite。界面按 Codex 式中性、简洁的工作空间设计，支持可选 Python YOLO 推理进程。
 
-当前处于开发与集成阶段。完整需求见 SPEC.md，实际进度和验收缺口集中记录在 TASK_PLAN.md；不要把设计计划或最小安装包当作全部功能已完成。
+当前处于开发与集成阶段。需求与验收计划是本地文档（SPEC.md、TASK_PLAN.md），未纳入版本库；不要把设计计划或最小安装包当作全部功能已完成。模块实现现状见 `engine/README.md` 与 `desktop/`、`renderer/` 源码。
 
 ## 开发
 
@@ -23,7 +23,7 @@ npm run dev
 npm run pack:win
 ```
 
-此入口先构建 Java、界面与桌面主进程，再生成包含运行时的安装包。输出在 build/release/；安装包支持选择安装路径和桌面快捷方式。当前签名及实际验收状态以 TASK_PLAN.md 为准。
+此入口先构建 Java、界面与桌面主进程，再生成包含运行时的安装包。输出在 build/release/；安装包支持选择安装路径和桌面快捷方式。当前签名与验收状态属本地计划文档（TASK_PLAN.md，未纳入版本库），安装包本身未做代码签名。
 
 ## 验证
 

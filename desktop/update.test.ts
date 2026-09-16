@@ -4,6 +4,7 @@ import { createServer, type Server } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { copyFile, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { UpdateManager, assertUpdateIdle, compareVersions, validateUpdateUrl, type UpdateManifest } from './updater';
@@ -14,6 +15,9 @@ import { EngineManager } from './engine';
 
 const sample = Buffer.from('MZ-local-update-test-content');
 const hash = (value: Buffer) => createHash('sha256').update(value).digest('hex');
+// 真实安装包文件名带版本号，随 package.json 推导；同时用其产品版本校验更新清单。
+const appVersion = JSON.parse(readFileSync(path.resolve('package.json'), 'utf8')).version as string;
+const setupPackage = path.resolve(`build/release/AutoLabel-Setup-${appVersion}-x64.exe`);
 async function fixture(options: { packageFile?: string; slow?: boolean; corrupt?: boolean; malformed?: boolean; version?: string } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'autolabel-update-'));
   let digest = hash(sample), size = sample.length;
@@ -137,8 +141,9 @@ test('安装分派只取得内部已验证文件；测试记录分派而不执�
   } finally { await f.close(); }
 });
 test('真实本项目NSIS包经本地HTTP下载，核对SHA256和PE产品版本；不执行安装', async () => {
-  const packageFile = path.resolve('build/release/AutoLabel-Setup-0.1.0-x64.exe');
-  const f = await fixture({ packageFile });
+  const packageFile = setupPackage;
+  // 清单版本必须与包内 PE 产品版本一致，故显式传入当前版本而非夹具默认值。
+  const f = await fixture({ packageFile, version: appVersion });
   try {
     const updater = f.create({ verifyPackage: verifyUpdatePackage });
     assert.equal((await updater.check()).state, 'available');
@@ -146,8 +151,8 @@ test('真实本项目NSIS包经本地HTTP下载，核对SHA256和PE产品版本�
     assert.equal(result.state, 'ready', JSON.stringify(result));
     assert.equal(result.downloadedBytes, (await stat(packageFile)).size);
     const receipt = JSON.parse(await readFile(path.join(f.directory, 'ready.json'), 'utf8'));
-    assert.equal(receipt.manifest.version, '0.1.0');
-    await assert.rejects(verifyUpdatePackage(packageFile, { ...f.manifest, version: '0.1.1' }), /版本/);
+    assert.equal(receipt.manifest.version, appVersion);
+    await assert.rejects(verifyUpdatePackage(packageFile, { ...f.manifest, version: '0.0.1' }), /版本/);
   } finally { await f.close(); }
 });
 test('Java 维护握手通过桌面代理原子锁写入口并可解除', async () => {
@@ -350,10 +355,11 @@ test('费用与重新评测通过真实桌面代理，维护锁覆盖新写入�
   }
 });
 test('中文空格路径中的安装包身份可通过stdin正确验证', async () => {
-  const f = await fixture();
+  // 清单版本需与真实包的产品版本一致，否则身份校验会先因版本不符而拒绝。
+  const f = await fixture({ version: appVersion });
   try {
     const filename = path.join(f.directory, '自动标注 更新安装包.exe');
-    await copyFile(path.resolve('build/release/AutoLabel-Setup-0.1.0-x64.exe'), filename);
+    await copyFile(setupPackage, filename);
     await verifyUpdatePackage(filename, f.manifest);
   } finally { await f.close(); }
 });

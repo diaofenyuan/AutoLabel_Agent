@@ -240,9 +240,9 @@ const schemas: Record<string, z.ZodType> = {
   'project.update': z.strictObject({ projectId: id, name: name.optional(), description: text.optional(), classes: classes.optional(), settings: record.optional() }),
   'project.open': z.strictObject({ projectId: id }),
   'project.example': empty,
-  // 项目删除必须输入完整项目名确认；备份目录缺省时使用存储根下的受管备份目录。
+  // 项目删除不再要求输入项目名确认：影响清单已展示删除范围。confirmName 保留为可选，兼容旧调用方。
   'project.delete.preflight': z.strictObject({ projectId: id }),
-  'project.delete': z.strictObject({ projectId: id, confirmName: z.string().min(1).max(256),
+  'project.delete': z.strictObject({ projectId: id, confirmName: z.string().min(1).max(256).optional(),
     removeManagedFiles: z.boolean().optional(), createBackup: z.boolean().optional(), backupDir: z.string().min(1).max(32767).optional() }),
   'media.runtime.get': empty,
   'media.runtime.configure': z.strictObject({ ffmpegPath: mediaPath.nullable(), ffprobePath: mediaPath.nullable() }),
@@ -530,7 +530,7 @@ const agentCommands = new Set(['provider.list', 'provider.capabilities', 'chat.s
   'evaluation.preflight', 'evaluation.create', 'review.list',
   'evaluation.rerun.preflight', 'evaluation.rerun.create', 'evaluation.rerun.get', 'evaluation.rerun.finish', 'budget.estimate', 'budget.get',
   'flow.capabilities', 'flow.preflight', 'flow.create', 'flow.get', 'flow.list', 'flow.artifact', 'flow.pause', 'flow.resume', 'flow.cancel', 'flow.retry', 'flow.rerun',
-  'local.runtime.get', 'local.model.get', 'media.job.get', 'media.job.list', 'media.video.frames', 'media.screening.result', 'media.screening.create',
+  'local.runtime.get', 'local.model.get', 'media.job.get', 'media.job.list', 'media.video.create', 'media.video.frames', 'media.screening.result', 'media.screening.create',
   'track.timeline.list', 'track.timeline.get', 'track.timeline.frames', 'track.list', 'track.get', 'track.keyframe.list',
   'track.generation.list', 'track.generation.get', 'track.generation.results', 'track.generate.preview', 'track.generate', 'track.generation.cancel',
   // 训练：只放开查询与触发（数据集快照只能由已生成的数据集版本建立，训练任务只提交与取消）。
