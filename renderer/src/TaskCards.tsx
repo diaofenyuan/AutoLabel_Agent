@@ -1,0 +1,129 @@
+import { useCallback, useEffect, useState } from 'react';
+import { Activity, AlertTriangle, FlaskConical, RefreshCw } from 'lucide-react';
+import type { FlowRun } from '../../shared/flow';
+import type { TrainingJob } from '../../shared/training';
+import { activeTrainingJob, TRAINING_JOB_STATUS } from '../../shared/training';
+import { errorMessage, request } from './bridge';
+import { Button } from './ui';
+import { useApp } from './context';
+import { TrainingDetail } from './TrainingJobDetail';
+import type { AgentStep } from './AgentActivity';
+
+/**
+ * 对话里的任务卡片：把这一步实际启动的训练与流程摊在消息流下方。
+ * 卡片只读取引擎状态，进度、指标与失败原因都来自同一条事件流；提交成功不等于完成。
+ */
+const FINISHED_FLOW = ['completed', 'completed_with_errors', 'failed', 'cancelled', 'partial'];
+const flowStatusNames: Record<string, string> = {
+  queued: '排队中', running: '执行中', paused: '已暂停', pausing: '正在暂停', needs_attention: '等待人工检查',
+  completed: '已完成', completed_with_errors: '完成但有失败', failed: '失败', cancelled: '已取消', partial: '部分完成',
+};
+
+function jobIdOf(step: AgentStep): string | undefined {
+  if (!['start_training', 'inspect_training_job', 'cancel_training_job'].includes(step.name)) return undefined;
+  const result = step.result as Record<string, unknown> | null;
+  const job = result?.job as Record<string, unknown> | undefined;
+  return typeof job?.id === 'string' ? job.id : undefined;
+}
+function runIdOf(step: AgentStep): string | undefined {
+  if (!['start_flow', 'inspect_flow', 'control_flow', 'retry_flow', 'rerun_flow'].includes(step.name)) return undefined;
+  const result = step.result as Record<string, unknown> | null | undefined;
+  if (!result) return undefined;
+  const run = (result.run ?? result) as Record<string, unknown> | undefined;
+  return typeof run?.id === 'string' && Array.isArray(run.steps) ? run.id : undefined;
+}
+function collect(steps: AgentStep[]) {
+  const jobs: string[] = [], runs: string[] = [];
+  for (const step of steps) {
+    const jobId = jobIdOf(step), runId = runIdOf(step);
+    if (jobId && !jobs.includes(jobId)) jobs.push(jobId);
+    if (runId && !runs.includes(runId)) runs.push(runId);
+  }
+  return { jobs, runs };
+}
+
+export function TaskCards({ steps, onUseModel }: { steps: AgentStep[]; onUseModel: (instruction: string) => void }) {
+  const { jobs, runs } = collect(steps);
+  if (!jobs.length && !runs.length) return null;
+  return <div className="task-cards" aria-label="本轮任务">
+    {jobs.map(jobId => <TrainingTaskCard key={jobId} jobId={jobId} onUseModel={onUseModel} />)}
+    {runs.map(runId => <FlowTaskCard key={runId} runId={runId} />)}
+  </div>;
+}
+
+function TrainingTaskCard({ jobId, onUseModel }: { jobId: string; onUseModel: (instruction: string) => void }) {
+  const { notify } = useApp();
+  const [job, setJob] = useState<TrainingJob | null>(null);
+  const [error, setError] = useState('');
+  const [detail, setDetail] = useState(false);
+  const load = useCallback(async () => {
+    try { setJob(await request<TrainingJob>('training.job.get', { jobId })); setError(''); }
+    catch (e) { setError(errorMessage(e)); }
+  }, [jobId]);
+  useEffect(() => { void load(); }, [load]);
+  const live = job ? activeTrainingJob(job.status) : true;
+  useEffect(() => {
+    if (!live) return;
+    const timer = window.setInterval(() => { void load(); }, 4000);
+    return () => window.clearInterval(timer);
+  }, [live, load]);
+  if (!job) return <article className="task-card" data-status="loading">
+    {error ? <p className="inline-error">{error}</p> : <p className="muted tiny"><RefreshCw size={13} className="spin" />正在读取训练任务…</p>}
+  </article>;
+  const best = job.bestMetrics?.mAP50, loss = job.lastMetrics?.boxLoss ?? job.lastMetrics?.loss;
+  return <article className="task-card" data-status={job.status}>
+    <header>
+      <span className="task-card-title"><FlaskConical size={15} />训练任务 · {job.actualDevice ?? job.device ?? '未定设备'}</span>
+      <span className={`training-badge ${job.status}`}>{TRAINING_JOB_STATUS[job.status]}</span>
+    </header>
+    {job.progressKnown && <div className="training-progress" aria-label="训练进度"><span style={{ width: `${Math.round(job.progress * 100)}%` }} /></div>}
+    <p className="muted tiny">
+      {job.progressKnown ? `已完成 ${job.completedEpochs ?? 0}/${job.epochs ?? 0} 轮` : '尚未产生训练轮次'}
+      {best === undefined ? '' : ` · 最优 mAP50 ${best.toFixed(4)}`}
+      {loss === undefined ? '' : ` · 最近 boxLoss ${loss.toFixed(4)}`}
+      {` · 快照 ${(job.snapshotHash ?? '').slice(0, 12)}…`}
+    </p>
+    {job.message && <p className="muted tiny">{job.message}</p>}
+    {job.error && <div className="issue error"><AlertTriangle size={13} />{job.error.code}：{job.error.message}</div>}
+    {job.artifacts.length > 0 && <p className="muted tiny break-word">产物：{job.artifacts.map(item => item.name).join(' · ')}</p>}
+    <div className="actions">
+      <Button onClick={() => setDetail(true)}>查看详情</Button>
+      {job.status === 'succeeded' && <Button className="primary" onClick={() => { onUseModel('用刚训练好的权重标注当前项目里还没标注的图片；没有登记就先用产物登记为本地模型。'); notify('已把下一步写进输入框，确认后发送。'); }}>用此模型标注</Button>}
+    </div>
+    {detail && <TrainingDetail jobId={job.id} live={live} onClose={() => setDetail(false)} onChanged={() => void load()} />}
+  </article>;
+}
+
+function FlowTaskCard({ runId }: { runId: string }) {
+  const { navigate } = useApp();
+  const [run, setRun] = useState<FlowRun | null>(null);
+  const [error, setError] = useState('');
+  const load = useCallback(async () => {
+    try { setRun(await request<FlowRun>('flow.get', { flowRunId: runId })); setError(''); }
+    catch (e) { setError(errorMessage(e)); }
+  }, [runId]);
+  useEffect(() => { void load(); }, [load]);
+  const live = run ? !FINISHED_FLOW.includes(run.status) : true;
+  useEffect(() => {
+    if (!live) return;
+    const timer = window.setInterval(() => { void load(); }, 4000);
+    return () => window.clearInterval(timer);
+  }, [live, load]);
+  if (!run) return <article className="task-card" data-status="loading">
+    {error ? <p className="inline-error">{error}</p> : <p className="muted tiny"><RefreshCw size={13} className="spin" />正在读取流程运行…</p>}
+  </article>;
+  const stats = run.statistics;
+  return <article className="task-card" data-status={run.status}>
+    <header>
+      <span className="task-card-title"><Activity size={15} />流程 · {run.name}</span>
+      <span className={`training-badge ${run.status}`}>{flowStatusNames[run.status] ?? run.status}</span>
+    </header>
+    <p className="muted tiny">
+      步骤 {stats.stepsCompleted}/{stats.stepsTotal}{stats.stepsFailed ? ` · 失败 ${stats.stepsFailed}` : ''}
+      {` · 输入 ${stats.inputAssets} 张 · 产出 ${stats.outputAssets} 张 · 已发送请求 ${stats.requestsUsed}`}
+      {stats.reused ? ` · 复用 ${stats.reused}` : ''}
+    </p>
+    {run.pauseReason && <p className="muted tiny">{run.pauseReason}</p>}
+    <div className="actions"><Button onClick={() => void navigate('tasks')}>在任务里查看</Button></div>
+  </article>;
+}

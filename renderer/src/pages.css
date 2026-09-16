@@ -286,3 +286,33 @@
 .result-viewer{position:relative;width:100%;overflow:auto;background:var(--surface-soft);border:1px solid var(--border);border-radius:9px}
 .result-canvas{display:block;width:100%;height:auto}
 .result-canvas image,.result-shape{pointer-events:none}
+/* 工具步骤流：一行一步，失败可展开看引擎原因；默认只在执行中或出错时展开。 */
+.agent-steps{border:1px solid var(--border);border-radius:11px;padding:9px 12px;margin:0 0 12px;background:var(--surface)}
+.agent-steps>summary{display:flex;align-items:center;gap:7px;cursor:pointer;font-size:12px;color:var(--muted)}
+.agent-steps>ol{list-style:none;margin:9px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
+.agent-steps li{display:flex;flex-direction:column}
+.agent-step{display:flex;align-items:center;gap:7px;padding:4px 6px;border-radius:7px;background:none;border:0;text-align:left;color:var(--text);font-size:12px}
+.agent-step:hover{background:var(--surface-soft)}
+.agent-step small{margin-left:auto;color:var(--soft);font-size:10px}
+.agent-steps li[data-status="completed"] .agent-step>svg{color:var(--good)}
+.agent-steps li[data-status="failed"] .agent-step>svg{color:var(--error)}
+.agent-steps li[data-status="planned"] .agent-step>svg{color:var(--warning)}
+.agent-step-detail{padding:6px 10px 9px 26px}
+.agent-step-detail pre{max-height:220px;overflow:auto;font-size:10px;line-height:1.5;background:var(--surface-soft);border-radius:7px;padding:8px;margin-top:6px;white-space:pre-wrap;word-break:break-all}
+/* 确认卡片：先看方案时列出待执行的写操作，确认与否由用户点。 */
+.plan-card{border:1px solid color-mix(in srgb,var(--accent) 30%,var(--border));border-radius:11px;padding:13px 14px;margin:0 0 12px;background:var(--surface)}
+.plan-card header{display:flex;align-items:center;gap:7px;font-size:12px}
+.plan-card ul{list-style:none;margin:9px 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.plan-card li{display:flex;flex-direction:column;gap:3px;padding:7px 9px;border-radius:8px;background:var(--surface-soft)}
+.plan-card li span{font-size:12px}
+.plan-card li small{font-size:10px;color:var(--soft);word-break:break-all}
+.plan-card .actions{display:flex;gap:7px;justify-content:flex-end}
+.plan-card .actions .button{min-height:29px;padding:4px 10px;font-size:11px}
+/* 任务卡片：训练与流程的真实进度，只读取引擎状态。 */
+.task-cards{display:flex;flex-direction:column;gap:10px;margin:0 0 14px}
+.task-card{border:1px solid var(--border);border-radius:11px;padding:12px 14px;background:var(--surface)}
+.task-card>header{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.task-card-title{display:flex;align-items:center;gap:7px;font-size:12px}
+.task-card .actions{display:flex;gap:7px;margin-top:10px;flex-wrap:wrap}
+.task-card .actions .button{min-height:29px;padding:4px 10px;font-size:11px}
+.task-card .training-progress{margin:9px 0 5px}

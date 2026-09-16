@@ -4,6 +4,8 @@ import ConfigurationView from './ConfigurationView';
 import ReferencePicker from './ReferencePicker';
 import ResultCard from './ResultCard';
 import VideoImport from './VideoImport';
+import { AgentSteps, PlanCard, useAgentSteps, type AgentStep } from './AgentActivity';
+import { TaskCards } from './TaskCards';
 import { DropOverlay } from './fileDrop';
 import { useChatFileDrop } from './chatDrop';
 import { useEffect, useRef } from 'react';
@@ -41,6 +43,8 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     if (!key) return;
     setChats(state => ({ ...state, [key]: { ...(state[key] ?? blankChatSession(key)), ...next } }));
   }
+  // 工具步骤流按会话累积：组件重挂载后仍能读到这一轮已经发生过的步骤。
+  const steps = useAgentSteps(key);
   useEffect(() => {
     if (!key || loadedKey.current === key) return;
     loadedKey.current = key;
@@ -68,8 +72,10 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     update({ sendOnOpen: false });
     void send();
   }, [key, session?.sendOnOpen, session?.busy, session?.input, assetsLoading]);
-  async function send() {
-    if (!session?.input.trim() || session.busy || assetsLoading) return;
+  async function send(overrides: { autoExecute?: boolean; message?: string } = {}) {
+    if (!session) return;
+    const text = (overrides.message ?? session.input).trim();
+    if (!text || session.busy || assetsLoading) return;
     if (!selectedProviderId || !selectedModel) { notify('请先在设置里选择对话接口与对话模型。', true); return; }
     // 模型校验按本次实际使用的接口来，配置里的其它问题（并发、请求上限）照旧拦下。
     const configIssue = chatConfig.issues.find(issue => issue.field !== 'model');
@@ -77,17 +83,18 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     if (session.scope === 'current' && !assetId) { notify('请先在项目里打开要处理的图片。', true); return; }
     const assetIds = session.scope === 'current' ? [assetId!] : session.scope === 'page' ? assets.map(a => a.id) : session.scope === 'selected' ? [...selectedAssetIds] : undefined;
     if (assetIds && !assetIds.length) { notify('当前处理范围没有素材，请先选择图片。', true); return; }
-    const next = [...session.messages, { role: 'user' as const, content: session.input.trim() }];
+    const next = [...session.messages, { role: 'user' as const, content: text }];
     const streamSinceSequence = events.at(-1)?.sequence ?? -1;
     const scopeLabel = session.scope === 'current' ? assets.find(a => a.id === assetId)?.name ?? '当前图片' : session.scope === 'project' ? `全项目 · ${assetTotal} 张` : `${session.scope === 'page' ? '当前页' : '已勾选（跨页）'} · ${assetIds!.length} 张`;
-    update({ messages: next, input: '', busy: true, cancelRequested: false, runningScope: scopeLabel, streamingText: '', streamSinceSequence });
+    update({ messages: next, input: '', busy: true, cancelRequested: false, runningScope: scopeLabel, streamingText: '', streamSinceSequence, planned: undefined });
     try {
-      const result = await request<{ content: string; status: string }>('agent.chat', {
+      const result = await request<{ content: string; status: string; actions?: AgentStep[] }>('agent.chat', {
         sessionId: session.id, projectId: project?.id, providerId: selectedProviderId, model: selectedModel,
-        messages: next, autoExecute: session.autoExecute,
+        messages: next, autoExecute: overrides.autoExecute ?? session.autoExecute,
         context: { depth, ...(session.referenceResources?.length?{referenceResources:session.referenceResources}:{}), ...(assetIds ? { assetIds } : {}), ...(annotationConfig.providerId&&annotationConfig.model ? { annotationProviderId:annotationConfig.providerId,annotationModel:annotationConfig.model } : {}), ...(annotationConfig.prompt?{prompt:annotationConfig.prompt}:{}), ...(session.exportDir ? { exportDir: session.exportDir } : {}), ...(annotationConfig.maxRequests!==undefined ? { maxRequests:annotationConfig.maxRequests} : {}), ...(annotationConfig.concurrency?{concurrency:annotationConfig.concurrency}:{}) },
       });
-      update({ messages: [...next, { role: 'assistant', content: result.content || (result.status === 'cancelled' ? '对话已停止。' : '接口未返回文本。') }], streamingText: undefined, streamSinceSequence: undefined });
+      // 先看方案时 agent 只给出待执行的操作：确认卡片据此渲染，写操作一个都没跑。
+      update({ messages: [...next, { role: 'assistant', content: result.content || (result.status === 'cancelled' ? '对话已停止。' : '接口未返回文本。') }], planned: result.actions?.filter(action => action.status === 'planned'), streamingText: undefined, streamSinceSequence: undefined });
     } catch (e) { update({ messages: [...next, { role: 'assistant', content: `本次调用未完成：${errorMessage(e)}` }], streamingText: undefined, streamSinceSequence: undefined }); notify(errorMessage(e), true); }
     finally { update({ busy: false, cancelRequested: false }); void refreshChatSessions().catch(() => undefined); }
   }
@@ -120,6 +127,19 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     {!compact && <DropOverlay visible={dropActive} />}
     <div className="chat-messages" aria-live="polite">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><Button onClick={() => void navigate('settings')}><Settings2 size={14} />配置对话模型</Button></Empty> : session.messages.map((message,i) => <div className={`chat-message ${message.role}`} key={i}><div className="chat-message-head"><span className={`chat-avatar ${message.role}`} aria-hidden="true">{message.role === 'assistant' ? <Sparkles size={12} /> : '你'}</span><small>{message.role === 'user' ? '你' : '标注助手'}</small></div><p>{message.content}</p></div>)}{session.busy && session.streamingText && <div className="chat-message assistant streaming"><div className="chat-message-head"><span className="chat-avatar assistant" aria-hidden="true"><Sparkles size={12} /></span><small>标注助手</small></div><p>{session.streamingText}</p></div>}{session.busy && <div className="chat-wait"><span className="waiting-dots">•••</span>{session.cancelRequested ? '正在请求停止 · 已发送请求的结果仍需核对' : chatStatus(events, session.id)} · {session.runningScope}</div>}
       {/* 结果卡片跟着会话走：已经有回复且绑定了项目时才展开实际结果，避免空转读取。 */}
+      {!compact && <AgentSteps steps={steps} busy={session.busy} />}
+      {!compact && session.planned?.length ? <PlanCard actions={session.planned} busy={session.busy}
+        onRefine={() => { document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus(); }}
+        onConfirm={() => {
+          const lastUser = [...session.messages].reverse().find(message => message.role === 'user')?.content ?? '';
+          update({ autoExecute: true });
+          void send({ autoExecute: true, message: lastUser });
+        }} /> : null}
+      {!compact && <TaskCards steps={steps} onUseModel={instruction => {
+        update({ input: instruction });
+        const box = document.querySelector<HTMLTextAreaElement>('.chat-panel textarea');
+        box?.focus(); box?.scrollIntoView({ block: 'center' });
+      }} />}
       {!compact && project && session.messages.some(message => message.role === 'assistant') && <ResultCard project={project} />}</div>
     {project&&<ReferencePicker project={project} value={session.referenceResources??[]} onChange={referenceResources=>update({referenceResources})} disabled={session.busy}/>}<ConfigurationView value={chatConfig} providers={providers} compact/><div className="chat-scope"><select aria-label="助手处理范围" disabled={session.busy} value={session.scope} onChange={e => update({ scope: e.target.value as ChatSession['scope'] })}>{assetId && <option value="current">当前图片</option>}<option value="project">全项目 · {assetTotal} 张</option><option value="page">当前页 · {assets.length} 张</option><option value="selected">已勾选（跨页）· {selectedAssetIds.length} 张</option></select><select aria-label="助手执行方式" disabled={session.busy} value={String(session.autoExecute)} onChange={e => update({ autoExecute: e.target.value === 'true' })}><option value="true">直接执行</option><option value="false">先看方案</option></select></div>
     <Composer value={session.input} onChange={input => update({ input })} onSend={() => void send()} placeholder="描述你的标注任务…" busy={session.busy} onCancel={() => { if (session.cancelRequested) return; update({ cancelRequested: true }); void request('agent.cancel', { sessionId: session.id }).catch(e => { update({ cancelRequested: false }); notify(errorMessage(e), true); }); }}><div className="chat-options"><button title={session.exportDir || '授权本次对话的导出目录'} onClick={() => void getBridge().then(b => b.chooseFiles({ kind: 'directory' })).then(paths => { if (paths[0]) update({ exportDir: paths[0] }); }).catch(e => notify(errorMessage(e), true))}><FolderOpen size={13} />{session.exportDir ? '已选目录' : '导出目录'}</button>{options.length

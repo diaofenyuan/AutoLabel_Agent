@@ -44,6 +44,8 @@ export interface ChatSession {
    * 未设置时取全局默认，因此这里只保存「用户显式改过」的值。
    */
   providerId?: string; model?: string; depth?: import('./types').ThinkingDepth;
+  /** 先看方案时 agent 返回的待执行操作：确认卡片据此渲染，确认前不会执行任何写操作。 */
+  planned?: import('./AgentActivity').AgentStep[];
 }
 /** 会话按会话标识存放（不再按项目），空会话初值统一从这里取，避免各处默认值不一致。 */
 export function blankChatSession(id: string, scope: ChatSession['scope'] = 'project'): ChatSession {
