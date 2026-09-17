@@ -41,6 +41,11 @@ export function Composer({ value, onChange, onSend, placeholder, busy, onCancel,
       {onRemoveAttachment && <button aria-label={`移除 ${item.name}`} onClick={() => onRemoveAttachment(item.id)}><X size={12} /></button>}
     </span>)}</div>}
     <textarea aria-label={placeholder} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !busy) { e.preventDefault(); onSend(); } }} />
-    <div className="composer-footer"><div>{children ?? <span>Ctrl + Enter 发送</span>}</div><button className="send-button" aria-label={busy ? '停止对话' : '发送'} disabled={!busy && !value.trim() && !hasAttachments} onClick={busy ? onCancel : onSend}>{busy ? <Square size={13} /> : <ArrowUp size={17} />}</button></div>
+    {/* 工具行收进卡片内：流程/模型/范围在左，快捷键提示与发送钮在右，不再散落在框外。 */}
+    <div className="composer-toolbar">
+      <div className="composer-tools">{children}</div>
+      <kbd className="composer-kbd">Ctrl + Enter</kbd>
+      <button className="send-button" aria-label={busy ? '停止对话' : '发送'} disabled={!busy && !value.trim() && !hasAttachments} onClick={busy ? onCancel : onSend}>{busy ? <Square size={13} /> : <ArrowUp size={17} />}</button>
+    </div>
   </div>;
 }

@@ -179,15 +179,13 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
           <select aria-label="助手处理范围" disabled={session.busy} value={effectiveScope} onChange={e => update({ scope: e.target.value as ChatSession['scope'] })}>{assetId && <option value="current">当前图片</option>}<option value="project">全项目 · {assetTotal} 张</option>{!!assets.length && <option value="page">当前页 · {assets.length} 张</option>}{!!selectedAssetIds.length && <option value="selected">已勾选（跨页）· {selectedAssetIds.length} 张</option>}</select>
           <select aria-label="助手执行方式" disabled={session.busy} value={String(session.autoExecute)} onChange={e => update({ autoExecute: e.target.value === 'true' })}><option value="true">直接执行</option><option value="false">先看方案</option></select>
           <button title={session.exportDir || '授权本次对话的导出目录'} onClick={() => void getBridge().then(b => b.chooseFiles({ kind: 'directory' })).then(paths => { if (paths[0]) update({ exportDir: paths[0] }); }).catch(e => notify(errorMessage(e), true))}><FolderOpen size={12} />{session.exportDir ? '已选目录' : '导出目录'}</button>
+          {/* 模型选择收进输入卡的工具行；会话内切换只影响本会话。 */}
+          <ModelPicker providers={providers} providerId={selectedProviderId} model={selectedModel} depth={depth} disabled={session.busy}
+            onChange={choice => update({ providerId: choice.providerId, model: choice.model })}
+            onDepthChange={next => update({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} />
         </div>
+        {!aiConfigured && <span className="composer-hint">配置 AI 后可自动标注</span>}
       </Composer>
-      {/* 收起时只有一行：当前模型与思考深度；点开才是搜索、模型列表与档位。 */}
-      <div className="chat-model-line">
-        <ModelPicker providers={providers} providerId={selectedProviderId} model={selectedModel} depth={depth} disabled={session.busy}
-          onChange={choice => update({ providerId: choice.providerId, model: choice.model })}
-          onDepthChange={next => update({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} />
-        {!aiConfigured && <span className="muted tiny">配置 AI 后可自动标注</span>}
-      </div>
     </footer>
     {/* 拖入多个视频时先给候选清单：原先只打开第一个，其余文件名连提都不提。 */}
     <VideoPickList picks={drop.picks} onChoose={drop.chooseVideo} onClose={drop.closePicks} />

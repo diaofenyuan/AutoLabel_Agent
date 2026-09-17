@@ -194,15 +194,13 @@ export default function ChatHome() {
         attachments={attachments} onRemoveAttachment={id => setAttachments(list => list.filter(item => item.id !== id))}>
         <div className="chat-options">
           <FlowPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
-          {/* 把落点规则写在发送之前：发送时会弹框确认项目名称（或选已有项目）。 */}
-          <span className="composer-hint">Ctrl + Enter 发送 · 发送时确认项目名称{pendingExisting ? `（已有同名项目「${pendingExisting.name}」可选）` : ''}</span>
+          {/* 模型选择收进输入卡的工具行；默认值语义挂在悬浮提示里。 */}
+          <span title="这里的默认值用于新建的对话与任务"><ModelPicker providers={providers} providerId={choice.providerId} model={choice.model} depth={choice.depth} disabled={busy}
+            onChange={next => void saveChoice(next)} onDepthChange={next => void saveChoice({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} /></span>
         </div>
+        {/* 把落点规则写在发送之前：发送时会弹框确认项目名称（或选已有项目）。 */}
+        <span className="composer-hint">发送时确认项目名称{pendingExisting ? `（已有同名项目「${pendingExisting.name}」可选）` : ''}</span>
       </Composer>
-      <div className="chat-model-line">
-        <ModelPicker providers={providers} providerId={choice.providerId} model={choice.model} depth={choice.depth} disabled={busy}
-          onChange={next => void saveChoice(next)} onDepthChange={next => void saveChoice({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} />
-        <span className="muted tiny">这里的默认值用于新建的对话与任务</span>
-      </div>
     </footer>
     {/* 多选视频或视频文件夹选出来的候选清单：与拖入多个视频共用同一个组件。 */}
     <VideoPickList picks={drop.picks} onChoose={path => { const target = drop.picks?.projectId; drop.closePicks(); if (target) setVideoStart({ projectId: target, path }); }} onClose={drop.closePicks} />
