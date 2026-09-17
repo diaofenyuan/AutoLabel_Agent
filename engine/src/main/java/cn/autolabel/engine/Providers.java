@@ -14,6 +14,8 @@ import java.util.concurrent.*;
 import java.util.function.LongSupplier;
 
 final class Providers {
+    /** 登记到 provider 文档的模型候选上限，避免异常接口返回超大列表撑大配置与备份。 */
+    private static final int MAX_MODELS=500,MAX_MODEL_NAME=200;
     final Store store;
     private final Map<String,Credential> keys=new ConcurrentHashMap<>();
     static final class Credential {
@@ -74,7 +76,10 @@ final class Providers {
         if(uri.getHost()==null||uri.getUserInfo()!=null||uri.getQuery()!=null||uri.getFragment()!=null||!("https".equals(uri.getScheme())||("http".equals(uri.getScheme())&&Set.of("localhost","127.0.0.1","[::1]","::1").contains(uri.getHost()))))throw new ApiError(400,"provider_url_invalid","接口必须使用 HTTPS；本地协议测试允许回环 HTTP，地址中不能携带凭据或查询参数。");
         String protocol=Json.str(value,"protocol","chat-completions");if(Set.of("chat","chat_completions","chatCompletions","openai").contains(protocol))protocol="chat-completions";
         if(!Set.of("chat-completions","responses").contains(protocol))throw new ApiError(400,"protocol_unsupported","协议应为 chat-completions 或 responses。");
-        value.addProperty("baseUrl",base);value.addProperty("protocol",protocol);value.addProperty("concurrency",Json.bounded(value,"concurrency",4,1,32));value.addProperty("requestsPerMinute",Json.bounded(value,"requestsPerMinute",60,1,60000));
+        value.addProperty("baseUrl",base);value.addProperty("protocol",protocol);
+        // 接口地址、协议或请求头变了，先前登记的模型清单就属于另一个端点：留着会让选择器列出无效模型名。
+        if(!base.equals(Json.str(old,"baseUrl",""))||!protocol.equals(Json.str(old,"protocol",""))
+            ||!String.valueOf(value.get("headers")).equals(String.valueOf(old.get("headers")))){value.remove("models");value.remove("modelsFetchedAt");}value.addProperty("concurrency",Json.bounded(value,"concurrency",4,1,32));value.addProperty("requestsPerMinute",Json.bounded(value,"requestsPerMinute",60,1,60000));
         value.addProperty("timeoutMs",Json.bounded(value,"timeoutMs",120000,1000,600000));value.addProperty("maxRetries",Json.bounded(value,"maxRetries",2,0,6));value.addProperty("maxImages",Json.bounded(value,"maxImages",8,1,64));
         value.addProperty("revision",Json.integer(old,"revision",0)+1);value.add("capabilities",new JsonObject());value.addProperty("updatedAt",Json.now());
         try{HttpRequest.Builder validator=HttpRequest.newBuilder(uri);for(var header:Json.object(value,"headers").entrySet()){if(Set.of("host","content-length","connection","authorization","cookie").contains(header.getKey().toLowerCase()))throw new IllegalArgumentException();validator.header(header.getKey(),header.getValue().getAsString());}}
@@ -260,7 +265,28 @@ final class Providers {
         finally{release(permit);}
     }
     void finish(String id,JsonObject data,String run){Costs.attach(data);store.tx(c->{Store.update(c,"UPDATE attempts SET status=?,data=? WHERE id=?",Json.required(data,"status"),data,id);Store.event(c,"call."+Json.required(data,"status"),run,null,id,Json.obj("usage",data.get("usage"),"cost",data.get("cost"),"errorCode",data.get("errorCode")));return null;});}
-    JsonObject models(String id){JsonObject p=get(id);JsonObject raw=request(p,"/models",null);JsonArray names=new JsonArray();for(JsonElement e:Json.array(raw,"data")){JsonObject m=e.getAsJsonObject();if(m.has("id"))names.add(m.get("id"));}return Json.obj("models",names);}
+    /**
+     * 读取接口模型列表，并把结果登记进 provider 文档。
+     * 只返回不落库的话，扫描结果一刷新就丢，模型选择器只能退回「每个接口一个已保存模型」的旧行为。
+     * 不触碰 revision / capabilities / updatedAt：列模型既不是配置变更，也不代表任何能力通过验证。
+     * 落库前比对 revision，请求期间配置被改过就放弃写入，避免把过期结果盖到新配置上。
+     */
+    JsonObject models(String id){
+        JsonObject p=get(id);JsonObject raw=request(p,"/models",null);
+        // 保留接口返回顺序并去重：同一模型名重复出现时下拉里只应有一条。
+        LinkedHashSet<String> names=new LinkedHashSet<>();
+        for(JsonElement e:Json.array(raw,"data")){JsonObject m=e.getAsJsonObject();JsonElement value=m.get("id");
+            if(value==null||!value.isJsonPrimitive()||!value.getAsJsonPrimitive().isString())continue;
+            String name=value.getAsString().trim();if(name.isEmpty())continue;
+            names.add(name.length()>MAX_MODEL_NAME?name.substring(0,MAX_MODEL_NAME):name);
+            if(names.size()>=MAX_MODELS)break;}
+        JsonArray list=new JsonArray();for(String name:names)list.add(name);
+        store.tx(c->{JsonObject current=Store.document(c,"providers",id);
+            if(Json.integer(current,"revision",0)==Json.integer(p,"revision",0)){
+                current.add("models",list.deepCopy());current.addProperty("modelsFetchedAt",Json.now());Store.update(c,"UPDATE providers SET data=? WHERE id=?",current,id);}
+            return null;});
+        return Json.obj("models",list);
+    }
     JsonObject capabilities(JsonObject p){JsonObject provider=get(Json.required(p,"providerId"));JsonObject result=Json.obj("text","unverified","tools","unverified","image","unverified","multiImage","unverified","structured","unverified","connection","unverified","revision",provider.get("revision"));
         JsonObject saved=Json.object(Json.object(provider,"capabilities"),Json.required(p,"model"));for(var e:saved.entrySet()){result.add(e.getKey(),Json.object(saved,e.getKey()).get("status"));}result.add("tests",saved);return result;}
     static String capabilityImage(int index)throws Exception{

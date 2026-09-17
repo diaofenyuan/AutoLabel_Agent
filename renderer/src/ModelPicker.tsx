@@ -25,8 +25,14 @@ export function modelOptions(providers: Provider[], current?: { providerId?: str
     seen.add(key);
     options.push({ key, providerId, model });
   };
-  // 已保存凭据的接口在前；当前选择一定在列表里，避免下拉把已选模型吃掉。
-  for (const provider of providers) if (provider.hasCredential) add(provider.id, provider.model);
+  // 已保存凭据的接口在前；每个接口展开「获取模型列表」登记下来的全部候选模型。
+  // 只列 provider.model 的话，能扫描到 20 个模型的接口在下拉里也只显示 1 个。
+  for (const provider of providers) {
+    if (!provider.hasCredential) continue;
+    add(provider.id, provider.model);
+    for (const name of provider.models ?? []) add(provider.id, name);
+  }
+  // 当前选择一定在列表里，避免接口已删或凭据未保存时下拉把已选模型吃掉。
   add(current?.providerId, current?.model);
   return options;
 }

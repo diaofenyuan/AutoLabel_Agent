@@ -32,7 +32,13 @@ final class CapabilityTest {
         return responses?Json.obj("status","completed","output",Json.arr(Json.obj("type","message","content",Json.arr(Json.obj("type","output_text","text",content))))):Json.obj("choices",Json.arr(Json.obj("finish_reason","stop","message",Json.obj("content",content))));
     }
     static void run(Path root)throws Exception{
-        HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);server.createContext("/v1/",exchange->{try{JsonObject request=Json.parse(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));collect(request);byte[] body=response(exchange.getRequestURI().getPath().endsWith("responses"),request).toString().getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);}finally{exchange.close();}});server.start();
+        HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);server.createContext("/v1/",exchange->{try{
+            // 模型列表是 GET 且没有请求体，必须在对话响应之前分流，否则空体解析会直接 500。
+            if(exchange.getRequestURI().getPath().endsWith("/models")){
+                byte[] list=Json.obj("data",Json.arr(Json.obj("id","fixture-a"),Json.obj("id","fixture-b"),Json.obj("id","fixture-a"),Json.obj("id","   "),Json.obj("note","缺少 id 的条目不应被登记"))).toString().getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,list.length);exchange.getResponseBody().write(list);return;
+            }
+            JsonObject request=Json.parse(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));collect(request);byte[] body=response(exchange.getRequestURI().getPath().endsWith("responses"),request).toString().getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);}finally{exchange.close();}});server.start();
         try(Engine engine=new Engine(root.resolve("capability-data"))){for(String protocol:List.of("chat-completions","responses")){
             JsonObject provider=engine.providers.save(Json.obj("name","能力协议fixture","baseUrl","http://127.0.0.1:"+server.getAddress().getPort()+"/v1","protocol",protocol,"requestsPerMinute",60000));String id=Json.required(provider,"id");engine.providers.credential(Json.obj("providerId",id,"key","local-fixture-key"));
             for(String capability:List.of("image","multiImage")){images.clear();mode="ok";check(Json.required(engine.providers.test(Json.obj("providerId",id,"model","fixture","capability",capability)),"status").equals("verified"),protocol+" accepts image fixture");check(images.size()==(capability.equals("image")?1:2),"correct number of images sent");for(byte[] bytes:images)png(bytes);if(images.size()==2)check(!Arrays.equals(images.get(0),images.get(1)),"multi-image fixtures are distinct");}
@@ -40,6 +46,15 @@ final class CapabilityTest {
             mode="ok";check(Json.required(engine.providers.test(Json.obj("providerId",id,"model","fixture","capability","tools")),"status").equals("verified"),"expected native tool accepted");
             for(String bad:List.of("false","string","missing")){mode=bad;check(Json.required(engine.providers.test(Json.obj("providerId",id,"model","fixture","capability","structured")),"status").equals("unverified"),"incorrect structured truth rejected: "+bad);}
             mode="ok";check(Json.required(engine.providers.test(Json.obj("providerId",id,"model","fixture","capability","structured")),"status").equals("verified"),"explicit boolean true accepted");
+            // 模型清单要落进 provider 文档：只返回不落库的话，界面刷新后选择器又只剩已保存的那一个模型。
+            JsonArray listed=Json.array(engine.providers.models(id),"models");
+            check(listed.size()==2&&listed.get(0).getAsString().equals("fixture-a")&&listed.get(1).getAsString().equals("fixture-b"),protocol+" keeps interface order and drops duplicate, blank and id-less entries");
+            JsonObject registered=engine.providers.get(id);
+            check(registered.has("models")&&registered.has("modelsFetchedAt")&&Json.array(registered,"models").size()==2,"model list is registered on the provider document");
+            check(Json.integer(registered,"revision",0)==Json.integer(provider,"revision",0),"listing models does not bump the provider revision");
+            // 换接口地址后旧清单必须清空，否则选择器会列出另一个端点的模型名。
+            engine.providers.save(Json.obj("id",id,"name","能力协议fixture","baseUrl","http://127.0.0.1:"+server.getAddress().getPort()+"/v2","protocol",protocol));
+            check(!engine.providers.get(id).has("models"),"changing the endpoint clears the stale model list");
         }}finally{server.stop(0);}
     }
 }

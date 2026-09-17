@@ -51,7 +51,10 @@ export default function AiSettings(){
     if(key){await request('credential.set',{providerId:provider.id,key});setKey('');setCredentialSaved(true);}
     notify(key?'接口与凭据已保存。':'接口配置已保存。能力状态需重新验证。');
   }catch(e){setError(errorMessage(e));}finally{setBusy('');}}
-  async function listModels(){if(!form.id){setError('请先保存接口配置。');return;}setBusy('models');setError('');try{const data=await request<{models:string[]}>('provider.models',{providerId:form.id});setModelNames(data.models);notify(`接口返回 ${data.models.length} 个候选模型。`);}catch(e){setError(errorMessage(e));}finally{setBusy('');}}
+  async function listModels(){if(!form.id){setError('请先保存接口配置。');return;}setBusy('models');setError('');try{const data=await request<{models:string[]}>('provider.models',{providerId:form.id});setModelNames(data.models);
+    // 引擎把清单登记在接口配置里；刷新后对话页的模型选择器才能列出全部候选，而不是只有已保存的那一个。
+    await refreshProviders();
+    notify(data.models.length?`接口返回 ${data.models.length} 个候选模型，已登记到该接口，可在对话页的模型选择器里直接选用。`:'接口没有返回任何模型，请核对地址与权限。',!data.models.length);}catch(e){setError(errorMessage(e));}finally{setBusy('');}}
   /**
    * 一键验证并设为默认模型。
    *

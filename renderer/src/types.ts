@@ -7,6 +7,8 @@ export interface Provider {
   concurrency?: number; requestsPerMinute?: number; timeoutMs?: number; maxRetries?: number; maxImages?: number;
   headers?: Record<string,string>; extraParameters?: Record<string,unknown>;
   pricing?: import('./CostControls').Pricing | null;
+  /** 「获取模型列表」登记下来的候选模型；换接口地址或请求头后引擎会清空，避免列出别的端点。 */
+  models?: string[]; modelsFetchedAt?: string;
   hasCredential?: boolean; tests?: Record<string, { status: string; message?: string; testedAt?: string }>;
 }
 export interface Resource { id: string; name: string; kind: string; content: unknown; updatedAt?: string }
