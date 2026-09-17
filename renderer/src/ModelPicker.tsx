@@ -27,8 +27,10 @@ export function modelOptions(providers: Provider[], current?: { providerId?: str
   };
   // 已保存凭据的接口在前；每个接口展开「获取模型列表」登记下来的全部候选模型。
   // 只列 provider.model 的话，能扫描到 20 个模型的接口在下拉里也只显示 1 个。
+  // 未配置密钥的接口不再整组跳过：登记过的候选照样列出（行内带「未配置密钥」标记），
+  // 否则凭据未注入引擎时（如引擎重启前）用户会误以为扫描结果丢了。
   for (const provider of providers) {
-    if (!provider.hasCredential) continue;
+    if (!provider.hasCredential && !provider.models?.length && !provider.model) continue;
     add(provider.id, provider.model);
     for (const name of provider.models ?? []) add(provider.id, name);
   }
@@ -49,6 +51,7 @@ export default function ModelPicker({ providers, providerId, model, depth, disab
   const root = useRef<HTMLDivElement>(null);
   const options = useMemo(() => modelOptions(providers, { providerId, model }), [providers, providerId, model]);
   const nameOf = (item: ModelChoice) => `${providers.find(provider => provider.id === item.providerId)?.name ?? item.providerId} · ${item.model}`;
+  const providerOf = (id: string) => providers.find(provider => provider.id === id);
   const visible = options
     .filter(item => !query.trim() || nameOf(item).toLowerCase().includes(query.trim().toLowerCase()))
     .sort((a, b) => Number(favorites.includes(b.key)) - Number(favorites.includes(a.key)));
@@ -79,7 +82,7 @@ export default function ModelPicker({ providers, providerId, model, depth, disab
       <div className="picker-list">{visible.map(item => <div key={item.key} className={`picker-row ${current?.key === item.key ? 'selected' : ''}`}>
         <button type="button" className="picker-choose" disabled={disabled} onClick={() => onChange(item)}>
           <span className="picker-name truncate">{item.model}</span>
-          <small className="truncate">{providers.find(provider => provider.id === item.providerId)?.name ?? item.providerId}</small>
+          <small className="truncate">{providerOf(item.providerId)?.name ?? item.providerId}{providerOf(item.providerId)?.hasCredential === false && ' · 未配置密钥'}</small>
           {current?.key === item.key && <Check size={15} />}
         </button>
         <button type="button" className={`picker-star ${favorites.includes(item.key) ? 'on' : ''}`} aria-pressed={favorites.includes(item.key)}

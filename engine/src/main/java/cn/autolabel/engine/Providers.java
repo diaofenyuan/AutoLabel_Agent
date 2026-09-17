@@ -269,23 +269,27 @@ final class Providers {
      * 读取接口模型列表，并把结果登记进 provider 文档。
      * 只返回不落库的话，扫描结果一刷新就丢，模型选择器只能退回「每个接口一个已保存模型」的旧行为。
      * 不触碰 revision / capabilities / updatedAt：列模型既不是配置变更，也不代表任何能力通过验证。
-     * 落库前比对 revision，请求期间配置被改过就放弃写入，避免把过期结果盖到新配置上。
+     * 落库前比对 revision，请求期间配置被改过就重读快照重试；仍冲突则如实报错——
+     * 静默放弃会让界面照常弹出「已登记」，实际却没存上。
      */
     JsonObject models(String id){
-        JsonObject p=get(id);JsonObject raw=request(p,"/models",null);
-        // 保留接口返回顺序并去重：同一模型名重复出现时下拉里只应有一条。
-        LinkedHashSet<String> names=new LinkedHashSet<>();
-        for(JsonElement e:Json.array(raw,"data")){JsonObject m=e.getAsJsonObject();JsonElement value=m.get("id");
-            if(value==null||!value.isJsonPrimitive()||!value.getAsJsonPrimitive().isString())continue;
-            String name=value.getAsString().trim();if(name.isEmpty())continue;
-            names.add(name.length()>MAX_MODEL_NAME?name.substring(0,MAX_MODEL_NAME):name);
-            if(names.size()>=MAX_MODELS)break;}
-        JsonArray list=new JsonArray();for(String name:names)list.add(name);
-        store.tx(c->{JsonObject current=Store.document(c,"providers",id);
-            if(Json.integer(current,"revision",0)==Json.integer(p,"revision",0)){
-                current.add("models",list.deepCopy());current.addProperty("modelsFetchedAt",Json.now());Store.update(c,"UPDATE providers SET data=? WHERE id=?",current,id);}
-            return null;});
-        return Json.obj("models",list);
+        for(int attempt=0;attempt<3;attempt++){
+            JsonObject p=get(id);JsonObject raw=request(p,"/models",null);
+            // 保留接口返回顺序并去重：同一模型名重复出现时下拉里只应有一条。
+            LinkedHashSet<String> names=new LinkedHashSet<>();
+            for(JsonElement e:Json.array(raw,"data")){JsonObject m=e.getAsJsonObject();JsonElement value=m.get("id");
+                if(value==null||!value.isJsonPrimitive()||!value.getAsJsonPrimitive().isString())continue;
+                String name=value.getAsString().trim();if(name.isEmpty())continue;
+                names.add(name.length()>MAX_MODEL_NAME?name.substring(0,MAX_MODEL_NAME):name);
+                if(names.size()>=MAX_MODELS)break;}
+            JsonArray list=new JsonArray();for(String name:names)list.add(name);
+            JsonArray snapshot=list.deepCopy();
+            Boolean written=store.tx(c->{JsonObject current=Store.document(c,"providers",id);
+                if(Json.integer(current,"revision",0)!=Json.integer(p,"revision",0))return Boolean.FALSE;
+                current.add("models",snapshot);current.addProperty("modelsFetchedAt",Json.now());Store.update(c,"UPDATE providers SET data=? WHERE id=?",current,id);return Boolean.TRUE;});
+            if(Boolean.TRUE.equals(written))return Json.obj("models",list);
+        }
+        throw new ApiError(409,"models_conflict","接口配置在读取模型列表期间被修改，清单未登记，请重试一次。");
     }
     JsonObject capabilities(JsonObject p){JsonObject provider=get(Json.required(p,"providerId"));JsonObject result=Json.obj("text","unverified","tools","unverified","image","unverified","multiImage","unverified","structured","unverified","connection","unverified","revision",provider.get("revision"));
         JsonObject saved=Json.object(Json.object(provider,"capabilities"),Json.required(p,"model"));for(var e:saved.entrySet()){result.add(e.getKey(),Json.object(saved,e.getKey()).get("status"));}result.add("tests",saved);return result;}
