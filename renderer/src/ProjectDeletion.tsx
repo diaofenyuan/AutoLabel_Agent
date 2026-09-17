@@ -25,6 +25,8 @@ interface DeletionResult {
   removedBytes: number;
   fileFailures: Array<{ path: string; message: string }>;
   externalExportPaths: string[];
+  /** 备份已生成但不含这些依赖（当前只可能是已不可读取的历史外部原件）。 */
+  backupWarnings?: Array<{ code?: string; kind?: string; target?: string; message?: string }>;
 }
 
 const countNames: Record<string, string> = {
@@ -69,11 +71,11 @@ export function ProjectDeletionDialog({ project, onClose, onDeleted }: {
 
   const blocked = (preflight?.blockers.length ?? 0) > 0;
 
-  async function remove() {
+  async function remove(withBackup = createBackup) {
     setBusy(true); setError('');
     try {
       const data = await request<DeletionResult>('project.delete', {
-        projectId: project.id, removeManagedFiles, createBackup,
+        projectId: project.id, removeManagedFiles, createBackup: withBackup,
       });
       setResult(data);
       setStep(3);
@@ -81,6 +83,11 @@ export function ProjectDeletionDialog({ project, onClose, onDeleted }: {
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   }
+  /**
+   * 备份失败时的降级通路。删除是用户已经确认过的明确意图，不能因为「历史外部原图被移动或改动」
+   * 这类与受管数据无关的原因永久卡住；这里显式取消备份并把选项同步回界面，让用户看得见发生了什么。
+   */
+  async function removeWithoutBackup() { setCreateBackup(false); await remove(false); }
 
   const counts = preflight?.counts ?? {};
 
@@ -96,6 +103,7 @@ export function ProjectDeletionDialog({ project, onClose, onDeleted }: {
             已删除项目「{result.name}」：清理受管文件 {result.removedFiles} 个（{formatBytes(result.removedBytes)}）。
             {!!result.fileFailures.length && `有 ${result.fileFailures.length} 个文件未能删除，请在存储位置中手动清理。`}
             {!!result.externalExportPaths.length && `位于数据目录外的 ${result.externalExportPaths.length} 个历史导出目录未被删除。`}
+            {!!result.backupWarnings?.length && `备份已生成，但不含 ${result.backupWarnings.length} 个已不可读取的历史外部原件（不属于受管数据）。`}
             对话历史仍然保留，并标记为「项目已删除」。
           </Notice>
         : step === 1
@@ -124,9 +132,13 @@ export function ProjectDeletionDialog({ project, onClose, onDeleted }: {
                 onChange={e => setRemoveManagedFiles(e.target.checked)} />同时删除受管文件（素材、流程产物、媒体产物）</label>
               <label className="checkbox-row"><input type="checkbox" disabled={busy} checked={createBackup}
                 onChange={e => setCreateBackup(e.target.checked)} />删除前先创建备份（失败即中止删除）</label>
-              <p className="muted tiny">删除过程中会持有数据维护锁，其他写操作会等待。</p>
-              {error && <p className="inline-error">{error}</p>}
+              <p className="muted tiny">删除过程中会持有数据维护锁，其他写操作会等待。备份是整库一致性备份，包含仍可读取的历史外部原图；不勾选时只删除数据库记录与受管文件，外部原图本就不在删除范围内。</p>
+              {error && <p className="inline-error" role="alert">{error}</p>}
+              {/* 引擎会在报错里带上是哪一个依赖出的问题；这里再给出唯一可行的降级动作，
+                  避免用户看到「必要依赖缺失」却没有任何下一步。 */}
+              {error && createBackup && <p className="muted tiny">备份失败多数是历史素材记录的外部原图已被移动或改动，它不属于受管数据。可以不带备份直接删除。</p>}
               <div className="modal-actions">
+                {error && createBackup && <Button type="button" disabled={busy} onClick={() => void removeWithoutBackup()}>不带备份，直接删除</Button>}
                 <Button disabled={busy} onClick={() => setStep(1)}>上一步</Button>
                 <Button className="primary" busy={busy} onClick={() => void remove()}><Trash2 size={14} />删除项目</Button>
               </div>

@@ -17,6 +17,14 @@ final class DataBackups {
     private static final long MARGIN=128L*1024*1024,MAX_MANIFEST=64L*1024*1024;
     private static final int MAX_FILES=200_000;
     private static final Set<String> JSON_TABLES=Set.of("assets","versions","samples","runs","exports","flow_steps","flow_artifact_items","run_baselines","media_jobs","video_sources");
+    /**
+     * 用户自有原件的依赖种类：导入时登记的外部图片，以及抽帧与流程导入选中的外部文件。
+     * 它们不在受管目录内，被移动、改名或清理属于用户自己的文件管理决定，而标注基线、运行输入、
+     * 流程产物与媒体产物都另有受管副本参与备份，恢复能力不受影响。
+     * 若把它们当作必要依赖，任何一次历史原件的移动都会让整库备份——以及删除前的自动备份——永久失败，
+     * 所以这里只降级为警告，真正受管的数据仍然阻断。
+     */
+    private static final Set<String> OPTIONAL_KINDS=Set.of("source","flow_import","video_source");
     private final Store store;
 
     DataBackups(Store store){this.store=store;}
@@ -34,9 +42,11 @@ final class DataBackups {
         Path work=null;
         try{
             Path output=directory(p,"outputDir");work=workDirectory();Path database=work.resolve("autolabel.db");store.snapshotDatabase(database);
-            Plan plan=plan(database,store.root,false);finishPlan(plan);JsonObject result=summary(plan);
-            result.addProperty("availableBytes",Files.getFileStore(output).getUsableSpace());result.addProperty("ready",plan.issues.isEmpty()&&Files.getFileStore(output).getUsableSpace()>=plan.totalBytes+MARGIN);
-            if(Files.getFileStore(output).getUsableSpace()<plan.totalBytes+MARGIN)plan.issues.add(issue("backup_space_low","目标磁盘空间不足。"));
+            Plan plan=plan(database,store.root,false);finishPlan(plan);
+            // 空间不足要先入问题清单再算 ready：反过来的话界面会同时看到「可备份」与一条错误。
+            long usable=Files.getFileStore(output).getUsableSpace();
+            if(usable<plan.totalBytes+MARGIN)plan.issues.add(issue("backup_space_low","目标磁盘空间不足。"));
+            JsonObject result=summary(plan);result.addProperty("availableBytes",usable);result.addProperty("ready",plan.issues.isEmpty());
             return result;
         }catch(ApiError e){throw e;}catch(Exception e){throw error(500,"backup_preflight_failed","备份预检未完成，请检查文件与目录权限。");}
         finally{cleanup(work);}
@@ -158,10 +168,11 @@ final class DataBackups {
     private void assetSource(Plan plan,JsonObject asset,String table,String id,List<String> prefix,Path root,boolean confined){
         JsonObject metadata=Json.object(asset,"metadata");String source=Json.str(metadata,"sourcePath","");if(source.isBlank())return;
         String hash=hashValue(metadata,"sourceHash"),extension=Json.str(metadata,"originalFormat","png").equals("jpeg")?".jpg":".png",target="originals/imported-"+hash+extension;
+        if(!optionalSource(plan,source,root,confined))return;
         add(plan,source,target,hash,"source",root,confined);List<String> pointer=new ArrayList<>(prefix);pointer.add("metadata");pointer.add("sourcePath");bind(plan,table,id,"data",pointer,source,target);
     }
     private static void flowSource(Plan plan,JsonObject file,String table,String id,List<String> prefix,Path root,boolean confined){
-        if(!file.has("sourcePath"))return;String source=Json.required(file,"sourcePath"),hash=hashValue(file,"sourceHash"),target="originals/flow-"+hash+(source.toLowerCase(Locale.ROOT).endsWith(".png")?".png":".jpg");add(plan,source,target,hash,"flow_import",root,confined);List<String> pointer=new ArrayList<>(prefix);pointer.add("sourcePath");bind(plan,table,id,"data",pointer,source,target);
+        if(!file.has("sourcePath"))return;String source=Json.required(file,"sourcePath"),hash=hashValue(file,"sourceHash"),target="originals/flow-"+hash+(source.toLowerCase(Locale.ROOT).endsWith(".png")?".png":".jpg");if(!optionalSource(plan,source,root,confined))return;add(plan,source,target,hash,"flow_import",root,confined);List<String> pointer=new ArrayList<>(prefix);pointer.add("sourcePath");bind(plan,table,id,"data",pointer,source,target);
     }
     private static String inputHash(JsonObject value){JsonObject snapshot=Json.object(value,"inputSnapshot");return snapshot.has("contentHash")||Json.str(snapshot,"kind","").equals("view")?hashValue(snapshot,"contentHash"):hashValue(Json.object(value,"asset"),"contentHash");}
     private static void trackFiles(Plan plan,Connection c,Path root,boolean confined)throws Exception{
@@ -213,6 +224,7 @@ final class DataBackups {
         for(JsonObject row:Store.rows(c,"SELECT id,data FROM video_sources")){JsonObject source=Json.parse(row.get("data").getAsString());videoSource(plan,"video_sources",Json.required(row,"id"),List.of("sourcePath"),Json.required(source,"sourcePath"),hashValue(source,"contentHash"),root,confined);}
     }
     private static void videoSource(Plan plan,String table,String id,List<String> pointer,String source,String expected,Path root,boolean confined)throws Exception{
+        if(!optionalSource(plan,source,root,confined))return;
         Path file=absolute(source);String hash=expected==null?Media.hash(file):expected,name=file.getFileName().toString(),extension=name.contains(".")?name.substring(name.lastIndexOf('.')).toLowerCase(Locale.ROOT):".video";
         if(!extension.matches("\\.[a-z0-9]{1,10}"))extension=".video";String target="video-sources/"+hash+extension;
         add(plan,source,target,hash,"video_source",root,confined);bind(plan,table,id,"data",pointer,source,target);
@@ -348,14 +360,39 @@ final class DataBackups {
         for(FileRef file:plan.files.values())for(Path candidate:file.candidates)if(Files.isRegularFile(candidate)){
             try{String hash=Media.hash(candidate);if(file.expected==null||hash.equals(file.expected))known.put(hash,candidate);}catch(IOException ignored){/* 下方统一报告不可读取依赖。 */}
         }
+        List<FileRef> unavailable=new ArrayList<>();
         for(FileRef file:plan.files.values()){
             if(file.expected!=null&&known.containsKey(file.expected))file.source=known.get(file.expected);
             try{
                 if(!Files.isRegularFile(file.source))throw error(422,"backup_dependency_missing","依赖文件缺失。");
                 file.size=Files.size(file.source);file.hash=Media.hash(file.source);if(file.expected!=null&&!file.expected.equals(file.hash))throw error(422,"backup_dependency_changed","依赖文件内容已变化。");
                 plan.totalBytes=Math.addExact(plan.totalBytes,file.size);
-            }catch(Exception e){plan.issues.add(Json.obj("code",e instanceof ApiError a?a.code:"backup_dependency_unavailable","target",file.target,"kind",file.kind,"message","依赖文件缺失、内容变化或不可访问。"));}
+            }catch(Exception e){
+                JsonObject record=Json.obj("code",e instanceof ApiError a?a.code:"backup_dependency_unavailable","target",file.target,"kind",file.kind,"message","依赖文件缺失、内容变化或不可访问。");
+                if(!OPTIONAL_KINDS.contains(file.kind)){plan.issues.add(record);continue;}
+                plan.warnings.add(record);unavailable.add(file);
+            }
         }
+        // 取不到的外部原件不能进压缩包：留在清单里会让归档校验在大小与摘要上失败；
+        // 它的路径绑定也要一并撤掉，否则绑定会指向一个不存在的条目。
+        // 撤掉绑定意味着恢复后的数据库保留该字段的原值（仍是用户机器上的原始路径），
+        // 由素材重定位负责重新指向，这是「原件本来就取不到」时唯一诚实的处理。
+        for(FileRef file:unavailable){plan.files.remove(file.target);dropBindings(plan,file.target);}
+    }
+    private static void dropBindings(Plan plan,String target){
+        // JsonArray 没有 clear()，倒序按索引移除即可，避免重建数组时漏掉引用关系。
+        for(int i=plan.bindings.size()-1;i>=0;i--)if(target.equals(Json.str(plan.bindings.get(i).getAsJsonObject(),"target","")))plan.bindings.remove(i);
+    }
+    /**
+     * 用户自有原件在恢复校验阶段的登记前置检查。
+     * 备份时取不到原件的那一项已被降级为警告并撤掉绑定，数据库里仍保留它的原始绝对路径；
+     * 校验备份内容（confined=true）时这条越界路径是预期结果，不能按「越过备份范围」报错。
+     * 受管数据不走这条路径，仍由 add 做越界检查。
+     */
+    private static boolean optionalSource(Plan plan,String source,Path root,boolean confined){
+        if(!confined||absolute(source).startsWith(root))return true;
+        plan.warnings.add(Json.obj("code","backup_source_external","target",source,"kind","source","message","原件不在受管目录内，恢复后保留原路径，需由素材重定位处理。"));
+        return false;
     }
 
     private static JsonObject manifest(Plan plan,String id){

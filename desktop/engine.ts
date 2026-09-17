@@ -17,6 +17,30 @@ async function exists(value: string): Promise<boolean> { try { await access(valu
 /** 同时在途的命令上限；引擎侧命令并发过高会耗尽虚拟线程载体池并导致整体失联。 */
 const MAX_IN_FLIGHT_COMMANDS = 12;
 
+/**
+ * 把引擎返回的 error.details 摘要成可读后缀。
+ * 引擎在 details 里已经说明具体是哪一个依赖出的问题（例如备份的 issues 带 target 与 kind），
+ * 此前只取 code 与 message，界面就只剩「必要依赖缺失」这种无法行动的结论。
+ * 只摘录已知的定位字段，最多三条，避免把整段 details 塞进提示。
+ */
+function describeDetails(details: unknown): string {
+  if (!details || typeof details !== 'object') return '';
+  const names: string[] = [];
+  for (const value of Object.values(details as Record<string, unknown>)) {
+    if (!Array.isArray(value)) continue;
+    for (const item of value) {
+      if (!item || typeof item !== 'object') continue;
+      const fields = item as Record<string, unknown>;
+      const located = [fields.target, fields.path, fields.assetId, fields.stepId].find(candidate => typeof candidate === 'string' && candidate);
+      if (typeof located !== 'string') continue;
+      names.push(`${typeof fields.kind === 'string' ? `${fields.kind} ` : ''}${located}`);
+      if (names.length >= 3) break;
+    }
+    if (names.length >= 3) break;
+  }
+  return names.length ? `（涉及 ${names.join('、')}${names.length >= 3 ? ' 等' : ''}）` : '';
+}
+
 export interface EngineOptions {
   packaged: boolean; root: string; resources: string; dataDir: string;
   credentials: () => Promise<Array<{ providerId: string; key: string; credentialBindingVersion?: string }>>;
@@ -246,8 +270,11 @@ export class EngineManager extends EventEmitter {
   async request(command: string, payload: Record<string, unknown> = {}, timeout = 120000): Promise<unknown> {
     await this.enterQueue();
     try {
-      const response = await this.fetchJson('/command', { command, payload }, timeout) as { ok: boolean; data?: unknown; error?: { code: string; message: string } };
-      if (response.ok !== true) throw new DesktopError(response.error?.code ?? 'ENGINE_COMMAND_FAILED', redact(response.error?.message ?? '引擎操作失败', [this.token, ...this.secretValues]));
+      const response = await this.fetchJson('/command', { command, payload }, timeout) as { ok: boolean; data?: unknown; error?: { code: string; message: string; details?: unknown } };
+      if (response.ok !== true) {
+        const detail = `${response.error?.message ?? '引擎操作失败'}${describeDetails(response.error?.details)}`;
+        throw new DesktopError(response.error?.code ?? 'ENGINE_COMMAND_FAILED', redact(detail, [this.token, ...this.secretValues]));
+      }
       return normalizeMedia(response.data);
     } finally { this.leaveQueue(); }
   }

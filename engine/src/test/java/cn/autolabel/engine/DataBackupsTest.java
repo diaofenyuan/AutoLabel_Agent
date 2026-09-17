@@ -50,11 +50,28 @@ public final class DataBackupsTest {
             check(Files.readString(fixture.externalSource).equals("source changed after backup"),"restore never overwrites the external source");
             try(Store again=new Store(destination)){check(Json.integer(new Projects(again).asset(fixture.first),"version",0)==2,"prepared database reopens with frozen version");}
 
-            JsonObject missing=backups.preflight(Json.obj("outputDir",archives.toString()));check(!Json.bool(missing,"ready",true)&&!Json.array(missing,"issues").isEmpty(),"changed external original prevents complete backup");
-            long before=children(archives);rejects("backup_dependencies_invalid",()->backups.create(Json.obj("outputDir",archives.toString())));check(children(archives)==before,"failed backup does not publish a partial archive");
+            // 被改动的外部原图只降级为警告：它不在受管目录内，用户移动或改动自己的原图
+            // 不该让整库备份——以及删除前的自动备份——永久失败；标注基线等受管数据仍是必要依赖。
+            JsonObject changed=backups.preflight(Json.obj("outputDir",archives.toString()));
+            JsonArray warnings=Json.array(changed,"warnings");
+            check(Json.bool(changed,"ready",false)&&Json.array(changed,"issues").isEmpty(),"changed external original no longer blocks the backup");
+            check(warnings.size()==1&&Json.str(warnings.get(0).getAsJsonObject(),"kind","").equals("source")&&Json.str(warnings.get(0).getAsJsonObject(),"target","").startsWith("originals/imported-"),"warning names the changed external original");
+            long before=children(archives);
+            JsonObject withoutSource=backups.create(Json.obj("outputDir",archives.toString(),"operationId","fixture-source-warning"));
+            check(Json.str(withoutSource,"status","").equals("completed")&&children(archives)==before+1,"backup publishes without the unavailable external original");
+            // 取不到的原件必须同时退出文件清单与路径绑定，否则归档条目、大小与绑定校验会互相矛盾。
+            check(Json.bool(backups.inspect(Json.obj("backupPath",Json.required(withoutSource,"backupPath"))),"valid",false),"backup without that original still verifies end to end");
+            // 受管数据缺失仍然阻断：移走标注基线必须让备份继续失败。
+            Path baseline=new Projects(store).path(fixture.first),parked=baseline.resolveSibling(baseline.getFileName()+".parked");
+            Files.move(baseline,parked);
+            JsonObject blocked=backups.preflight(Json.obj("outputDir",archives.toString()));
+            check(!Json.bool(blocked,"ready",true)&&Json.array(blocked,"issues").toString().contains("\"baseline\""),"missing managed baseline still blocks the backup");
+            rejects("backup_dependencies_invalid",()->backups.create(Json.obj("outputDir",archives.toString(),"operationId","fixture-baseline-missing")));
+            check(children(archives)==before+1,"failed backup does not publish a partial archive");
+            Files.move(parked,baseline);
             Files.write(fixture.externalSource,sourceBytes);
             store.tx(c->{JsonObject asset=Store.document(c,"assets",fixture.second);Json.object(asset,"metadata").addProperty("sourcePath",root.resolve("已移动的原图.jpg").toString());Store.update(c,"UPDATE assets SET data=? WHERE id=?",asset,fixture.second);return null;});
-            check(Json.bool(backups.preflight(Json.obj("outputDir",archives.toString())),"ready",false),"duplicate dependency can use the registered historical source when the first path is missing");
+            JsonObject duplicate=backups.preflight(Json.obj("outputDir",archives.toString()));check(Json.bool(duplicate,"ready",false)&&Json.array(duplicate,"warnings").isEmpty(),"duplicate dependency can use the registered historical source when the first path is missing");
             store.tx(c->{JsonObject asset=Store.document(c,"assets",fixture.second);Json.object(asset,"metadata").addProperty("sourcePath",fixture.externalSource.toString());Store.update(c,"UPDATE assets SET data=? WHERE id=?",asset,fixture.second);return null;});
             store.tx(c->{Store.update(c,"UPDATE attempts SET status='sent' WHERE id='unknown-attempt'");return null;});
             JsonObject active=backups.preflight(Json.obj("outputDir",archives.toString()));check(Json.array(active,"issues").toString().contains("backup_not_quiescent"),"actual in-flight request blocks snapshot publication");

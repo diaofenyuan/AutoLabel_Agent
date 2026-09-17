@@ -254,16 +254,21 @@ async function prepareDefaultBackupDirectory(): Promise<string> {
  */
 async function deleteProject(payload: Record<string, unknown>): Promise<unknown> {
   const projectId = payload.projectId as string;
+  let backup: Record<string, unknown> | null = null;
   if (payload.createBackup !== false) {
     const backupDir = typeof payload.backupDir === 'string' && payload.backupDir
       ? await grants.require(payload.backupDir, ['directory']) : await prepareDefaultBackupDirectory();
-    await storage!.createBackup(backupDir);
+    backup = await storage!.createBackup(backupDir) as Record<string, unknown>;
   }
   const result = await storage!.withMaintenance(operationId =>
     engine.request('project.delete', { ...payload, operationId })) as Record<string, unknown>;
   // 历史对话保留，只标记来源项目已删除。
   await chatStore.markProjectDeleted(projectId).catch(error => engine.log(`对话记录标记未更新：${error instanceof DesktopError ? error.code : 'CHAT_MARK_FAILED'}`));
-  return result;
+  // 备份可能不含已不可读取的历史外部原件（引擎把它们降级为警告）；不回传的话
+  // 用户会默认备份是完整的，这正是删除前备份最容易误导人的地方。
+  return backup
+    ? { ...result, backupPath: backup.backupPath, backupWarnings: Array.isArray(backup.warnings) ? backup.warnings : [] }
+    : result;
 }
 /**
  * 导出默认落点：受管「划分好的训练集」目录下的「项目名-时间戳」子目录。
