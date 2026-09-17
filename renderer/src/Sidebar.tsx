@@ -9,6 +9,7 @@ import { useApp } from './context';
 import { useActiveTaskCount } from './activeTasks';
 import { errorMessage, isDemo, request } from './bridge';
 import { Button, Field, IconButton, Modal } from './ui';
+import ProjectResolveDialog from './ProjectResolveDialog';
 
 /**
  * 会话挂在项目下，导航里不再有「新建对话」：新对话由欢迎页按描述建项目后开始。
@@ -40,6 +41,8 @@ export function Sidebar() {
   const [showAllProjects, setShowAllProjects] = useState(false);
   const [showAllOrphaned, setShowAllOrphaned] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<string[]>([]);
+  // 新建项目走命名弹框：项目不再自动取名，名称由用户在这里确定。
+  const [creatingProject, setCreatingProject] = useState(false);
 
   // 置顶按 pinOrder、其余按 lastMessageAt 倒序，Ctrl+1…9 与置顶共用同一序列。
   const ordered = useMemo(() => [...chatSessions].sort((a, b) => {
@@ -145,9 +148,9 @@ export function Sidebar() {
       <nav aria-label="主导航">{mainEntries.map(entry => <button key={entry.key} className="nav-item" title={entry.label} onClick={() => void startProjectChat()}><entry.icon size={18} strokeWidth={1.65} /><span>{entry.label}</span></button>)}</nav>
       {pinned.length > 0 && <div className="sidebar-group"><div className="sidebar-group-head"><span className="sidebar-group-title">置顶</span></div>{pinned.map(sessionRow)}</div>}
       <div className="sidebar-group">
-        {/* 「＋」回到欢迎页：新对话要先有项目，由欢迎页按描述建好项目再开始。 */}
+        {/* 「＋」弹出命名框：项目必须由用户命名，不再自动取名也不再只跳欢迎页。 */}
         <div className="sidebar-group-head"><span className="sidebar-group-title">项目</span>
-          <button className="sidebar-group-more" title="新建项目" aria-label="新建项目" onClick={() => void startProjectChat()}><Plus size={15} /></button>
+          <button className="sidebar-group-more" title="新建项目" aria-label="新建项目" onClick={() => setCreatingProject(true)}><Plus size={15} /></button>
           <button className="sidebar-group-more" title="会话管理" aria-label="会话管理" aria-haspopup="menu" aria-expanded={headerMenu} onClick={() => setHeaderMenu(v => !v)}><MoreHorizontal size={15} /></button>
           {headerMenu && <div className="sidebar-menu" role="menu">
             <button role="menuitem" disabled={!chatSessions.length} onClick={() => { setHeaderMenu(false); setConfirmClear(true); }}><Eraser size={14} />清空全部对话…</button>
@@ -197,6 +200,16 @@ export function Sidebar() {
       <button className="nav-item" aria-current={page === 'tasks' ? 'page' : undefined} title="任务" onClick={() => void navigate('tasks')}><ListTodo size={18} strokeWidth={1.65} /><span>任务</span>{activeTasks > 0 && <span className="nav-badge" aria-label={`进行中的任务 ${activeTasks} 个`}>{activeTasks}</span>}</button>
       <button className="nav-item" aria-current={page === 'settings' ? 'page' : undefined} title="设置" onClick={() => void navigate('settings')}><SettingsIcon size={18} strokeWidth={1.65} /><span>设置</span></button>
     </div>
+    {creatingProject && <ProjectResolveDialog title="新建项目" confirmLabel="创建项目" projects={projects} allowExisting={false}
+      onClose={() => setCreatingProject(false)}
+      onConfirm={async choice => {
+        if (choice.mode !== 'create') throw new Error('请填写项目名称。');
+        const created = await request<Project>('project.create', { name: choice.name.slice(0, 80), taskType: 'detect' });
+        await refreshProjects();
+        // 建好直接进入该项目的新对话，不发首条消息，交给用户继续描述。
+        await openProject(created);
+        setCreatingProject(false);
+      }} />}
     {rename && <Modal title={rename.kind === 'session' ? '重命名对话' : '重命名项目'} onClose={() => setRename(null)}><form onSubmit={submitRename} className="form-stack"><Field label="名称"><input autoFocus maxLength={rename.kind === 'session' ? 120 : 80} value={rename.value} onChange={e => setRename({ ...rename, value: e.target.value })} /></Field><div className="modal-actions"><Button type="button" onClick={() => setRename(null)}>取消</Button><Button className="primary" type="submit" busy={busy} disabled={!rename.value.trim()}>保存</Button></div></form></Modal>}
     {confirmClear && <Modal title="清空全部对话" onClose={() => setConfirmClear(false)}><div className="form-stack"><p>全部 {chatSessions.length} 个对话会先移入回收站并保留 7 天，可在此期间从回收站恢复。</p><div className="modal-actions"><Button type="button" onClick={() => setConfirmClear(false)}>取消</Button><Button className="primary" busy={busy} onClick={() => void clearSessions()}>确认清空</Button></div></div></Modal>}
   </aside>;
