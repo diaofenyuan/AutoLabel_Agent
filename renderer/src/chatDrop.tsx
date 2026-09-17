@@ -1,11 +1,10 @@
 import { useState } from 'react';
-import { useApp } from './context';
+import { useApp, type ChatAttachment } from './context';
 import { errorMessage, getBridge, request } from './bridge';
 import { Button, Modal } from './ui';
 import { dropRejectionNotice, useFileDrop, type DroppedFiles } from './fileDrop';
 import { IMAGE_EXTENSION_LABEL, VIDEO_EXTENSION_LABEL } from '../../shared/mediaFormats';
-import { baseName, projectNameFor, sameNameProject } from './projectNaming';
-import type { Project } from './types';
+import { baseName } from './projectNaming';
 
 export interface DropVideo { projectId: string; path: string }
 export interface VideoPicks { projectId: string; files: string[] }
@@ -30,11 +29,11 @@ export function VideoPickList({ picks, onChoose, onClose }: { picks: VideoPicks 
 }
 
 /**
- * 对话区的拖放处理：图片与文件夹直接入库，视频交给既有的抽帧流程，
- * 其它类型按原因如实说明，不静默忽略。
+ * 对话区的拖放处理：拖入的文件变成聊天框附件条，发送时才导入并确定项目归属；
+ * 不再「拖入即建项目即入库」。拒绝原因照旧如实说明，不静默忽略。
  */
-export function useChatFileDrop() {
-  const { project, projects, refreshProjects, refreshAssets, openProject, notify } = useApp();
+export function useChatFileDrop(onAttach: (attachments: ChatAttachment[]) => void) {
+  const { notify } = useApp();
   const [video, setVideo] = useState<DropVideo | null>(null);
   const [picks, setPicks] = useState<VideoPicks | null>(null);
   async function handle(files: DroppedFiles) {
@@ -44,47 +43,41 @@ export function useChatFileDrop() {
     try {
       const bridge = await getBridge();
       const notes: string[] = [];
-      const imagePaths = [...files.images];
-      const videoPaths = [...files.videos];
-      // 文件夹：图片整目录交给引擎（同一套规则，界面只负责把「有多少用不上」讲清楚），视频进候选清单。
+      const attachments: ChatAttachment[] = [];
+      const push = (path: string, kind: ChatAttachment['kind']) => attachments.push({ id: crypto.randomUUID(), path, kind, name: baseName(path) });
+      // 文件夹先按引擎同一套规则数一数：能用的整目录作为附件挂进聊天框，「有多少用不上」在这里讲清楚。
       for (const directory of files.directories) {
         const images = await bridge.listDirectory?.({ path: directory, kind: 'images' });
         const videos = await bridge.listDirectory?.({ path: directory, kind: 'video' });
         const label = baseName(directory);
+        if (images?.files.length || videos?.files.length) push(directory, 'directory');
         if (images?.files.length) {
-          imagePaths.push(directory);
-          if (images.unsupported) notes.push(`「${label}」里另有 ${images.unsupported} 个文件不是 JPG / JPEG / PNG，没有导入。`);
-          if (images.truncated) notes.push(`「${label}」过大，本次只处理了上限内的部分。`);
+          if (images.unsupported) notes.push(`「${label}」里另有 ${images.unsupported} 个文件不是 JPG / JPEG / PNG，不会导入。`);
+          if (images.truncated) notes.push(`「${label}」过大，导入时只处理上限内的部分。`);
         }
-        if (videos?.files.length) videoPaths.push(...videos.files);
-        else if (videos?.unsupported) notes.push(`「${label}」里有 ${videos.unsupported} 个文件不是视频，已跳过。`);
-        if (!images?.files.length && !videos?.files.length) notes.push(`「${label}」里没有找到可导入的素材。图片支持 ${IMAGE_EXTENSION_LABEL}，视频支持 ${VIDEO_EXTENSION_LABEL}。`);
+        if (videos?.unsupported) notes.push(`「${label}」里有 ${videos.unsupported} 个文件不是视频，已跳过。`);
+        if (!images?.files.length && !videos?.files.length) notes.push(`「${label}」里没有可导入的素材。图片支持 ${IMAGE_EXTENSION_LABEL}，视频支持 ${VIDEO_EXTENSION_LABEL}。`);
       }
-      // 会话必须挂在项目下：拖进来的东西要有去处，没有项目就先按拖入对象的位置建一个（同名则复用）。
-      let target = project;
-      const anchor = files.directories[0] ?? files.images[0] ?? files.videos[0];
-      if (!target) {
-        const name = projectNameFor(anchor, files.directories.length > 0);
-        target = sameNameProject(projects, name) ?? await request<Project>('project.create', { name, taskType: 'detect' });
-        await refreshProjects();
-      }
-      if (imagePaths.length) {
-        const result = await request<{ imported: number; skipped: number }>('asset.import', { projectId: target.id, paths: imagePaths, mode: 'copy' });
-        notes.unshift(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`);
-        if (project) await refreshAssets();
-      }
-      // 视频先交给抽帧面板检查与设参，不直接建任务；多个视频列成清单逐个来。
-      if (videoPaths.length === 1) setVideo({ projectId: target.id, path: videoPaths[0] });
-      else if (videoPaths.length > 1) setPicks({ projectId: target.id, files: videoPaths });
-      if (!project) await openProject(target);
-      // openProject 会清掉当前提示，所以结果播报放在它之后。
+      for (const path of files.images) push(path, 'image');
+      for (const path of files.videos) push(path, 'video');
+      onAttach(attachments);
       if (notes.length) notify(notes.join(' '));
     } catch (e) { notify(errorMessage(e), true); }
   }
   const drop = useFileDrop(handle);
   return {
     active: drop.active, handlers: drop.handlers, video, closeVideo: () => setVideo(null),
+    openVideo: (value: DropVideo) => setVideo(value),
     picks, openPicks: (value: VideoPicks) => setPicks(value), closePicks: () => setPicks(null),
     chooseVideo: (path: string) => { const current = picks; setPicks(null); if (current) setVideo({ projectId: current.projectId, path }); }
   };
+}
+
+/** 附件真正落库：图片与目录交给 asset.import，视频返回给调用方走抽帧流程。 */
+export async function importAttachments(projectId: string, attachments: ChatAttachment[]): Promise<{ imported: number; skipped: number; videos: string[] }> {
+  const paths = attachments.filter(item => item.kind !== 'video').map(item => item.path);
+  const videos = attachments.filter(item => item.kind === 'video').map(item => item.path);
+  if (!paths.length) return { imported: 0, skipped: 0, videos };
+  const result = await request<{ imported: number; skipped: number }>('asset.import', { projectId, paths, mode: 'copy' });
+  return { ...result, videos };
 }

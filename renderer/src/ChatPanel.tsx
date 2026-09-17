@@ -9,7 +9,7 @@ import { TaskCards } from './TaskCards';
 import ModelPicker from './ModelPicker';
 import FlowPicker from './FlowPicker';
 import { DropOverlay } from './fileDrop';
-import { VideoPickList, useChatFileDrop } from './chatDrop';
+import { VideoPickList, useChatFileDrop, importAttachments } from './chatDrop';
 import { RichText } from './chatText';
 import { useEffect, useRef } from 'react';
 import { MessageSquare, Settings2, FolderOpen, Sparkles } from 'lucide-react';
@@ -23,12 +23,22 @@ import { Composer, Button, Empty } from './ui';
  * 消息落盘由主进程负责，这里只在首次打开某条会话时读回一次，之后以内存状态为准。
  */
 export default function ChatPanel({ compact = false, assetId, sessionId }: { compact?: boolean; assetId?: string; sessionId?: string }) {
-  const { project, prefs, notify, navigate, chats, setChats, assets, assetTotal, selectedAssetIds, assetsLoading, providers, events, activeSessionId, refreshChatSessions, setMediaJob, setMediaTaskId } = useApp();
+  const { project, prefs, notify, navigate, chats, setChats, assets, assetTotal, selectedAssetIds, assetsLoading, providers, events, activeSessionId, refreshChatSessions, refreshAssets, setMediaJob, setMediaTaskId, pendingVideoImports, setPendingVideoImports } = useApp();
   const chatConfig=resolveConfiguration('chat',prefs,project?.settings);
   const annotationConfig=resolveConfiguration('annotation',prefs,project?.settings);
   const aiConfigured = useAiConfigured();
   // 拖入文件只在会话页生效；工作台里的紧凑面板由工作台自己管导入。
-  const drop = useChatFileDrop();
+  // 拖进来的文件先挂进当前会话的附件条，发送时才导入项目。
+  const drop = useChatFileDrop(items => {
+    if (!key) return;
+    setChats(state => {
+      const current = state[key] ?? blankChatSession(key);
+      const known = new Set((current.attachments ?? []).map(item => item.path));
+      const fresh = items.filter(item => !known.has(item.path));
+      if (!fresh.length) return state;
+      return { ...state, [key]: { ...current, attachments: [...(current.attachments ?? []), ...fresh] } };
+    });
+  });
   const dropActive = compact ? false : drop.active;
   const key = sessionId ?? activeSessionId;
   const sessionOverride = key ? chats[key] : undefined;
@@ -74,15 +84,34 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     update({ sendOnOpen: false });
     void send();
   }, [key, session?.sendOnOpen, session?.busy, session?.input, assetsLoading]);
+  // 欢迎页发送时拖了视频：项目在那里落不了抽帧面板，把队列带到会话页打开。
+  useEffect(() => {
+    if (!pendingVideoImports || compact) return;
+    const target = pendingVideoImports;
+    setPendingVideoImports(null);
+    if (target.files.length === 1) drop.openVideo({ projectId: target.projectId, path: target.files[0] });
+    else drop.openPicks({ projectId: target.projectId, files: target.files });
+  }, [pendingVideoImports, compact, drop, setPendingVideoImports]);
   async function send(overrides: { autoExecute?: boolean; message?: string } = {}) {
     if (!session) return;
-    const text = (overrides.message ?? session.input).trim();
+    // 只拖了文件没打字也可以发送：附件导入项目后用一句默认说明开场。
+    const attachments = session.attachments ?? [];
+    const text = (overrides.message ?? session.input).trim() || (attachments.length ? `刚添加了 ${attachments.length} 个文件，请核对项目素材。` : '');
     if (!text || session.busy || assetsLoading) return;
     if (!selectedProviderId || !selectedModel) { notify('请先在设置里选择对话接口与对话模型。', true); return; }
     // 模型校验按本次实际使用的接口来，配置里的其它问题（并发、请求上限）照旧拦下。
     const configIssue = chatConfig.issues.find(issue => issue.field !== 'model');
     if (configIssue) { notify(configIssue.message, true); return; }
     if (effectiveScope === 'current' && !assetId) { notify('请先在项目里打开要处理的图片。', true); return; }
+    // 附件随消息一起落库：图片与目录进项目，视频转交抽帧流程（一个面板只跑一个视频）。
+    if (attachments.length) {
+      if (!project) { notify('请先选择项目。', true); return; }
+      const result = await importAttachments(project.id, attachments);
+      update({ attachments: [] });
+      if (result.imported || result.skipped) { await refreshAssets(); notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`); }
+      if (result.videos.length === 1) drop.openVideo({ projectId: project.id, path: result.videos[0] });
+      else if (result.videos.length > 1) drop.openPicks({ projectId: project.id, files: result.videos });
+    }
     const assetIds = effectiveScope === 'current' ? [assetId!] : effectiveScope === 'page' ? assets.map(a => a.id) : effectiveScope === 'selected' ? [...selectedAssetIds] : undefined;
     if (assetIds && !assetIds.length) { notify('当前处理范围没有素材，请先选择图片。', true); return; }
     const next = [...session.messages, { role: 'user' as const, content: text }];
@@ -142,7 +171,9 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     <footer className="chat-dock">
       {project&&<ReferencePicker project={project} value={session.referenceResources??[]} onChange={referenceResources=>update({referenceResources})} disabled={session.busy}/>}
       <ConfigurationView value={chatConfig} providers={providers} compact/>
-      <Composer value={session.input} onChange={input => update({ input })} onSend={() => void send()} placeholder="描述你的标注任务…" busy={session.busy} onCancel={() => { if (session.cancelRequested) return; update({ cancelRequested: true }); void request('agent.cancel', { sessionId: session.id }).catch(e => { update({ cancelRequested: false }); notify(errorMessage(e), true); }); }}>
+      <Composer value={session.input} onChange={input => update({ input })} onSend={() => void send()} placeholder="描述你的标注任务…" busy={session.busy}
+        attachments={session.attachments} onRemoveAttachment={id => update({ attachments: (session.attachments ?? []).filter(item => item.id !== id) })}
+        onCancel={() => { if (session.cancelRequested) return; update({ cancelRequested: true }); void request('agent.cancel', { sessionId: session.id }).catch(e => { update({ cancelRequested: false }); notify(errorMessage(e), true); }); }}>
         <div className="chat-options">
           <FlowPicker disabled={session.busy} onPick={prompt => { update({ input: prompt }); document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus(); }} />
           <select aria-label="助手处理范围" disabled={session.busy} value={effectiveScope} onChange={e => update({ scope: e.target.value as ChatSession['scope'] })}>{assetId && <option value="current">当前图片</option>}<option value="project">全项目 · {assetTotal} 张</option>{!!assets.length && <option value="page">当前页 · {assets.length} 张</option>}{!!selectedAssetIds.length && <option value="selected">已勾选（跨页）· {selectedAssetIds.length} 张</option>}</select>

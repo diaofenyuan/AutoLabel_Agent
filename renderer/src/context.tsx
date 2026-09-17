@@ -28,6 +28,9 @@ export function navLabel(page: Page): string {
   return navAll.find(entry => entry.key === page)?.label ?? '';
 }
 
+/** 拖进聊天框、等待随消息一起入库的文件：发送时才导入并确定项目归属。 */
+export interface ChatAttachment { id: string; path: string; kind: 'image' | 'video' | 'directory'; name: string }
+
 export interface ChatSession {
   id: string; messages: Array<{ role: 'user'|'assistant'; content: string }>;
   referenceResources?:import('../../shared/resources').ReferenceSelection[];
@@ -35,6 +38,8 @@ export interface ChatSession {
   streamingText?: string; streamSinceSequence?: number;
   /** 欢迎页把首条消息随会话一起交出来：会话页挂载后立即发出，用户不必再按一次发送。 */
   sendOnOpen?: boolean;
+  /** 拖入聊天框的附件：展示在输入框上方，发送时才导入项目（不再拖入即建项目）。 */
+  attachments?: ChatAttachment[];
   /**
    * 会话级的模型与思考深度覆盖：只影响这一段对话，新会话回落到设置里的默认值。
    * 未设置时取全局默认，因此这里只保存「用户显式改过」的值。
@@ -84,6 +89,9 @@ export interface AppState {
   setActiveSessionId: (id: string) => void;
   /** 新建对话：会话必须挂在项目下，这里把界面交回欢迎页，由描述建好项目后再开会话。 */
   startProjectChat: () => Promise<void>;
+  /** 欢迎页发送时拖了视频：抽帧面板要等进入项目会话后才打开，队列在这里中转。 */
+  pendingVideoImports: { projectId: string; files: string[] } | null;
+  setPendingVideoImports: (value: { projectId: string; files: string[] } | null) => void;
   openJumper: () => void;
   openHelp: () => void;
   /** 侧栏项目项的「删除…」入口：只触发回调，三步确认弹窗由阶段 4 接入。 */

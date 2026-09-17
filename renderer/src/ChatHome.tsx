@@ -5,29 +5,36 @@ import { request, errorMessage, getBridge } from './bridge';
 import { Composer } from './ui';
 import { AiSetupNotice } from './AiSetup';
 import { DropOverlay } from './fileDrop';
-import { VideoPickList, useChatFileDrop } from './chatDrop';
 import VideoImport from './VideoImport';
 import ModelPicker from './ModelPicker';
 import FlowPicker from './FlowPicker';
 import ProjectResolveDialog, { type ProjectChoice } from './ProjectResolveDialog';
+import { VideoPickList, useChatFileDrop, importAttachments } from './chatDrop';
 import { VIDEO_EXTENSION_LABEL } from '../../shared/mediaFormats';
 import { directoryName, folderName, sameNameProject } from './projectNaming';
+import type { ChatAttachment } from './context';
 import type { Project } from './types';
 
 /**
  * 欢迎页：还没有进入任何项目时落在这里。
  * 会话必须挂在项目下，所以这里不做「不属于任何项目的对话」：
- * 输入一句话就按描述建好项目，并把这句话作为该项目的第一条指令发出去。
+ * 描述或拖入的文件先确认项目归属（命名或选已有），发送后才建好项目并开始对话。
  */
 export default function ChatHome() {
-  const { projects, openProject, refreshProjects, notify, setMediaJob, setMediaTaskId, prefs, savePrefs, providers, navigate } = useApp();
+  const { projects, openProject, refreshProjects, notify, setMediaJob, setMediaTaskId, prefs, savePrefs, providers, navigate, setPendingVideoImports } = useApp();
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   // 欢迎页还没有项目时，用户点「选择视频抽帧」要先有一个项目承载抽帧产物；这里存下这次点击建好的项目与选中路径。
   const [videoStart, setVideoStart] = useState<{ projectId: string; path: string } | null>(null);
+  // 拖进来的文件挂在聊天框附件条上，发送时随项目确认一起入库；不再拖入即建项目。
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   // 项目归属确认：发送 / 导入都先弹框让用户命名或选已有项目，确认后才真正执行。
   const [projectPrompt, setProjectPrompt] = useState<null | { title: string; confirmLabel: string; suggest: string; run: (project: Project) => Promise<void> }>(null);
-  const drop = useChatFileDrop();
+  const drop = useChatFileDrop(items => setAttachments(current => {
+    const known = new Set(current.map(item => item.path));
+    const fresh = items.filter(item => !known.has(item.path));
+    return fresh.length ? [...current, ...fresh] : current;
+  }));
   // 欢迎页还没有会话，选择模型与深度即写入默认值：新建会话与任务都以它为初值。
   const choice = { providerId: prefs.chatProviderId, model: prefs.chatModel, depth: prefs.chatThinkingDepth ?? 'standard' };
   async function saveChoice(next: Partial<typeof choice>) {
@@ -161,19 +168,30 @@ export default function ChatHome() {
         {recentProjects.map(item => <button key={item.id} disabled={busy} title={`最近更新的项目 · ${item.assetCount} 张素材`}
           onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}>继续 {item.name}（{item.assetCount} 张）</button>)}
       </div>
-      <p className="muted tiny">也可以把图片或视频直接拖进来，会新建项目并入库；长任务在对话里选流程发起。</p>
+      <p className="muted tiny">也可以把图片或视频直接拖进聊天框，发送时再确认项目归属；长任务在对话里选流程发起。</p>
     </div>
     {/* 输入区同样固定在页面最下方：欢迎语与建议在上方，发送时先确认项目名称与归属，再开始对话。 */}
     <footer className="chat-dock">
       <Composer value={input} onChange={setInput} onSend={() => {
         const text = input.trim();
-        if (!text || busy) return;
-        // 项目名不再取描述首行：建议名只作预填，名称与归属在弹框里由用户确认。
+        if ((!text && !attachments.length) || busy) return;
+        // 项目名不再自动取名：建议名取描述首行或首个附件的文件夹名，名称与归属在弹框里由用户确认。
         setProjectPrompt({
-          title: '发送第一条消息', confirmLabel: '发送', suggest: pendingName,
-          run: async target => { await openProject(target, text); }
+          title: '发送第一条消息', confirmLabel: '发送',
+          suggest: pendingName || folderName(attachments[0]?.path ?? ''),
+          run: async target => {
+            // 附件随首条消息一起落库：图片与目录进项目，视频交给会话页的抽帧面板。
+            if (attachments.length) {
+              const result = await importAttachments(target.id, attachments);
+              if (result.videos.length) setPendingVideoImports({ projectId: target.id, files: result.videos });
+              if (result.imported || result.skipped) notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`);
+              setAttachments([]);
+            }
+            await openProject(target, text || `刚添加了 ${attachments.length} 个文件，请核对项目素材。`);
+          }
         });
-      }} placeholder="例如：标注工地照片里的安全帽和人员…" busy={busy}>
+      }} placeholder="例如：标注工地照片里的安全帽和人员…" busy={busy}
+        attachments={attachments} onRemoveAttachment={id => setAttachments(list => list.filter(item => item.id !== id))}>
         <div className="chat-options">
           <FlowPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
           {/* 把落点规则写在发送之前：发送时会弹框确认项目名称（或选已有项目）。 */}
