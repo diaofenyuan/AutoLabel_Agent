@@ -279,7 +279,7 @@
 .sidebar-group-more{display:grid;place-items:center;width:22px;height:22px;border-radius:6px;color:var(--muted);flex:none}
 .sidebar-group-more:hover{background:var(--hover);color:var(--text)}
 .sidebar-session,.sidebar-project{position:relative;display:flex;align-items:center;border-radius:7px;margin:1px 0}
-.sidebar-row{display:flex;align-items:center;gap:9px;flex:1;min-width:0;height:32px;padding:0 10px;border-radius:7px;text-align:left;white-space:nowrap;color:var(--text);font-size:12px}
+.sidebar-row{display:flex;align-items:center;gap:9px;flex:1;min-width:0;height:34px;padding:0 10px;border-radius:7px;text-align:left;white-space:nowrap;color:var(--text);font-size:12px}
 .sidebar-session .sidebar-row,.sidebar-project .sidebar-row{padding-right:84px}
 .sidebar-row:hover{background:var(--hover)}
 .sidebar-session.selected .sidebar-row,.sidebar-project.selected .sidebar-row{background:var(--selected)}
@@ -447,7 +447,7 @@
 /* 遗漏范围里每类原因带的下一步动作：行内小按钮，不抢原因与张数的可读性。 */
 .reason-summary>li>.button{min-height:24px;padding:2px 8px;font-size:10px;margin-left:auto}
 /* 侧栏项目行的素材数：同名项目靠它区分，右对齐不挤占项目名。 */
-.sidebar-project-count{flex-shrink:0;margin-left:auto;padding-left:8px;font-size:10px;color:var(--muted)}
+.sidebar-project-count{flex-shrink:0;margin-left:auto;padding-left:8px;font-size:10px;color:var(--soft)}
 .sidebar-project.selected .sidebar-project-count{color:var(--text)}
 /* 对话区的抽帧进度条：把「抽帧完成 ≠ 素材可用」这条断链接回用户当时所在的位置。 */
 .frame-job-strip{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 20px 0;padding:8px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);font-size:11px}
