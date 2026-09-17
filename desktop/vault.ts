@@ -56,6 +56,17 @@ export class CredentialVault {
       return { removed: true };
     });
   }
+  /** 单条回读（解密明文）：设置页回显已保存的 API Key 用；失败视为未保存，不抛出。 */
+  async get(providerId: string): Promise<string | null> {
+    return this.serial(async () => {
+      if (!this.protection.isEncryptionAvailable()) return null;
+      const { entries } = await this.read();
+      const entry = entries[providerId] as Partial<VaultEntry> | null;
+      if (!entry || typeof entry.encryptedKey !== 'string') return null;
+      try { return this.protection.decryptString(Buffer.from(entry.encryptedKey, 'base64')) || null; }
+      catch { return null; }
+    });
+  }
   async all(): Promise<StoredCredential[]> {
     return this.serial(async () => {
       const { entries, migrated } = await this.read();

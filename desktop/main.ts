@@ -471,6 +471,11 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
     if (validated.command === 'agent.chat') return recordAgentChat(payload);
     return agent.request(validated.command, payload);
   }
+  // 回读已保存的 API Key：设置页回显用（默认掩码展示，眼睛切换查看明文）。明文只在本机内存传递，不写入任何配置文件。
+  if (validated.command === 'credential.get') {
+    const key = await requestVault.get(payload.providerId as string);
+    return { hasCredential: Boolean(key), key: key ?? '' };
+  }
   if (validated.command === 'credential.set') {
     const providerId = payload.providerId as string;
     if (providerCredentialMutations.has(providerId)) throw new DesktopError('CREDENTIAL_BUSY', '该接口凭据正在保存或删除，请稍后重试');

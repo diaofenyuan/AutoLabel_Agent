@@ -437,6 +437,7 @@ const schemas: Record<string, z.ZodType> = {
   // 这里曾写成 multi-image，导致「多图输入」的测试按钮被校验拒绝、永远无法验证。
   'provider.test': z.strictObject({ providerId: id, model: name, capability: z.enum(providerCapabilities) }),
   'credential.set': z.strictObject({ providerId: id, key: z.string().min(1).max(16384) }),
+  'credential.get': z.strictObject({ providerId: id }),
   'local.runtime.configure': z.strictObject({ pythonPath: z.string().min(1).max(32767).nullable() }),
   'local.runtime.get': empty,
   'local.runtime.probe': empty,
