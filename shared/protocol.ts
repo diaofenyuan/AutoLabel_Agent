@@ -2,6 +2,16 @@ import type { CandidateReuseProvenance } from './reuse.ts';
 
 export const PROTOCOL_VERSION = 1 as const;
 
+/**
+ * 接口能力测试的规范名称，必须与引擎 Providers.test 的支持集逐字一致。
+ * 界面、桌面校验、Agent 工具三处都从这里取，避免某一处改名后另一个入口静默失效
+ * （曾出现校验用 multi-image、其余用 multiImage，导致「多图输入」测试按钮必然被拒绝）。
+ */
+export const providerCapabilities = ['connection', 'text', 'image', 'multiImage', 'structured', 'tools'] as const;
+export type ProviderCapability = typeof providerCapabilities[number];
+/** 缺省能力：没有它们，模型无法承担对话与标注；其余能力按接口实际情况可选。 */
+export const requiredProviderCapabilities: readonly ProviderCapability[] = ['connection', 'text', 'image', 'structured'];
+
 export type TaskType = 'detect' | 'obb' | 'segment' | 'pose' | 'classify';
 export interface LabelClass { id: string; name: string; color: string }
 export interface Point { x: number; y: number }

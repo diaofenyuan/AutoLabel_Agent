@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { providerCapabilities } from '../shared/protocol';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 /**
@@ -432,7 +433,9 @@ const schemas: Record<string, z.ZodType> = {
   'provider.delete': z.strictObject({ providerId: id }),
   'provider.models': z.strictObject({ providerId: id }),
   'provider.capabilities': z.strictObject({ providerId: id, model: name }),
-  'provider.test': z.strictObject({ providerId: id, model: name, capability: z.enum(['connection', 'text', 'image', 'multi-image', 'structured', 'tools', 'vision', 'structured-output', 'tool-calling']) }),
+  // 能力名取自共享常量，与引擎 Providers.test 的支持集同源：
+  // 这里曾写成 multi-image，导致「多图输入」的测试按钮被校验拒绝、永远无法验证。
+  'provider.test': z.strictObject({ providerId: id, model: name, capability: z.enum(providerCapabilities) }),
   'credential.set': z.strictObject({ providerId: id, key: z.string().min(1).max(16384) }),
   'local.runtime.configure': z.strictObject({ pythonPath: z.string().min(1).max(32767).nullable() }),
   'local.runtime.get': empty,

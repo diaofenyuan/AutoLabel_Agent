@@ -7,6 +7,7 @@ import { assertAgentCommand, validateCommand } from './validation';
 import { PathGrants, authorizeCommandPaths, assetIdFromUrl, mediaTargetFromUrl, isTrustedUrl, normalizeMedia, redact } from './security';
 import { SseDecoder } from './sse';
 import { DIRECTORY_SCAN_MAX_DEPTH, DIRECTORY_SCAN_MAX_FILES, IMAGE_EXTENSIONS, isImagePath, isVideoPath } from '../shared/mediaFormats';
+import { providerCapabilities, requiredProviderCapabilities } from '../shared/protocol';
 import { DialogFixtures } from './dialog-fixtures';
 
 test('IPC 拒绝内部命令、未知字段与无效标注数值', () => {
@@ -17,6 +18,16 @@ test('IPC 拒绝内部命令、未知字段与无效标注数值', () => {
   assert.throws(() => validateCommand('provider.save', { name: '接口', baseUrl: 'https://user:password@example.com/v1', protocol: 'responses' }), /格式不正确/);
   assert.doesNotThrow(() => validateCommand('provider.delete', { providerId: 'provider-1' }));
   assert.throws(() => validateCommand('provider.delete', { providerId: 'provider-1', key: 'never-accepted' }), /格式不正确/);
+});
+test('接口能力名以共享常量为准，界面能点到的每一项都必须被校验接受', () => {
+  // 曾出现校验枚举写作 multi-image、界面与引擎用 multiImage：校验静默拒绝后，
+  // 「多图输入」的测试按钮只会报「参数格式不正确」，看起来像接口不支持。
+  for (const capability of providerCapabilities) {
+    assert.equal(validateCommand('provider.test', { providerId: 'provider-1', model: 'fixture', capability }).payload.capability, capability);
+  }
+  for (const capability of ['multi-image', 'vision', 'structured-output', 'tool-calling', ''])
+    assert.throws(() => validateCommand('provider.test', { providerId: 'provider-1', model: 'fixture', capability }), /格式不正确/);
+  for (const capability of requiredProviderCapabilities) assert.ok((providerCapabilities as readonly string[]).includes(capability));
 });
 test('Agent 原生工具消息与有单位配置通过合法协议', () => {
   const result = validateCommand('chat.send', { providerId: 'p', model: 'model', sessionId: 's', maxRequests: 10,

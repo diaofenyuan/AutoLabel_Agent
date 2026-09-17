@@ -218,7 +218,7 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
     assert.ok(capabilityNote.includes('不代表真实尺寸的大图不会超时'), `能力验证必须说明结论边界，实际：${capabilityNote}`);
     // 超时藏在折叠区里也要能被找到：折叠按钮文案要写清里面有什么。
     assert.ok(await js<boolean>(`[...document.querySelectorAll('.advanced-toggle')].some(b=>b.innerText.includes('超时'))`), '高级请求配置的入口应写明包含超时设置');
-    assert.ok(await js<boolean>(`[...document.querySelectorAll('.model-section button')].some(b=>b.innerText.includes('一键验证并设为默认模型'))`), 'AI 配置页应提供一键验证入口，避免首次配置要手工点五次测试再选两次模型');
+    assert.ok(await js<boolean>(`[...document.querySelectorAll('.model-section button')].some(b=>b.innerText.includes('一键验证并设为默认模型'))`), 'AI 配置页应提供一键验证入口，避免首次配置要手工点六次测试再选两次模型');
     checks.push({ check: 'ai-capability-honesty', rows: capabilityRows.length, timeoutDiscoverable: true, oneClickVerify: true });
 
     await writeFile(output, json({ checks, passed: true }));

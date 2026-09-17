@@ -1,4 +1,5 @@
 import type { Asset, Project } from '../shared/protocol.ts';
+import { providerCapabilities } from '../shared/protocol.ts';
 import { resolveConfiguration } from '../shared/configuration.ts';
 import { FLOW_TOOL_DEFINITIONS } from './flow-tools.ts';
 import { LOCAL_TOOL_DEFINITIONS } from './inference-tools.ts';
@@ -105,7 +106,7 @@ function providerModels(provider: Record<string, unknown>) {
   if (typeof provider.model === 'string' && provider.model.trim()) names.add(provider.model);
   return [...names].map(model => ({ model,
     capabilities: Object.fromEntries(Object.entries(object(capabilities[model] ?? {})).filter(([name]) =>
-      ['connection', 'text', 'image', 'multiImage', 'structured', 'tools'].includes(name)).map(([name, raw]) =>
+      (providerCapabilities as readonly string[]).includes(name)).map(([name, raw]) =>
       [name, pick(object(raw), ['status', 'testedAt', 'revision'])])),
   }));
 }
