@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { ListTodo, RefreshCw, Play, Pause, Square, RotateCcw, ArrowUpRight, Clock3, Activity, X, ChevronRight, FlaskConical, FolderInput, MessageSquare } from 'lucide-react';
 import type { TrainingJob } from '../../shared/training';
 import { TRAINING_JOB_STATUS, activeTrainingJob } from '../../shared/training';
@@ -11,6 +12,7 @@ import { statusNames, type Run } from './types';
 import QualityCenter from './QualityCenter';
 import { BudgetEditor } from './CostControls';
 import FlowRuns from './FlowRuns';
+import { Term } from './Term';
 import MediaJobs from './MediaJobs';
 import VideoTimeline from './VideoTimeline';
 import ReuseProvenance from './ReuseProvenance';
@@ -26,13 +28,13 @@ type TaskKind = 'flow' | 'annotation' | 'media' | 'training' | 'export' | 'track
  * 六类任务的职责边界。看板只负责「现在跑着什么、卡在哪里」；发起、改参数与重试都在对话里说，
  * 因此这里没有创建入口，只有状态、进度、失败原因与回到来源会话的跳转。
  */
-const kindNotes: Record<TaskKind, string> = {
-  flow: '自动流程：按对话里确认过的步骤自动跑标注；运行状态与实际事件在这里回看。',
+const kindNotes: Record<TaskKind, ReactNode> = {
+  flow: <>自动流程：按对话里确认过的步骤自动跑标注；本次<Term name="run" />的状态与实际事件在这里回看。</>,
   annotation: '标注任务：一次标注执行的状态、逐样本结果与已发送的请求数。',
-  media: '素材任务：视频抽帧与素材筛选等原料加工；抽帧完成后即可开始标注。',
-  training: '模型训练：在对话里说明用哪份数据、训练多少轮即可提交；这里回看数据集快照、设备与逐轮指标，失败与中断不会自动重跑。',
+  media: <>素材任务：<Term name="frameExtract" />与素材筛选等原料加工；视频拆成图片后就能像普通素材一样标注。</>,
+  training: <>模型训练：在对话里说明用哪份数据、训练多少轮即可提交；这里回看冻结的数据快照、设备与逐轮指标，失败与中断不会自动重跑。</>,
   export: '数据导出：已完成的导出副本与清单标识，复现导出请在对话里说明。',
-  tracks: '轨迹标注：视频时间轴上的对象轨迹、关键帧与待复核候选。'
+  tracks: <>轨迹标注：视频时间轴上的<Term name="tracks" />、关键帧与待复核候选。</>
 };
 export default function Tasks() {
   const { events, engine, notify, navigate, assets, project, mediaTaskId, setActiveSessionId } = useApp();

@@ -13,6 +13,7 @@ import TemplateDialog from './TemplateDialog';
 import { errorMessage, isDemo, request } from './bridge';
 import { Button, Empty, IconButton, Loading, Modal, PageHeader } from './ui';
 import { statusNames, taskNames } from './types';
+import { Term } from './Term';
 
 /** 素材分页与结果卡片共用同一上限：asset.list 的 limit 最大 100。 */
 const PAGE_SIZE = 100;
@@ -98,7 +99,7 @@ export default function ProjectOverview() {
           {!Object.keys(statusCounts).length && <div><dt>还没有素材</dt><dd>0</dd></div>}</dl>
       </article>
       <article className="overview-card">
-        <h2><Layers size={15} />数据集版本</h2>
+        <h2><Layers size={15} /><Term name="datasetVersion">数据集版本</Term></h2>
         <p className="overview-figure">{versions.length}<small>个</small></p>
         <p className="muted tiny">版本不可变，训练与导出都从这里取数据。</p>
         <ul className="overview-list">{versions.slice(0, 3).map(version => <li key={version.id}>
