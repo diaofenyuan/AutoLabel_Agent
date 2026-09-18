@@ -243,6 +243,10 @@ if (projectIdentityOnly) {
   assert.equal(byCheck.get('duplicate-import-reuses-project')?.assets, 2);
   assert.ok(byCheck.get('sidebar-shows-asset-count'));
   assert.ok(byCheck.get('home-shows-destination'));
+  // 记住落点：勾过一次之后，下一次默认停在这个项目，且勾选保持。
+  assert.ok(byCheck.get('remember-project-destination')?.defaultProjectId);
+  assert.equal(byCheck.get('remembered-destination-default')?.mode, 'existing');
+  assert.equal(byCheck.get('remembered-destination-default')?.checked, true);
   console.log(`项目身份与落点可见性检查通过：${output}`); process.exit(0);
 }
 if (frameScopeOnly) {

@@ -30,6 +30,11 @@ export interface Preferences {
   chatThinkingDepth: ThinkingDepth;
   /** 抽帧产物就绪后是否自动导入项目：默认开，抽帧完成 ≠ 素材可用的那一步不该由人记着。 */
   frameAutoImport?: boolean;
+  /**
+   * 欢迎页记住的项目落点：用户勾过「以后默认进这个项目」后才写入。
+   * 只作为确认框的默认选项，不代替确认，也不自动建项目——项目仍必须由用户命名或亲手选中。
+   */
+  defaultProjectId?: string;
   [key: string]: unknown;
 }
 export const defaultPreferences: Preferences = {

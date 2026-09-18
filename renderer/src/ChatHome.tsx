@@ -208,6 +208,8 @@ export default function ChatHome() {
     <VideoPickList picks={drop.picks} onChoose={path => { const target = drop.picks?.projectId; drop.closePicks(); if (target) setVideoStart({ projectId: target, path }); }} onClose={drop.closePicks} />
     {/* 发送 / 导入共用的项目归属确认框：用户在这里命名或选已有项目，确认后才执行真正的动作。 */}
     {projectPrompt && <ProjectResolveDialog title={projectPrompt.title} confirmLabel={projectPrompt.confirmLabel} projects={projects} suggestName={projectPrompt.suggest}
+      defaultProjectId={prefs.defaultProjectId ?? ''}
+      onRemember={projectId => void savePrefs({ ...prefs, defaultProjectId: projectId || undefined }).catch(e => notify(errorMessage(e), true))}
       onClose={() => setProjectPrompt(null)} onConfirm={handleProjectChoice} />}
     {/* 拖入视频与点击「选择视频抽帧」都走同一个抽帧面板：区别只在于项目是拖放时建的还是按钮提前建好的。 */}
     {(drop.video ?? videoStart) && (() => {

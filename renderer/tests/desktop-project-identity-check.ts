@@ -97,6 +97,38 @@ export async function checkDesktopProjectIdentity(window: BrowserWindow, output:
     const newHint = await js<string>(`document.querySelector('.composer-hint').innerText`);
     assert.ok(newHint.includes('换一个全新的描述'), `新建时也应写出项目名，实际：${newHint}`);
     checks.push({ check: 'home-shows-destination', reuse: reuseHint.replace(/\s+/g, ' '), create: newHint.replace(/\s+/g, ' ') });
+
+    // ===== 记住落点：勾过一次之后，下次默认停在这个项目 =====
+    // 用另一批素材（建议名与已有项目都不同）走一遍，才不会把「同名自动并入」误当成本次的「记住了」。
+    const nameOf = async (text: string) => { const dir = path.join(fixtures, text); await mkdir(dir, { recursive: true }); await copyFile(path.resolve(sources[0]), path.join(dir, 'shot.png')); await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind: 'directory', paths: [dir] }])); return dir; };
+    await toWelcome();
+    await nameOf(`${batch}-first`);
+    await button('导入图片文件夹');
+    await waitFor(`!!${dialog}&&${dialog}.innerText.includes('新建项目')`);
+    await button('选择已有项目', dialog);
+    await waitFor(`!!${dialog}.querySelector('select')`);
+    await js(`(()=>{const e=${dialog}.querySelector('select');e.value=${json(created!.id)};e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await js(`(()=>{const l=[...${dialog}.querySelectorAll('.checkbox-row')].find(node=>node.innerText.includes('以后欢迎页的素材默认进这个项目'));if(!l)throw new Error('确认框应给出记住落点选项');l.querySelector('input').click();})()`);
+    await button('导入并继续');
+    await waitFor(`!!document.querySelector('.chat-panel textarea')`);
+    const remembered = (await api<{ defaultProjectId?: string }>('settings.get')).defaultProjectId;
+    assert.equal(remembered, created!.id, `勾选后应把落点写进设置，实际：${json(remembered)}`);
+    checks.push({ check: 'remember-project-destination', defaultProjectId: remembered });
+
+    // 再开一次，素材来自第三个文件夹：默认必须停在记住的项目上，而不是「新建项目」。
+    await toWelcome();
+    await nameOf(`${batch}-second`);
+    await button('导入图片文件夹');
+    await waitFor(`!!${dialog}&&${dialog}.innerText.includes('选择已有项目')`);
+    const reopened = await js<{ mode: string; selected: string; checked: boolean }>(`(()=>{const d=${dialog};
+      const box=[...d.querySelectorAll('.checkbox-row')].find(node=>node.innerText.includes('以后欢迎页的素材默认进这个项目'));
+      return { mode: d.querySelector('select') ? 'existing' : 'create', selected: d.querySelector('select')?.value ?? '', checked: !!box?.querySelector('input')?.checked };})()`);
+    assert.equal(reopened.mode, 'existing', '记住落点后应默认停在「选择已有项目」');
+    assert.equal(reopened.selected, created!.id, `默认应选中记住的项目，实际：${json(reopened)}`);
+    assert.equal(reopened.checked, true, '再次打开时勾选应保持');
+    checks.push({ check: 'remembered-destination-default', ...reopened });
+    await button('取消', dialog);
+    await waitFor(`!document.querySelector('dialog[open]')`);
     await writeFile(output, json({ checks, passed: true }));
   } catch (error) {
     await writeFile(output.replace(/\.json$/, '-failure.png'), (await window.webContents.capturePage()).toPNG());
