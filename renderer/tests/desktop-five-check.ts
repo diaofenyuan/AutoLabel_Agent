@@ -3,15 +3,15 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { gotoNav } from './desktop-navigation';
+import { gotoNav, openProjectOverview } from './desktop-navigation';
 
 /**
  * 五类任务类型的完整链路验收：人工定标 → 固定版本 → 真实重跑 → 指标口径。
  *
- * 当前状态：入口与项目/素材准备已迁到现界面，但中段仍依赖「标准答案集」编辑界面
- * （`renderer/src/TruthSets.tsx` 现在已经没有任何渲染处，是孤立组件），所以这条仍然跑不通。
- * 要恢复它，得把定标与发布改走 evaluationSet.* 接口——desktop-rerun-check.ts 里已有可直接照搬的写法。
- * 在此之前的失败与「五类指标口径」无关，看到红不要误判为产品回归。
+ * 当前状态：入口、项目与素材准备、以及「概览 → 标准答案集 → 新建 → 进入答案编辑器 → 画框」都已走通；
+ * 卡在答案编辑器里的「保存独立标准答案」之后真值版本没有变成 1（保存被提交了，但没有产生新版本）。
+ * 剩的是答案编辑器内部的一处细节，不再是缺失的界面——要继续就从 `保存独立标准答案` 与
+ * `.truth-savebar` 的确认勾选看起。之前的失败原因与此无关，看到红不要误判为产品回归。
  */
 export async function checkDesktopFive(window:BrowserWindow,output:string):Promise<void>{
   const json=JSON.stringify,jsRaw=<T=any>(s:string):Promise<T>=>window.webContents.executeJavaScript(s);let lastEval='';
@@ -37,7 +37,7 @@ export async function checkDesktopFive(window:BrowserWindow,output:string):Promi
       // 项目走引擎接口（界面已不再提供任务类型选择）；素材必须走界面导入，
       // 直接用 asset.import 会被路径授权拦下——路径只能来自用户选择。
       const name=`五类界面 ${task}-${Date.now()}`;const project=await api('project.create',{name,taskType:task});const picture=path.join(fixtures,`${task}-${Date.now()}.png`);await copyFile(path.join(path.dirname(path.dirname(output)),'renderer/public/example-street.png'),picture);await new Promise<void>(r=>{window.webContents.once('did-finish-load',()=>r());window.webContents.reload();});await wait(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);await writeFile(path.join(userData,'dialog-fixtures.json'),json([{kind:'images',paths:[picture]}]));const clicked=await js<boolean>(`(()=>{const b=[...document.querySelectorAll('.onboarding-lane button')].find(x=>x.innerText.trim()==='导入图片');if(!b)return false;b.click();return true;})()`);assert.ok(clicked,'欢迎页找不到「导入图片」入口');const prompt="document.querySelector('dialog[open]')";await button('选择已有项目',prompt);const picked=await js<boolean>(`(()=>{const e=${prompt}.querySelector('select');if(!e)return false;e.value=${json(project.id)};e.dispatchEvent(new Event('change',{bubbles:true}));return true;})()`);assert.ok(picked,'项目确认框里没有可选的已有项目');await button('导入并继续',prompt);await wait(`!!document.querySelector('.chat-panel textarea')`);const assetId=(await api('asset.list',{projectId:project.id,limit:1})).items[0].id;const original=await api('asset.get',{assetId});
-      await gotoNav({js,wait},'任务');await button('评测与复核');await button('标准答案集');await button('新建标准答案集');await fill('dialog:last-of-type .field input',name+'标准');await js(`document.querySelector('dialog:last-of-type .quality-asset-picks input').click()`);await button('创建独立答案集');await wait(`!!document.querySelector('.truth-asset-list button')`);const set=(await api('evaluationSet.list',{projectId:original.projectId}))[0];await js(`document.querySelector('.truth-asset-list button').click()`);await wait(`!!document.querySelector('.truth-editor img')&&document.querySelector('.truth-editor img').complete`);
+      await openProjectOverview({js,wait},name);await button('标准答案集');await button('新建标准答案集');await fill('dialog:last-of-type .field input',name+'标准');await js(`document.querySelector('dialog:last-of-type .quality-asset-picks input').click()`);await button('创建独立答案集');await wait(`!!document.querySelector('.truth-asset-list button')`);const set=(await api('evaluationSet.list',{projectId:original.projectId}))[0];await js(`document.querySelector('.truth-asset-list button').click()`);await wait(`!!document.querySelector('.truth-editor img')&&document.querySelector('.truth-editor img').complete`);
       if(task==='classify'){await js(`document.querySelector('.truth-savebar input').click()`);assert.equal(await js(`document.querySelector('.truth-savebar .primary').disabled`),true);await select('[aria-label="人工标准分类"]','class-1');}
       else if(task==='segment'){await button('绘制标准多边形');for(const p of points)await click(p.x,p.y);await js(`document.querySelector('.truth-savebar input').click()`);assert.equal(await js(`document.querySelector('.truth-savebar .primary').disabled`),true);await button('完成标准多边形');for(const [i,p]of points.entries())for(const key of ['x','y'] as const)await fill(`[aria-label="标准边界点${i+1}${key}"]`,String(p[key]));}
       else{await button(task==='obb'?'绘制标准旋转框':'绘制标准框');const start=await point(200,200),end=await point(500,400);window.webContents.sendInputEvent({type:'mouseDown',...start,button:'left',clickCount:1});await js('new Promise(r=>requestAnimationFrame(r))');window.webContents.sendInputEvent({type:'mouseMove',...end,movementX:end.x-start.x,movementY:end.y-start.y});window.webContents.sendInputEvent({type:'mouseUp',...end,button:'left',clickCount:1});await wait(`!!document.querySelector('[aria-label="标准答案对象x"]')`);for(const [key,value]of Object.entries(box))await fill(`[aria-label="标准答案对象${key}"]`,String(value));if(task==='obb')await fill('[aria-label="标准旋转角度"]','30');}
