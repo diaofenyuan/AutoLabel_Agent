@@ -23,10 +23,12 @@ import { checkDesktopFrameScope } from './desktop-frame-scope-check';
 import { checkDesktopProjectIdentity } from './desktop-project-identity-check';
 import { checkDesktopDirectoryImport } from './desktop-directory-import-check';
 import { checkDesktopOnboarding } from './desktop-onboarding-check';
+import { checkDesktopAiPreset } from './desktop-ai-preset-check';
 
 // 只在桌面显式验收入口运行；所有文件夹、对话框选择及破坏性夹具均限制在独立测试目录。
 export async function checkDesktopManual(window:BrowserWindow, output:string):Promise<void> {
   if(process.env.AUTOLABEL_ONBOARDING_UI_CHECK==='1')return checkDesktopOnboarding(window,output);
+  if(process.env.AUTOLABEL_AI_PRESET_UI_CHECK==='1')return checkDesktopAiPreset(window,output);
   if(process.env.AUTOLABEL_DIRECTORY_IMPORT_UI_CHECK==='1')return checkDesktopDirectoryImport(window,output);
   if(process.env.AUTOLABEL_PROJECT_IDENTITY_UI_CHECK==='1')return checkDesktopProjectIdentity(window,output);
   if(process.env.AUTOLABEL_FRAME_SCOPE_UI_CHECK==='1')return checkDesktopFrameScope(window,output);
