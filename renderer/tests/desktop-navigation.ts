@@ -60,6 +60,18 @@ export async function gotoSettings(driver: UiDriver, tab: string): Promise<void>
   await driver.wait(`document.querySelector('.settings-tabs button.selected')?.innerText.trim()===${q(tab)}`);
 }
 
+/**
+ * 从侧栏进入某个项目的会话。
+ * 与「只看概览」不同：这一步会把该项目的素材加载进应用层，标准答案集的素材选择器读的正是这份数据。
+ */
+export async function openProjectChat(driver: UiDriver, name: string): Promise<void> {
+  await driver.wait(`[...document.querySelectorAll('.sidebar-project .sidebar-row-title')].some(node=>node.innerText.includes(${q(name)}))`);
+  await waitForIdle(driver);
+  await driver.js(`([...document.querySelectorAll('.sidebar-project')].find(node=>node.innerText.includes(${q(name)}))).querySelector('.sidebar-row').click()`);
+  await driver.wait(`!!document.querySelector('.chat-panel textarea')`);
+  await waitForIdle(driver);
+}
+
 /** 从侧栏打开某个项目的概览页。 */
 export async function openProjectOverview(driver: UiDriver, name: string): Promise<void> {
   await driver.wait(`[...document.querySelectorAll('.sidebar-project .sidebar-row-title')].some(node=>node.innerText.includes(${q(name)}))`);
