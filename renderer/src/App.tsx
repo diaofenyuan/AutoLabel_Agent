@@ -53,7 +53,7 @@ export default function App() {
   const [commandPalette, setCommandPalette] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
   const [commandSelection, setCommandSelection] = useState(0);
-  const [toast, setToast] = useState<{ id: number; message: string; error: boolean } | null>(null);
+  const [toast, setToast] = useState<{ id: number; message: string; error: boolean; action?: { label: string; run: () => void } } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const guard = useRef<null | (() => Promise<void>)>(null);
   const dirtySources = useRef(new Set<string>());
@@ -62,7 +62,17 @@ export default function App() {
     if (dirty) dirtySources.current.add(source); else dirtySources.current.delete(source);
     void getBridge().then(bridge => bridge.setWindowDirty(dirtySources.current.size > 0)).catch(() => {});
   }, []);
-  const notify = useCallback((message: string, error = false) => { clearTimeout(toastTimer.current); setToast({ id: Date.now(), message, error }); toastTimer.current = setTimeout(() => setToast(null), error ? 9000 : 4500); }, []);
+  /**
+   * 提示。第二个参数既接受「是不是错误」的简写，也接受带 action 的对象：
+   * 阻塞类提示只有一句话时，用户得自己去找该改哪里，带上「去配置 / 去勾选」这类出口才算说完整。
+   * 带出口的提示留得更久一些——一个正要点的按钮不该在读到之前先消失。
+   */
+  const notify = useCallback((message: string, errorOrOptions?: boolean | { error?: boolean; action?: { label: string; run: () => void } }) => {
+    const options = typeof errorOrOptions === 'boolean' ? { error: errorOrOptions } : errorOrOptions ?? {};
+    clearTimeout(toastTimer.current);
+    setToast({ id: Date.now(), message, error: Boolean(options.error), action: options.action });
+    toastTimer.current = setTimeout(() => setToast(null), options.action ? 15000 : options.error ? 9000 : 4500);
+  }, []);
   const refreshProjects = useCallback(async () => { const list = await request<Project[]>('project.list'); setProjects(list); setProject(current => current ? list.find(p => p.id === current.id) ?? current : current); }, []);
   const refreshProviders = useCallback(async () => { setProviders(await request<Provider[]>('provider.list')); }, []);
   const refreshChatSessions = useCallback(async (projectId?: string) => {
@@ -236,7 +246,7 @@ export default function App() {
         </main>
       </section>
     </div>
-    {toast && <div key={toast.id} className={`toast ${toast.error ? 'error' : ''}`} role={toast.error ? 'alert' : 'status'}>{toast.error ? <AlertCircle size={17} /> : <Check size={17} />}<span>{toast.message}</span><IconButton label="关闭提示" onClick={() => setToast(null)}><X size={14} /></IconButton></div>}
+    {toast && <div key={toast.id} className={`toast ${toast.error ? 'error' : ''}`} role={toast.error ? 'alert' : 'status'}>{toast.error ? <AlertCircle size={17} /> : <Check size={17} />}<span>{toast.message}</span>{toast.action && <button className="toast-action" onClick={() => { const action = toast.action!; setToast(null); action.run(); }}>{toast.action.label}</button>}<IconButton label="关闭提示" onClick={() => setToast(null)}><X size={14} /></IconButton></div>}
     {help && <Modal title="快捷键与帮助" onClose={() => setHelp(false)}><div className="help-content"><Keyboard size={26} /><p>人工标注在素材预览里完成：打开项目概览或对话结果中的任意素材，点「编辑标注」进入画布；画完点「保存」写入正式标注，核对无误再点「保存并确认」。也可以直接在对话里说明要改什么。</p><dl className="shortcuts">{[['完成当前多边形', 'Enter'], ['取消当前绘制', 'Escape'], ['删除选中的多边形顶点', 'Delete'], ['发送对话消息', 'Ctrl + Enter'], ['打开快速跳转', 'Ctrl + K'], ['切换到前九个对话', 'Ctrl + 1…9']].map(([label,key]) => <div key={label}><dt>{label}</dt><dd><kbd>{key}</kbd></dd></div>)}</dl><p className="muted">{isDemo ? '当前为隔离的浏览器演示。图片与标注保存在本浏览器；API 调用、真实任务及 YOLO 导出需要桌面引擎。' : '图片坐标以引擎提供的基准图为准。模型候选与人工确认分别记录。'}</p></div></Modal>}
     {commandPalette && <Modal title="快速跳转" onClose={() => setCommandPalette(false)}><div className="command-palette"><label className="command-search"><Search size={16} /><input autoFocus value={commandQuery} onChange={event => { setCommandQuery(event.target.value); setCommandSelection(0); }} placeholder="搜索页面…" /></label><div className="command-list">{commandItems.map((entry, index) => <button key={entry.key} className={index === commandSelection ? 'selected' : ''} aria-selected={index === commandSelection} onMouseEnter={() => setCommandSelection(index)} onClick={() => { setCommandPalette(false); void navigate(entry.key); }}><span className="command-icon"><entry.icon size={16} /></span><span>{entry.label}</span><ArrowRight size={14} /></button>)}{!commandItems.length && <p className="quiet-empty">没有匹配的页面。</p>}</div><p className="command-hint"><kbd>↑↓</kbd> 选择 · <kbd>Enter</kbd> 打开 · <kbd>Esc</kbd> 关闭</p></div></Modal>}
     {busyChat && <div className="global-chat-status" role="status"><LoaderCircle size={14} className="spin" /><span>助手执行中 · {busyChat.runningScope}</span><ButtonCancel id={busyChat.id} notify={notify} /></div>}

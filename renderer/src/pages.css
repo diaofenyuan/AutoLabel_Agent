@@ -254,6 +254,9 @@
 .chat-examples{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:4px}
 .chat-examples button{padding:5px 11px;border:1px solid var(--border);border-radius:999px;background:var(--bg);color:var(--muted);font-size:11px}
 .chat-examples button:hover{border-color:var(--soft);background:var(--surface);color:var(--text)}
+/* 带下一步的提示：出口按钮贴着文字，一眼能看出这句话可以点。 */
+.toast-action{flex:none;padding:3px 10px;border:1px solid color-mix(in srgb,var(--accent) 32%,var(--border));border-radius:999px;background:var(--accent-bg);color:var(--accent);font-size:11px;white-space:nowrap}
+.toast-action:hover{background:color-mix(in srgb,var(--accent-bg) 70%,var(--surface))}
 /* 设置页分层：「高级设置」是开关不是区块，用虚线把自己和区块区分开，并推到标签行末尾。 */
 .settings-advanced-toggle{margin-left:auto;flex:none;border:1px dashed var(--border);border-radius:999px;padding:2px 10px;font-size:11px;color:var(--soft)}
 .settings-advanced-toggle:hover:not(:disabled){border-color:var(--soft);color:var(--text)}

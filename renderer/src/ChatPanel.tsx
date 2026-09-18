@@ -47,7 +47,7 @@ function ChatMessage({ message, previousUser, onEdit, onRetry, onCopy }: { messa
  * 消息落盘由主进程负责，这里只在首次打开某条会话时读回一次，之后以内存状态为准。
  */
 export default function ChatPanel({ compact = false, assetId, sessionId }: { compact?: boolean; assetId?: string; sessionId?: string }) {
-  const { project, prefs, notify, navigate, chats, setChats, assets, assetTotal, selectedAssetIds, assetsLoading, providers, events, activeSessionId, refreshChatSessions, refreshAssets, setMediaJob, setMediaTaskId, pendingVideoImports, setPendingVideoImports } = useApp();
+  const { project, prefs, notify, navigate, startProjectChat, chats, setChats, assets, assetTotal, selectedAssetIds, assetsLoading, providers, events, activeSessionId, refreshChatSessions, refreshAssets, setMediaJob, setMediaTaskId, pendingVideoImports, setPendingVideoImports } = useApp();
   const chatConfig=resolveConfiguration('chat',prefs,project?.settings);
   const annotationConfig=resolveConfiguration('annotation',prefs,project?.settings);
   // 拖入文件只在会话页生效；工作台里的紧凑面板由工作台自己管导入。
@@ -135,14 +135,14 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     const attachments = session.attachments ?? [];
     const text = (overrides.message ?? session.input).trim() || (attachments.length ? `刚添加了 ${attachments.length} 个文件，请核对项目素材。` : '');
     if (!text || session.busy || assetsLoading) return;
-    if (!selectedProviderId || !selectedModel) { notify('请先在设置里选择对话接口与对话模型。', true); return; }
+    if (!selectedProviderId || !selectedModel) { notify('请先在设置里选择对话接口与对话模型。', { error: true, action: { label: '去配置', run: () => void navigate('settings', 'ai') } }); return; }
     // 模型校验按本次实际使用的接口来，配置里的其它问题（并发、请求上限）照旧拦下。
     const configIssue = chatConfig.issues.find(issue => issue.field !== 'model');
-    if (configIssue) { notify(configIssue.message, true); return; }
-    if (effectiveScope === 'current' && !assetId) { notify('请先在项目里打开要处理的图片。', true); return; }
+    if (configIssue) { notify(configIssue.message, { error: true, action: { label: '去配置', run: () => void navigate('settings', 'ai') } }); return; }
+    if (effectiveScope === 'current' && !assetId) { notify('请先在项目里打开要处理的图片。', { error: true, action: { label: '去打开', run: () => void navigate('overview') } }); return; }
     // 附件随消息一起落库：图片与目录进项目，视频转交抽帧流程（一个面板只跑一个视频）。
     if (attachments.length) {
-      if (!project) { notify('请先选择项目。', true); return; }
+      if (!project) { notify('请先选择项目。', { error: true, action: { label: '回到欢迎页', run: () => void startProjectChat() } }); return; }
       const result = await importAttachments(project.id, attachments);
       update({ attachments: [] });
       if (result.imported || result.skipped) { await refreshAssets(); notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`); }
@@ -150,7 +150,7 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
       else if (result.videos.length > 1) drop.openPicks({ projectId: project.id, files: result.videos });
     }
     const assetIds = effectiveScope === 'current' ? [assetId!] : effectiveScope === 'page' ? assets.map(a => a.id) : effectiveScope === 'selected' ? [...selectedAssetIds] : undefined;
-    if (assetIds && !assetIds.length) { notify('当前处理范围没有素材，请先选择图片。', true); return; }
+    if (assetIds && !assetIds.length) { notify('当前处理范围没有素材，请先选择图片。', { error: true, action: { label: '去勾选', run: () => void navigate('overview') } }); return; }
     const next = [...session.messages, { role: 'user' as const, content: text }];
     const streamSinceSequence = events.at(-1)?.sequence ?? -1;
     const scopeLabel = effectiveScope === 'current' ? assets.find(a => a.id === assetId)?.name ?? '当前图片' : effectiveScope === 'project' ? `全项目 · ${assetTotal} 张` : `${effectiveScope === 'page' ? '当前页' : '已勾选（跨页）'} · ${assetIds!.length} 张`;

@@ -79,7 +79,8 @@ export interface AppState {
   providers: Provider[]; refreshProviders: () => Promise<void>;
   syncWindowDirtySource: (source: string, dirty: boolean) => void;
   events: EngineEvent[]; engine: EngineStatus; loading: boolean;
-  notify: (message: string, error?: boolean) => void;
+  /** 提示的第二个参数：布尔仍是「是不是错误」的简写，对象形式可以再挂一个「下一步」按钮。 */
+  notify: (message: string, errorOrOptions?: boolean | { error?: boolean; action?: { label: string; run: () => void } }) => void;
   guard: React.MutableRefObject<null | (() => Promise<void>)>;
   chats: Record<string, ChatSession>; setChats: React.Dispatch<React.SetStateAction<Record<string, ChatSession>>>;
   /** 从 `chat.history.list` 恢复的持久化会话列表，侧栏按置顶 / 项目 / 最近分组展示。 */
