@@ -32,6 +32,7 @@
     "check:onboarding-ui": "node scripts/desktop-smoke.mjs --onboarding-ui",
     "check:ai-preset-ui": "node scripts/desktop-smoke.mjs --ai-preset",
     "check:composer-ui": "node scripts/desktop-smoke.mjs --composer-ui",
+    "check:settings-ui": "node scripts/desktop-smoke.mjs --settings-ui",
     "check:connection-ui": "node scripts/desktop-smoke.mjs --connection-ui",
     "check:training-ui": "node scripts/desktop-smoke.mjs --training-ui",
     "check:installer-contract": "node scripts/installer-contract-check.mjs",

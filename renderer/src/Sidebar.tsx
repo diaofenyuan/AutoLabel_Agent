@@ -154,7 +154,7 @@ export function Sidebar() {
           <button className="sidebar-group-more" title="会话管理" aria-label="会话管理" aria-haspopup="menu" aria-expanded={headerMenu} onClick={() => setHeaderMenu(v => !v)}><MoreHorizontal size={15} /></button>
           {headerMenu && <div className="sidebar-menu" role="menu">
             <button role="menuitem" disabled={!chatSessions.length} onClick={() => { setHeaderMenu(false); setConfirmClear(true); }}><Eraser size={14} />清空全部对话…</button>
-            <button role="menuitem" onClick={() => { setHeaderMenu(false); void navigate('settings'); }}><SettingsIcon size={14} />对话记录设置…</button>
+            <button role="menuitem" onClick={() => { setHeaderMenu(false); void navigate('settings', 'chats'); }}><SettingsIcon size={14} />对话记录设置…</button>
           </div>}
         </div>
         {grouped.length

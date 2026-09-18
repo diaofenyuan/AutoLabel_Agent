@@ -254,6 +254,10 @@
 .chat-examples{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:4px}
 .chat-examples button{padding:5px 11px;border:1px solid var(--border);border-radius:999px;background:var(--bg);color:var(--muted);font-size:11px}
 .chat-examples button:hover{border-color:var(--soft);background:var(--surface);color:var(--text)}
+/* 设置页分层：「高级设置」是开关不是区块，用虚线把自己和区块区分开，并推到标签行末尾。 */
+.settings-advanced-toggle{margin-left:auto;flex:none;border:1px dashed var(--border);border-radius:999px;padding:2px 10px;font-size:11px;color:var(--soft)}
+.settings-advanced-toggle:hover:not(:disabled){border-color:var(--soft);color:var(--text)}
+.settings-advanced-toggle.selected{border-style:solid;border-color:color-mix(in srgb,var(--accent) 42%,var(--border));background:var(--accent-bg);color:var(--accent)}
 /* 行内术语：停一下就有解释，读一句话不被打断。 */
 .term{border-bottom:1px dotted var(--soft);cursor:help}
 /* 简版 AI 配置：预设把「地址填什么、协议选哪个」一次填好，剩下的只有 Key 与模型。 */
