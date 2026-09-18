@@ -28,14 +28,15 @@ const projectIdentityOnly = process.argv.includes('--project-identity');
 const directoryImportOnly = process.argv.includes('--directory-import');
 const onboardingOnly = process.argv.includes('--onboarding-ui');
 const aiPresetOnly = process.argv.includes('--ai-preset');
+const composerOnly = process.argv.includes('--composer-ui');
 const trainingUiOnly = process.argv.includes('--training-ui');
-if ((manualOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly) && packaged) throw new Error('手工开发验收不能在稳定安装包中运行');
-const label = trainingUiOnly ? 'training-ui-check' : aiPresetOnly ? 'ai-preset-check' : onboardingOnly ? 'onboarding-check' : directoryImportOnly ? 'directory-import-check' : projectIdentityOnly ? 'project-identity-check' : frameScopeOnly ? 'frame-scope-check' : unknownRetryOnly ? 'unknown-retry-check' : annotateOnly ? 'annotate-check' : mediaOnly ? 'media-check' : reasonOnly ? 'reason-check' : runControlOnly ? 'run-control-check' : updateUiOnly ? 'update-ui-check' : connectionOnly ? 'connection-ui-check' : release7bOnly ? 'release7b-check' : release7aOnly ? 'release7a-check' : release6bOnly ? 'release6b-check' : release6aOnly ? 'release6a-check' : release5Only ? 'release5-check' : releaseOnly ? 'release-check' : manualOnly ? 'manual-check' : uiOnly ? 'ui-check' : windowOnly ? 'window-check' : packaged ? 'packaged-smoke' : 'desktop-smoke';
+if ((manualOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly) && packaged) throw new Error('手工开发验收不能在稳定安装包中运行');
+const label = trainingUiOnly ? 'training-ui-check' : composerOnly ? 'composer-check' : aiPresetOnly ? 'ai-preset-check' : onboardingOnly ? 'onboarding-check' : directoryImportOnly ? 'directory-import-check' : projectIdentityOnly ? 'project-identity-check' : frameScopeOnly ? 'frame-scope-check' : unknownRetryOnly ? 'unknown-retry-check' : annotateOnly ? 'annotate-check' : mediaOnly ? 'media-check' : reasonOnly ? 'reason-check' : runControlOnly ? 'run-control-check' : updateUiOnly ? 'update-ui-check' : connectionOnly ? 'connection-ui-check' : release7bOnly ? 'release7b-check' : release7aOnly ? 'release7a-check' : release6bOnly ? 'release6b-check' : release6aOnly ? 'release6a-check' : release5Only ? 'release5-check' : releaseOnly ? 'release-check' : manualOnly ? 'manual-check' : uiOnly ? 'ui-check' : windowOnly ? 'window-check' : packaged ? 'packaged-smoke' : 'desktop-smoke';
 const output = path.join(root, 'build', label + '.json');
 await mkdir(path.dirname(output), { recursive: true });
 const testUserData = process.env.AUTOLABEL_TEST_USER_DATA
   ? path.resolve(root, process.env.AUTOLABEL_TEST_USER_DATA)
-  : path.join(root, 'build', label + ((updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || trainingUiOnly) ? `-user-data-${Date.now()}` : '-user-data'));
+  : path.join(root, 'build', label + ((updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly || trainingUiOnly) ? `-user-data-${Date.now()}` : '-user-data'));
 const env = { ...process.env, AUTOLABEL_TEST_USER_DATA: testUserData, AUTOLABEL_SMOKE_OUTPUT: output };
 delete env.ELECTRON_RUN_AS_NODE;
 if (packaged) { env.JAVA_HOME = 'C:\\nonexistent'; env.AUTOLABEL_JAVA_HOME = 'C:\\nonexistent'; }
@@ -50,6 +51,7 @@ if (projectIdentityOnly) env.AUTOLABEL_PROJECT_IDENTITY_UI_CHECK = '1';
 if (directoryImportOnly) env.AUTOLABEL_DIRECTORY_IMPORT_UI_CHECK = '1';
 if (onboardingOnly) env.AUTOLABEL_ONBOARDING_UI_CHECK = '1';
 if (aiPresetOnly) env.AUTOLABEL_AI_PRESET_UI_CHECK = '1';
+if (composerOnly) env.AUTOLABEL_COMPOSER_UI_CHECK = '1';
 const releaseDirectory = path.resolve(root, process.env.AUTOLABEL_RELEASE_DIR || 'build/release');
 const executable = packaged ? path.join(releaseDirectory, 'win-unpacked/自动标注小助手.exe') : createRequire(import.meta.url)('electron');
 const args = packaged ? ['--desktop-smoke'] : [root, '--desktop-smoke'];
@@ -61,10 +63,10 @@ if (release6aOnly) args.push('--desktop-release6a-check');
 if (release6bOnly) args.push('--desktop-release6b-check');
 if (release7aOnly) args.push('--desktop-release7a-check');
 if (release7bOnly) args.push('--desktop-release7b-check');
-if (updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly) args.push('--desktop-manual-check');
+if (updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly) args.push('--desktop-manual-check');
 if (connectionOnly) args.push('--desktop-connection-check');
 if (trainingUiOnly) args.push('--desktop-training-check');
-if (manualOnly || updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly) {
+if (manualOnly || updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly) {
   const { build } = await import('esbuild');
   await build({ entryPoints: [path.join(root, 'renderer/tests/desktop-manual-check.ts')], bundle: true, platform: 'node', format: 'cjs',
     external: ['electron'], outfile: path.join(root, 'desktop/dist/manual.test.cjs'), logLevel: 'warning' });
@@ -163,6 +165,25 @@ if (reasonOnly) {
   assert.equal(byCheck.get('export-exclude-unlabeled')?.restorable, true);
   assert.equal(byCheck.get('export-exclude-unlabeled')?.exportReady, true);
   console.log(`数据集与导出的原因呈现检查通过：${output}`); process.exit(0);
+}
+if (composerOnly) {
+  assert.equal(result.passed, true);
+  const byCheck = new Map(result.checks.map(check => [check.check, check]));
+  // 空会话给出三个起手式，点一下真的填进输入框。
+  assert.equal(byCheck.get('empty-session-samples')?.samples?.length, 3);
+  // 收起态没有下拉框，摘要如实写出范围与执行方式。
+  assert.equal(byCheck.get('composer-collapsed-to-one-line')?.selects, 0);
+  assert.equal(byCheck.get('composer-collapsed-to-one-line')?.popover, false);
+  // 展开态三件都在，计费提示跟着开关走。
+  assert.deepEqual(byCheck.get('composer-expands-tools')?.modes, ['直接执行', '先看方案']);
+  assert.equal(byCheck.get('composer-expands-tools')?.choices, 2);
+  assert.equal(byCheck.get('composer-expands-tools')?.billing, true);
+  assert.equal(byCheck.get('composer-expands-tools')?.flow, true);
+  // 改选择后摘要跟着改。
+  assert.ok(String(byCheck.get('composer-summary-follows-choice')?.summary ?? '').includes('先看方案'));
+  // 主操作一眼可读：发送按钮不被挤成两行。
+  assert.ok(byCheck.get('composer-send-button-legible')?.width >= 56);
+  console.log(`会话输入卡简化检查通过：${output}`); process.exit(0);
 }
 if (aiPresetOnly) {
   assert.equal(result.passed, true);

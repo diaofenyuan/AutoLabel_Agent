@@ -212,6 +212,9 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
 
     // ===== AI 配置：能力验证要如实说明测试图很小，且超时设置可找到 =====
     await js(`[...document.querySelectorAll('.settings-tabs button')].find(b=>b.innerText.trim()==='软件 AI 配置').click()`);
+    // 能力表与超时设置都在简版收起区里：先切到手动配置，再断言它们确实存在。
+    await waitFor(`!!document.querySelector('.provider-form .advanced-toggle')`);
+    await js(`([...document.querySelectorAll('.provider-form .advanced-toggle')].find(b=>b.innerText.includes('手动配置'))).click()`);
     await waitFor(`!!document.querySelector('.capability-table')`);
     const capabilityRows = await js<string[]>(`[...document.querySelectorAll('.capability-row>span:first-child')].map(e=>e.innerText.trim())`);
     assert.deepEqual(capabilityRows, ['连接', '文本输入', '图片输入', '多图输入', '结构化输出', '工具调用'], `能力清单应与引擎支持的一致，实际：${json(capabilityRows)}`);

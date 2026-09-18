@@ -11,13 +11,23 @@ import FlowPicker from './FlowPicker';
 import { DropOverlay } from './fileDrop';
 import { VideoPickList, useChatFileDrop, importAttachments } from './chatDrop';
 import { RichText } from './chatText';
-import { useEffect, useRef } from 'react';
-import { MessageSquare, Settings2, FolderOpen, Sparkles, MoreHorizontal } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { MessageSquare, Settings2, FolderOpen, Sparkles, ChevronDown } from 'lucide-react';
 import { blankChatSession, useApp, type ChatSession } from './context';
 import { request, getBridge, isDemo, errorMessage } from './bridge';
 import { Composer, Button, Empty } from './ui';
 
 type ChatMessageData = { role: 'user' | 'assistant'; content: string };
+
+/**
+ * 空会话的起手式：不是模板，只是把「一句话能说清什么」摆给第一次用的人。
+ * 点一下填进输入框，用户仍然可以在发送前改。
+ */
+const sampleRequests = [
+  '把这些图里的车辆和行人框出来',
+  '先筛掉模糊和重复的图，再标注剩下的',
+  '把已确认的标注导出成 YOLO 数据集',
+];
 
 function ChatMessage({ message, previousUser, onEdit, onRetry, onCopy }: { message: ChatMessageData; previousUser?: string; onEdit: (text: string) => void; onRetry: (text: string) => void; onCopy: (text: string) => void }) {
   const failed = message.role === 'assistant' && message.content.startsWith('本次调用未完成：');
@@ -70,6 +80,20 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
   }
   // 工具步骤流按会话累积：组件重挂载后仍能读到这一轮已经发生过的步骤。
   const steps = useAgentSteps(key);
+  /**
+   * 输入卡工具行默认收起成一行摘要：处理范围与执行方式对第一次用的人是两个答不上来的问题，
+   * 点开才需要回答，收起时只把当前的答案写出来。模型选择器保持独立触发，它随时可能要改。
+   */
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const scopeRoot = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!toolsOpen) return;
+    const onPointerDown = (event: MouseEvent) => { if (!scopeRoot.current?.contains(event.target as Node)) setToolsOpen(false); };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') setToolsOpen(false); };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => { document.removeEventListener('mousedown', onPointerDown); document.removeEventListener('keydown', onKeyDown); };
+  }, [toolsOpen]);
   useEffect(() => {
     if (!key || loadedKey.current === key) return;
     loadedKey.current = key;
@@ -162,6 +186,15 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
   const effectiveScope = session.scope === 'selected' && !selectedAssetIds.length ? 'project'
     : session.scope === 'page' && !assets.length ? 'project'
     : session.scope === 'current' && !assetId ? 'project' : session.scope;
+  /** 只列当前真的选得出来的范围：收起态与展开态共用这一份，避免两处口径漂移。 */
+  const scopeOptions: Array<{ value: ChatSession['scope']; label: string }> = [
+    ...(assetId ? [{ value: 'current' as const, label: '当前图片' }] : []),
+    { value: 'project' as const, label: `全项目 · ${assetTotal} 张` },
+    ...(assets.length ? [{ value: 'page' as const, label: `当前页 · ${assets.length} 张` }] : []),
+    ...(selectedAssetIds.length ? [{ value: 'selected' as const, label: `已勾选（跨页）· ${selectedAssetIds.length} 张` }] : []),
+  ];
+  const scopeLabel = scopeOptions.find(option => option.value === effectiveScope)?.label ?? '全项目';
+  const configReady = Boolean(chatConfig.providerId && chatConfig.model && !chatConfig.issues.length);
   function editComposer(text: string) {
     update({ input: text });
     window.requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus());
@@ -179,7 +212,7 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
   }
   return <div className={`chat-panel ${compact ? 'compact' : ''} ${dropActive ? 'drop-active' : ''}`} {...(compact ? {} : drop.handlers)}>
     {!compact && <DropOverlay visible={dropActive} />}
-    <div className="chat-messages" role="log" aria-label="对话消息">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><Button onClick={() => void navigate('settings', 'ai')}><Settings2 size={14} />配置对话模型</Button></Empty> : session.messages.map((message, i) => {
+    <div className="chat-messages" role="log" aria-label="对话消息">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><Button onClick={() => void navigate('settings', 'ai')}><Settings2 size={14} />配置对话模型</Button><div className="chat-examples">{sampleRequests.map(text => <button key={text} type="button" onClick={() => editComposer(text)}>{text}</button>)}</div></Empty> : session.messages.map((message, i) => {
       const previousUser = [...session.messages.slice(0, i)].reverse().find(item => item.role === 'user')?.content;
       return <ChatMessage key={i} message={message} previousUser={previousUser} onEdit={editComposer} onRetry={retryMessage} onCopy={copyMessage} />;
     })}{session.busy && session.streamingText && <div className="chat-message assistant streaming"><div className="chat-message-head"><span className="chat-avatar assistant" aria-hidden="true"><Sparkles size={12} /></span><small>标注助手</small></div><div className="chat-text"><RichText text={session.streamingText}/></div></div>}{session.busy && <div className="chat-wait" role="status" aria-live="polite"><span className="waiting-dots">•••</span>{session.cancelRequested ? '正在请求停止 · 已发送请求的结果仍需核对' : chatStatus(events, session.id)} · {session.runningScope}</div>}
@@ -200,24 +233,33 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
       {!compact && project && session.messages.some(message => message.role === 'assistant') && <ResultCard project={project} />}</div>
     {/* 输入区固定在页面最下方：上面只有消息在滚动，控制项与模型选择跟着输入框走。 */}
     <footer className="chat-dock">
-      <ConfigurationView value={chatConfig} providers={providers} compact onConfigure={() => void navigate('settings', 'ai')}/>
+      {/* 配置就绪时不再占一行：模型选择器里已经有「调整配置」，重复一行只会把输入区往下压。 */}
+      {!configReady && <ConfigurationView value={chatConfig} providers={providers} compact onConfigure={() => void navigate('settings', 'ai')}/>}
       <Composer value={session.input} onChange={input => update({ input })} onSend={() => void send()} placeholder="描述你的标注任务…" busy={session.busy}
         attachments={session.attachments} onRemoveAttachment={id => update({ attachments: (session.attachments ?? []).filter(item => item.id !== id) })}
         onCancel={() => { if (session.cancelRequested) return; update({ cancelRequested: true }); void request('agent.cancel', { sessionId: session.id }).catch(e => { update({ cancelRequested: false }); notify(errorMessage(e), true); }); }}>
         <div className="chat-options">
-          <select aria-label="助手处理范围" disabled={session.busy} value={effectiveScope} onChange={e => update({ scope: e.target.value as ChatSession['scope'] })}>{assetId && <option value="current">当前图片</option>}<option value="project">全项目 · {assetTotal} 张</option>{!!assets.length && <option value="page">当前页 · {assets.length} 张</option>}{!!selectedAssetIds.length && <option value="selected">已勾选（跨页）· {selectedAssetIds.length} 张</option>}</select>
-          <select aria-label="助手执行方式" disabled={session.busy} value={String(session.autoExecute)} onChange={e => update({ autoExecute: e.target.value === 'true' })}><option value="true">直接执行</option><option value="false">先看方案</option></select>
+          <div className="composer-scope" ref={scopeRoot}>
+            <button type="button" className="composer-summary" disabled={session.busy} aria-haspopup="dialog" aria-expanded={toolsOpen} onClick={() => setToolsOpen(value => !value)}>
+              <span className="truncate">{scopeLabel} · {session.autoExecute ? '直接执行' : '先看方案'}</span><ChevronDown size={12} />
+            </button>
+            {toolsOpen && <div className="picker-popover composer-popover" role="dialog" aria-label="处理范围与执行方式">
+              <p className="muted tiny">这次让助手处理哪些图片</p>
+              <div className="composer-choices">{scopeOptions.map(option => <button key={option.value} type="button" className={effectiveScope === option.value ? 'selected' : ''} aria-pressed={effectiveScope === option.value} onClick={() => update({ scope: option.value })}>{option.label}</button>)}</div>
+              <p className="muted tiny">发出的请求怎么处理</p>
+              <div className="composer-choices">{([['true', '直接执行'], ['false', '先看方案']] as const).map(([value, label]) => <button key={value} type="button" className={String(session.autoExecute) === value ? 'selected' : ''} aria-pressed={String(session.autoExecute) === value} onClick={() => update({ autoExecute: value === 'true' })}>{label}</button>)}</div>
+              {/* 「直接执行」会真的发出请求并可能计费，这句话必须留在能改这个开关的地方。 */}
+              <p className="muted tiny">直接执行会真的发出请求，可能产生费用；先看方案只列出将要做的操作，你确认后才跑。</p>
+              <div className="composer-extra">
+                <FlowPicker disabled={session.busy} onPick={prompt => { update({ input: prompt }); document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus(); }} />
+                <button title={session.exportDir || '授权本次对话的导出目录'} onClick={() => void getBridge().then(b => b.chooseFiles({ kind: 'directory' })).then(paths => { if (paths[0]) update({ exportDir: paths[0] }); }).catch(e => notify(errorMessage(e), true))}><FolderOpen size={12} />{session.exportDir ? '已选目录' : '导出目录'}</button>
+                {project && <ReferencePicker project={project} value={session.referenceResources ?? []} onChange={referenceResources => update({ referenceResources })} disabled={session.busy} />}
+              </div>
+            </div>}
+          </div>
           <ModelPicker providers={providers} providerId={selectedProviderId} model={selectedModel} depth={depth} disabled={session.busy}
             onChange={choice => update({ providerId: choice.providerId, model: choice.model })}
             onDepthChange={next => update({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} />
-          <details className="composer-more">
-            <summary><MoreHorizontal size={14} />更多</summary>
-            <div className="composer-more-menu">
-              <FlowPicker disabled={session.busy} onPick={prompt => { update({ input: prompt }); document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus(); }} />
-              <button title={session.exportDir || '授权本次对话的导出目录'} onClick={() => void getBridge().then(b => b.chooseFiles({ kind: 'directory' })).then(paths => { if (paths[0]) update({ exportDir: paths[0] }); }).catch(e => notify(errorMessage(e), true))}><FolderOpen size={12} />{session.exportDir ? '已选目录' : '导出目录'}</button>
-              {project && <ReferencePicker project={project} value={session.referenceResources ?? []} onChange={referenceResources => update({ referenceResources })} disabled={session.busy} />}
-            </div>
-          </details>
         </div>
         <span className="composer-hint">Enter 换行 · Ctrl + Enter 发送{session.attachments?.length ? ` · 已添加 ${session.attachments.length} 个文件` : ''}</span>
       </Composer>
