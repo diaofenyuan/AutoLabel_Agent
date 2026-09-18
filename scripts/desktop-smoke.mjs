@@ -31,14 +31,15 @@ const aiPresetOnly = process.argv.includes('--ai-preset');
 const composerOnly = process.argv.includes('--composer-ui');
 const settingsUiOnly = process.argv.includes('--settings-ui');
 const errorActionOnly = process.argv.includes('--error-action');
+const sidebarOnly = process.argv.includes('--sidebar-ui');
 const trainingUiOnly = process.argv.includes('--training-ui');
-if ((manualOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly || settingsUiOnly || errorActionOnly) && packaged) throw new Error('手工开发验收不能在稳定安装包中运行');
-const label = trainingUiOnly ? 'training-ui-check' : errorActionOnly ? 'error-action-check' : settingsUiOnly ? 'settings-check' : composerOnly ? 'composer-check' : aiPresetOnly ? 'ai-preset-check' : onboardingOnly ? 'onboarding-check' : directoryImportOnly ? 'directory-import-check' : projectIdentityOnly ? 'project-identity-check' : frameScopeOnly ? 'frame-scope-check' : unknownRetryOnly ? 'unknown-retry-check' : annotateOnly ? 'annotate-check' : mediaOnly ? 'media-check' : reasonOnly ? 'reason-check' : runControlOnly ? 'run-control-check' : updateUiOnly ? 'update-ui-check' : connectionOnly ? 'connection-ui-check' : release7bOnly ? 'release7b-check' : release7aOnly ? 'release7a-check' : release6bOnly ? 'release6b-check' : release6aOnly ? 'release6a-check' : release5Only ? 'release5-check' : releaseOnly ? 'release-check' : manualOnly ? 'manual-check' : uiOnly ? 'ui-check' : windowOnly ? 'window-check' : packaged ? 'packaged-smoke' : 'desktop-smoke';
+if ((manualOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly || settingsUiOnly || errorActionOnly || sidebarOnly) && packaged) throw new Error('手工开发验收不能在稳定安装包中运行');
+const label = trainingUiOnly ? 'training-ui-check' : sidebarOnly ? 'sidebar-check' : errorActionOnly ? 'error-action-check' : settingsUiOnly ? 'settings-check' : composerOnly ? 'composer-check' : aiPresetOnly ? 'ai-preset-check' : onboardingOnly ? 'onboarding-check' : directoryImportOnly ? 'directory-import-check' : projectIdentityOnly ? 'project-identity-check' : frameScopeOnly ? 'frame-scope-check' : unknownRetryOnly ? 'unknown-retry-check' : annotateOnly ? 'annotate-check' : mediaOnly ? 'media-check' : reasonOnly ? 'reason-check' : runControlOnly ? 'run-control-check' : updateUiOnly ? 'update-ui-check' : connectionOnly ? 'connection-ui-check' : release7bOnly ? 'release7b-check' : release7aOnly ? 'release7a-check' : release6bOnly ? 'release6b-check' : release6aOnly ? 'release6a-check' : release5Only ? 'release5-check' : releaseOnly ? 'release-check' : manualOnly ? 'manual-check' : uiOnly ? 'ui-check' : windowOnly ? 'window-check' : packaged ? 'packaged-smoke' : 'desktop-smoke';
 const output = path.join(root, 'build', label + '.json');
 await mkdir(path.dirname(output), { recursive: true });
 const testUserData = process.env.AUTOLABEL_TEST_USER_DATA
   ? path.resolve(root, process.env.AUTOLABEL_TEST_USER_DATA)
-  : path.join(root, 'build', label + ((updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly || settingsUiOnly || errorActionOnly || trainingUiOnly) ? `-user-data-${Date.now()}` : '-user-data'));
+  : path.join(root, 'build', label + ((updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly || settingsUiOnly || errorActionOnly || sidebarOnly || trainingUiOnly) ? `-user-data-${Date.now()}` : '-user-data'));
 const env = { ...process.env, AUTOLABEL_TEST_USER_DATA: testUserData, AUTOLABEL_SMOKE_OUTPUT: output };
 delete env.ELECTRON_RUN_AS_NODE;
 if (packaged) { env.JAVA_HOME = 'C:\\nonexistent'; env.AUTOLABEL_JAVA_HOME = 'C:\\nonexistent'; }
@@ -56,6 +57,7 @@ if (aiPresetOnly) env.AUTOLABEL_AI_PRESET_UI_CHECK = '1';
 if (composerOnly) env.AUTOLABEL_COMPOSER_UI_CHECK = '1';
 if (settingsUiOnly) env.AUTOLABEL_SETTINGS_UI_CHECK = '1';
 if (errorActionOnly) env.AUTOLABEL_ERROR_ACTION_UI_CHECK = '1';
+if (sidebarOnly) env.AUTOLABEL_SIDEBAR_UI_CHECK = '1';
 const releaseDirectory = path.resolve(root, process.env.AUTOLABEL_RELEASE_DIR || 'build/release');
 const executable = packaged ? path.join(releaseDirectory, 'win-unpacked/自动标注小助手.exe') : createRequire(import.meta.url)('electron');
 const args = packaged ? ['--desktop-smoke'] : [root, '--desktop-smoke'];
@@ -67,10 +69,10 @@ if (release6aOnly) args.push('--desktop-release6a-check');
 if (release6bOnly) args.push('--desktop-release6b-check');
 if (release7aOnly) args.push('--desktop-release7a-check');
 if (release7bOnly) args.push('--desktop-release7b-check');
-if (updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly || settingsUiOnly || errorActionOnly) args.push('--desktop-manual-check');
+if (updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly || settingsUiOnly || errorActionOnly || sidebarOnly) args.push('--desktop-manual-check');
 if (connectionOnly) args.push('--desktop-connection-check');
 if (trainingUiOnly) args.push('--desktop-training-check');
-if (manualOnly || updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly || settingsUiOnly || errorActionOnly) {
+if (manualOnly || updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly || settingsUiOnly || errorActionOnly || sidebarOnly) {
   const { build } = await import('esbuild');
   await build({ entryPoints: [path.join(root, 'renderer/tests/desktop-manual-check.ts')], bundle: true, platform: 'node', format: 'cjs',
     external: ['electron'], outfile: path.join(root, 'desktop/dist/manual.test.cjs'), logLevel: 'warning' });
@@ -169,6 +171,17 @@ if (reasonOnly) {
   assert.equal(byCheck.get('export-exclude-unlabeled')?.restorable, true);
   assert.equal(byCheck.get('export-exclude-unlabeled')?.exportReady, true);
   console.log(`数据集与导出的原因呈现检查通过：${output}`); process.exit(0);
+}
+if (sidebarOnly) {
+  assert.equal(result.passed, true);
+  const byCheck = new Map(result.checks.map(check => [check.check, check]));
+  // 侧栏宽度与项目名的可显示宽度都要够认出名字。
+  assert.ok(byCheck.get('sidebar-name-readable')?.sidebar >= 236);
+  assert.ok(byCheck.get('sidebar-name-readable')?.titleWidth >= 84);
+  assert.ok(byCheck.get('sidebar-name-readable')?.shown >= 5);
+  // 悬浮操作仍然直接可达，没被收进溢出菜单。
+  assert.ok(byCheck.get('sidebar-name-readable')?.actionButtons >= 3);
+  console.log(`侧栏可读性检查通过：${output}`); process.exit(0);
 }
 if (errorActionOnly) {
   assert.equal(result.passed, true);

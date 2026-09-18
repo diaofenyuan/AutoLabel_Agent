@@ -317,7 +317,9 @@
 .sidebar-group-more:hover{background:var(--hover);color:var(--text)}
 .sidebar-session,.sidebar-project{position:relative;display:flex;align-items:center;border-radius:7px;margin:1px 0}
 .sidebar-row{display:flex;align-items:center;gap:9px;flex:1;min-width:0;height:34px;padding:0 10px;border-radius:7px;text-align:left;white-space:nowrap;color:var(--text);font-size:12px}
-.sidebar-session .sidebar-row,.sidebar-project .sidebar-row{padding-right:84px}
+/* 悬浮操作是绝对定位、静止时不占位，所以只在真的有操作时预留宽度：常驻预留会把项目名压成两三个字。 */
+.sidebar-session .sidebar-row,.sidebar-project .sidebar-row{padding-right:10px}
+.sidebar-session:hover .sidebar-row,.sidebar-project:hover .sidebar-row,.sidebar-session:focus-within .sidebar-row,.sidebar-project:focus-within .sidebar-row,.sidebar-session.selected .sidebar-row,.sidebar-project.selected .sidebar-row{padding-right:88px}
 .sidebar-row:hover{background:var(--hover)}
 .sidebar-session.selected .sidebar-row,.sidebar-project.selected .sidebar-row{background:var(--selected)}
 .sidebar-row-title{flex:1;min-width:0}

@@ -27,6 +27,7 @@ import { checkDesktopAiPreset } from './desktop-ai-preset-check';
 import { checkDesktopComposer } from './desktop-composer-check';
 import { checkDesktopSettings } from './desktop-settings-check';
 import { checkDesktopErrorAction } from './desktop-error-action-check';
+import { checkDesktopSidebar } from './desktop-sidebar-check';
 
 // 只在桌面显式验收入口运行；所有文件夹、对话框选择及破坏性夹具均限制在独立测试目录。
 export async function checkDesktopManual(window:BrowserWindow, output:string):Promise<void> {
@@ -35,6 +36,7 @@ export async function checkDesktopManual(window:BrowserWindow, output:string):Pr
   if(process.env.AUTOLABEL_COMPOSER_UI_CHECK==='1')return checkDesktopComposer(window,output);
   if(process.env.AUTOLABEL_SETTINGS_UI_CHECK==='1')return checkDesktopSettings(window,output);
   if(process.env.AUTOLABEL_ERROR_ACTION_UI_CHECK==='1')return checkDesktopErrorAction(window,output);
+  if(process.env.AUTOLABEL_SIDEBAR_UI_CHECK==='1')return checkDesktopSidebar(window,output);
   if(process.env.AUTOLABEL_DIRECTORY_IMPORT_UI_CHECK==='1')return checkDesktopDirectoryImport(window,output);
   if(process.env.AUTOLABEL_PROJECT_IDENTITY_UI_CHECK==='1')return checkDesktopProjectIdentity(window,output);
   if(process.env.AUTOLABEL_FRAME_SCOPE_UI_CHECK==='1')return checkDesktopFrameScope(window,output);
