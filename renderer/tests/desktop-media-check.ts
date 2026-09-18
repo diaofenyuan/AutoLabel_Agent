@@ -49,10 +49,19 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     await button('继续');
     await wait(`!!document.querySelector('.video-inspection')`, 60000);
     const inspection = await js<string>(`document.querySelector('.video-inspection').innerText`); assert.ok(inspection.includes('768 × 576')); assert.ok(inspection.includes('79.50 秒'));
-    await select('[aria-label="视频采样方式"]', 'every_n'); await fill('[aria-label="视频采样值"]', '3'); await select('[aria-label="视频采样方式"]', 'fps'); await fill('[aria-label="视频采样值"]', '2'); await select('[aria-label="视频采样方式"]', 'interval'); await fill('[aria-label="视频采样值"]', '1');
-    await click('.video-ranges>summary'); await click('.video-ranges>.checkbox-row input'); await fill('[aria-label="视频时间段 1 终点"]', '2'); await button('添加时间段'); await fill('[aria-label="视频时间段 2 起点"]', '1'); await fill('[aria-label="视频时间段 2 终点"]', '6'); await button('创建抽帧任务'); await wait(`document.querySelector('.video-import .media-error')?.textContent.includes('时间段')`); assert.equal((await api('media.job.list', { projectId: project.id })).total, 0);
-    await fill('[aria-label="视频时间段 2 起点"]', '4'); await click('.video-output-options>summary'); await click('.video-output-options>.checkbox-row input'); await fill('[aria-label="视频输出宽度"]', '384'); await fill('[aria-label="视频输出高度"]', '288'); await select('[aria-label="视频尺寸适配"]', 'contain'); await select('[aria-label="视频输出格式"]', 'jpg'); assert.equal(await js(`document.querySelector('[aria-label="视频JPEG质量"]').value`), '3'); await select('[aria-label="视频输出格式"]', 'png');
-    await capture('-parameters.png', 'dialog[open] .modal-inner>header'); await button('创建抽帧任务'); await wait(`!document.querySelector('dialog[open]')`);
+    // 关掉「抽帧完成后自动导入项目」，才能验证「产物就绪但尚未入库」这一段；它是偏好设置，界面开关在应用层进度条上。
+    const settings = await api<Record<string, unknown>>('settings.get'); await api('settings.save', { settings: { ...settings, frameAutoImport: false } });
+    await select('[aria-label="视频采样密度"]', 'custom'); await select('[aria-label="视频采样方式"]', 'interval'); await fill('[aria-label="视频采样值"]', '1');
+    // 时间段与输出尺寸都在「高级设置」折叠里：先展开，否则里面的按钮没有可读文本、点不到。
+    await click('.video-advanced>summary');
+    await js(`(()=>{const l=[...document.querySelectorAll('.checkbox-row')].find(e=>e.innerText.includes('使用整段已知时长'));if(l.querySelector('input').checked)l.querySelector('input').click();})()`);
+    await wait(`!!document.querySelector('[aria-label="视频时间段 1 终点"]')`);
+    await fill('[aria-label="视频时间段 1 终点"]', '2'); await button('添加时间段'); await fill('[aria-label="视频时间段 2 起点"]', '1'); await fill('[aria-label="视频时间段 2 终点"]', '6'); await button('开始抽帧'); await wait(`document.querySelector('.video-import .media-error')?.textContent.includes('时间段')`); assert.equal((await api('media.job.list', { projectId: project.id })).total, 0);
+    await fill('[aria-label="视频时间段 2 起点"]', '4');
+    await js(`(()=>{const l=[...document.querySelectorAll('.checkbox-row')].find(e=>e.innerText.trim()==='指定输出尺寸');if(!l.querySelector('input').checked)l.querySelector('input').click();})()`);
+    await wait(`!!document.querySelector('[aria-label="视频输出宽度"]')`);
+    await fill('[aria-label="视频输出宽度"]', '384'); await fill('[aria-label="视频输出高度"]', '288'); await select('[aria-label="视频尺寸适配"]', 'contain'); await select('[aria-label="视频输出格式"]', 'jpg'); assert.equal(await js(`document.querySelector('[aria-label="视频JPEG质量"]').value`), '3'); await select('[aria-label="视频输出格式"]', 'png');
+    await capture('-parameters.png', 'dialog[open] .modal-inner>header'); await button('开始抽帧'); await wait(`!document.querySelector('dialog[open]')`);
 
     // ===== 任务详情：抽帧产物与逐帧记录在「任务 · 素材任务」里回看 =====
     await gotoTasks(driver, '素材任务');
@@ -71,19 +80,19 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     await wait(`document.querySelectorAll('.result-thumb').length===4`);
     checks.push({ check: 'explicit-frame-import', jobId: firstJob.id, assetsCommitted: true, imported: all.total, sourceIdentityRetained: true, overviewVisible: 4 });
 
-    // ===== 时间轴：帧条、预览与真实帧时间 =====
+    // ===== 时间轴：帧数据按接口断言；界面在「任务 · 轨迹标注」里选中它并进入工作区 =====
     const timeline = await api('track.timeline.create', { projectId: project.id, mediaJobId: firstJob.id });
     const timelineFrames = await api('track.timeline.frames', { timelineId: timeline.id, offset: 0, limit: 50 });
     assert.equal(timelineFrames.total, 4); assert.ok(timelineFrames.items.every((frame: any) => frame.assetId && typeof frame.sourcePts === 'string'));
     await gotoTasks(driver, '轨迹标注');
     await wait(`!!document.querySelector('.video-timeline')`);
-    await select('[aria-label="视频时间轴"]', timeline.id); await wait(`document.querySelectorAll('.timeline-frame-strip button').length===4`);
-    await wait(`!!document.querySelector('.timeline-frame-preview img')&&document.querySelector('.timeline-frame-preview img').complete&&document.querySelector('.timeline-frame-preview img').naturalWidth>0`);
-    await js(`document.querySelector('.timeline-frame-preview details')?.setAttribute('open','')`);
-    const timelineView = await js<{ frameCount: number; previewLoaded: boolean; firstFrameTime: string; sourcePtsVisible: boolean }>(`(()=>{const frames=[...document.querySelectorAll('.timeline-frame-strip button')];const image=document.querySelector('.timeline-frame-preview img');const details=[...document.querySelectorAll('.timeline-frame-preview details')].find(e=>e.innerText.includes('真实帧时间'));return {frameCount:frames.length,previewLoaded:!!image&&image.complete&&image.naturalWidth>0,firstFrameTime:frames[0]?.innerText.split('\\n')[0]??'',sourcePtsVisible:!!details&&details.innerText.includes('sourcePts')}})()`);
-    assert.equal(timelineView.frameCount, 4); assert.equal(timelineView.previewLoaded, true); assert.equal(timelineView.sourcePtsVisible, true);
-    await capture('-timeline.png', '.timeline-frame-preview');
-    checks.push({ check: 'timeline-ui-preview', timelineId: timeline.id, frameCount: timelineView.frameCount, previewLoaded: timelineView.previewLoaded, sourcePtsVisible: timelineView.sourcePtsVisible });
-    await writeFile(output, json({ passed: true, mode: 'media-ui', projectId: project.id, newModelRuns: 0, timeline: timelineView, checks }));
+    await select('[aria-label="视频时间轴"]', timeline.id);
+    // 帧条与逐帧预览只存在于已移除的非任务视图；任务模式保留的是轨迹与关键帧工作区，所以这里只断言「这条时间轴能进去」。
+    await wait(`!!document.querySelector('.timeline-identity')||!!document.querySelector('.timeline-track-picker')`);
+    const workspaceVisible = await js<boolean>(`!!document.querySelector('.timeline-identity')||!!document.querySelector('.timeline-track-picker')`);
+    assert.equal(workspaceVisible, true, '轨迹标注页应能选中这条时间轴并进入工作区');
+    await capture('-timeline.png', '.video-timeline');
+    checks.push({ check: 'timeline-workspace-reachable', timelineId: timeline.id, frames: timelineFrames.total, builtFromRealFrames: true, workspaceVisible });
+    await writeFile(output, json({ passed: true, mode: 'media-ui', projectId: project.id, newModelRuns: 0, timeline: { frameCount: timelineFrames.total, framesHaveSourcePts: true, workspaceVisible }, checks }));
   } catch (e) { await writeFile(output.replace(/\.json$/, '-failure.png'), (await window.webContents.capturePage()).toPNG()); await writeFile(output, json({ passed: false, mode: 'media-ui', checks, error: e instanceof Error ? e.message : String(e), body: await js('document.body.innerText') })); throw e; }
 }
