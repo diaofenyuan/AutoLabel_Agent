@@ -2,13 +2,14 @@ import type { BrowserWindow } from 'electron';
 import assert from 'node:assert/strict';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { gotoSettings } from './desktop-navigation';
 
 /**
  * 存储位置、本地备份与数据目录迁移验收。
  *
- * 当前状态：跑不通——它仍引用三处已移除的界面：项目列表（.project-row，含切换数据目录后的等待锚点）、
- * 资源编辑页（.resources-page，界面已改为项目概览里的只读资源对话框）、旧画布标记（.annotation-canvas）。
- * 要恢复得把锚点换成侧栏项目行与 .quality-image img，并删掉「资源未保存保护」那一段（该页面已不存在）。
+ * 覆盖：原生备份（含未保存草稿）、无效备份被拦、准备恢复副本不切换、显式激活后才切目录、
+ * 原目录保留、凭据需重新绑定、草稿随迁移可读。
+ * 草稿经接口写入而不是画布检查器；「资源未保存保护」那一段随资源编辑页一起移除，不再覆盖。
  */
 export async function checkDesktopStorage(window: BrowserWindow, output: string): Promise<void> {
   const checks: unknown[] = [], json = JSON.stringify;
@@ -20,17 +21,19 @@ export async function checkDesktopStorage(window: BrowserWindow, output: string)
   async function button(label: string) { await wait(`[...document.querySelectorAll('button')].some(b=>b.innerText.trim()===${json(label)}&&!b.disabled)`); await js(`[...document.querySelectorAll('button')].find(b=>b.innerText.trim()===${json(label)}).click()`); }
   async function fill(selector: string, value: string) { await js(`(()=>{const e=document.querySelector(${json(selector)});Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,${json(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`); }
   async function queue(kind: string, file: string) { await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind, paths: [file] }])); }
-  async function workspace() { await js(`document.querySelectorAll('.nav-item')[6].click()`); await wait(`!!document.querySelector('.settings-tabs')`); await button('工作空间'); await wait(`!!document.querySelector('.storage-data-dir')&&!document.querySelector('.storage-data-dir').innerText.includes('正在读取')`); }
+  async function workspace() { await gotoSettings({ js, wait }, '工作空间'); await wait(`!!document.querySelector('.storage-data-dir')&&!document.querySelector('.storage-data-dir').innerText.includes('正在读取')`); }
   async function capture(suffix: string, selector: string) { await js(`document.activeElement?.blur();document.querySelector(${json(selector)}).scrollIntoView({block:'center',behavior:'instant'})`); await new Promise(r => setTimeout(r, 350)); await writeFile(output.replace(/\.json$/, suffix), (await window.webContents.capturePage()).toPNG()); }
   function inside(child: string, parent: string) { const relative = path.relative(parent, child); return relative && !relative.startsWith('..') && !path.isAbsolute(relative); }
   window.show();
   try {
     await wait(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.skeleton-list')&&!document.querySelector('.connection-banner')`);
     const initial = await api('storage.status'); assert.ok(inside(initial.dataDir, userData), '只能迁移当前独立测试目录');
-    await button('打开示例'); await wait(`!!document.querySelector('[aria-label="对象x"]')`);
-    const assetId = await js<string>(`new URL(document.querySelector('.annotation-canvas image').getAttribute('href')).pathname.slice(1)`);
-    const original = await api('asset.get', { assetId }); const draftX = original.annotations[0].bbox.x + 3;
-    await fill('[aria-label="对象x"]', String(draftX));
+    // 草稿直接经接口写入：这条验收要的是「备份与迁移是否带上未保存的草稿」，而不是检查器本身。
+    const example = await api<{ id: string }>('project.example');
+    const assetId = (await api<{ items: Array<{ id: string }> }>('asset.list', { projectId: example.id, limit: 1 })).items[0].id;
+    const original = await api<{ version: number; annotations: Array<{ id: string; bbox: { x: number; y: number; width: number; height: number } }> }>('asset.get', { assetId });
+    const draftX = original.annotations[0].bbox.x + 3;
+    await api('annotation.draft', { assetId, baseVersion: original.version, annotations: [{ id: 'storage-draft-fixture', type: 'detect', classId: original.annotations[0].classId, bbox: { ...original.annotations[0].bbox, x: draftX } }] });
     const provider = await api('provider.save', { name: '存储隔离验收', baseUrl: 'http://127.0.0.1:9/v1', protocol: 'chat-completions', model: 'no-request' });
     await api('credential.set', { providerId: provider.id, key: 'storage-ui-fixture-key' });
     await workspace(); assert.equal((await api('asset.get', { assetId })).draft[0].bbox.x, draftX);
@@ -55,7 +58,8 @@ export async function checkDesktopStorage(window: BrowserWindow, output: string)
     await wait(`[...document.querySelectorAll('button')].some(b=>b.innerText.trim()==='切换到恢复副本'&&!b.disabled)`);
     await capture('-prepared.png', '.storage-activation');
     await button('切换到恢复副本');
-    await wait(`!!document.querySelector('.project-row')&&!document.querySelector('.storage-settings')`);
+    // 切换数据目录会重启到欢迎页：用欢迎页当锚点，项目列表页早已随界面重构移除。
+    await wait(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.storage-settings')`);
     let status = await api('storage.status'); assert.ok(inside(status.dataDir, restoredParent));
     assert.ok((await stat(path.join(initial.dataDir, 'autolabel.db'))).isFile());
     assert.equal((await api('provider.list')).find((p: any) => p.id === provider.id).hasCredential, false);
@@ -68,20 +72,15 @@ export async function checkDesktopStorage(window: BrowserWindow, output: string)
     await queue('directory', migrationParent); await button('选择迁移目录');
     await wait(`document.querySelector('[aria-label="迁移目标父目录"]').value===${json(migrationParent)}`);
     await button('复制并切换');
-    await wait(`!!document.querySelector('.project-row')&&!document.querySelector('.storage-settings')`);
+    // 切换数据目录会重启到欢迎页：用欢迎页当锚点，项目列表页早已随界面重构移除。
+    await wait(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.storage-settings')`);
     const migrated = await api('storage.status'); assert.ok(inside(migrated.dataDir, migrationParent)); assert.ok((await stat(path.join(status.dataDir, 'autolabel.db'))).isFile());
     assert.equal((await api('provider.list')).find((p: any) => p.id === provider.id).hasCredential, true);
     assert.equal((await api('asset.get', { assetId })).draft[0].bbox.x, draftX);
     await workspace(); await capture('-workspace.png', '.storage-data-dir');
     checks.push({ check: 'local-migration', currentCredentialsPreserved: true, originalRetained: true, migratedDraftReadable: true });
-    await js(`document.querySelectorAll('.nav-item')[4].click()`); await wait(`!!document.querySelector('.resources-page')`); await button('新建资源');
-    await fill('[aria-label="资源名称"]', '未保存导航保护');
-    await wait(`document.querySelector('.resource-editor')?.innerText.includes('存在未保存编辑')`);
-    assert.equal(await js(`[...document.querySelectorAll('button')].find(b=>b.innerText.trim()==='保存人工参考').disabled`), true);
-    await js(`document.querySelectorAll('.nav-item')[6].click()`); await wait(`document.querySelector('.toast.error')?.innerText.includes('资源内容尚未保存')`);
-    assert.equal(await js(`document.querySelector('[aria-label="资源名称"]').value`), '未保存导航保护');
-    await button('放弃编辑并收起'); await js(`document.querySelectorAll('.nav-item')[6].click()`); await wait(`!!document.querySelector('.settings-tabs')`);
-    checks.push({ check: 'resource-unsaved-guard', sidebarBlocked: true, referenceButtonDisabled: true, explicitDiscardAllowsNavigation: true });
+    // 「资源未保存保护」那一段随资源编辑页一起移除：资源现在是项目概览里的只读对话框，没有可编辑状态。
+    // 这条失去的覆盖不再假装还在；要恢复得先给资源一个可编辑入口。
     await writeFile(output, json({ passed: true, mode: 'storage-ui', newModelCalls: 0, checks }));
   } catch (e) { await writeFile(output.replace(/\.json$/, '-failure.png'), (await window.webContents.capturePage()).toPNG()); await writeFile(output, json({ passed: false, mode: 'storage-ui', checks, error: e instanceof Error ? e.message : String(e), body: await js(`document.body.innerText`) })); throw e; }
 }

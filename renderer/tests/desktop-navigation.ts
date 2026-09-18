@@ -46,10 +46,15 @@ export async function gotoTasks(driver: UiDriver, tab: string): Promise<void> {
   await driver.js(`([...document.querySelectorAll('.task-kind-tabs button')].find(node=>node.innerText.trim()===${q(tab)})).click()`);
 }
 
-/** 进入设置页的某个区块。落在高级区块时标签栏会自动展开，不需要先点「高级设置」。 */
+/** 进入设置页的某个区块。高级区块默认折叠，这里会先展开，调用方不必自己记得这一步。 */
 export async function gotoSettings(driver: UiDriver, tab: string): Promise<void> {
   await gotoNav(driver, '设置');
   await driver.wait(`!!document.querySelector('.settings-tabs')`);
+  const tabVisible = `[...document.querySelectorAll('.settings-tabs button')].some(node=>node.innerText.trim()===${q(tab)})`;
+  if (!(await driver.js<boolean>(tabVisible))) {
+    await driver.wait(`!!document.querySelector('.settings-advanced-toggle')`);
+    await driver.js(`document.querySelector('.settings-advanced-toggle').click()`);
+  }
   await driver.wait(`[...document.querySelectorAll('.settings-tabs button')].some(node=>node.innerText.trim()===${q(tab)}&&!node.disabled)`);
   await driver.js(`([...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()===${q(tab)})).click()`);
   await driver.wait(`document.querySelector('.settings-tabs button.selected')?.innerText.trim()===${q(tab)}`);
