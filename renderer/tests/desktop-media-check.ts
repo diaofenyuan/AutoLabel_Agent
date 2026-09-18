@@ -78,6 +78,13 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     await button('将抽帧导入项目'); await wait(`window.autoLabel.request('media.job.get',{jobId:${json(firstJob.id)}}).then(j=>j.status==='completed'&&j.stage==='done'&&j.assetsCommitted)`, 60000); const importedFrames = await api('media.video.frames', { jobId: firstJob.id, offset: 0, limit: 20 }); assert.ok(importedFrames.items.every((f: any) => f.assetId)); const all = await api('asset.list', { projectId: project.id, limit: 100 }); assert.equal(all.total, 4);
     await openProjectOverview(driver, name);
     await wait(`document.querySelectorAll('.result-thumb').length===4`);
+    // 标准答案集入口：界面重构移除旧页面后它一直没有新落点，评测因此没法给新项目建真值；这里守一条「概览页能打开它」。
+    await js(`([...document.querySelectorAll('.overview-page button')].find(node=>node.innerText.trim()==='标准答案集')).click()`);
+    await wait(`!!document.querySelector('dialog[open]')&&document.querySelector('dialog[open]').innerText.includes('独立标准答案集')`);
+    await capture('-truth-entry.png', 'dialog[open] .modal-inner');
+    await js(`document.querySelector('dialog[open] [aria-label="关闭弹窗"]').click()`);
+    await wait(`!document.querySelector('dialog[open]')`);
+    checks.push({ check: 'truth-set-entry-reachable', openedFromOverview: true });
     checks.push({ check: 'explicit-frame-import', jobId: firstJob.id, assetsCommitted: true, imported: all.total, sourceIdentityRetained: true, overviewVisible: 4 });
 
     // ===== 时间轴：帧数据按接口断言；界面在「任务 · 轨迹标注」里选中它并进入工作区 =====

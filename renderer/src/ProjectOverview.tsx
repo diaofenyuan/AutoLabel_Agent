@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Database, Download, FolderOpen, Layers, MessageSquare, MoreHorizontal, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Database, Download, FolderOpen, Layers, MessageSquare, MoreHorizontal, RefreshCw, ShieldCheck, ClipboardCheck } from 'lucide-react';
 import type { Annotation, Asset } from '../../shared/protocol';
 import type { LibraryResource } from '../../shared/resources';
 import { useApp } from './context';
@@ -10,6 +10,7 @@ import ExportDialog from './ExportDialog';
 import ResourceApply from './ResourceApply';
 import AssetAnnotator from './AssetAnnotator';
 import TemplateDialog from './TemplateDialog';
+import TruthSets from './TruthSets';
 import { errorMessage, isDemo, request } from './bridge';
 import { Button, Empty, IconButton, Loading, Modal, PageHeader } from './ui';
 import { statusNames, taskNames } from './types';
@@ -32,7 +33,7 @@ export default function ProjectOverview() {
   const [preview, setPreview] = useState<Asset | null>(null);
   const [versions, setVersions] = useState<DatasetVersion[]>([]);
   const [exports, setExports] = useState<ExportRecord[]>([]);
-  const [dialog, setDialog] = useState<'versions' | 'export' | 'resources' | 'template' | null>(null);
+  const [dialog, setDialog] = useState<'versions' | 'export' | 'resources' | 'template' | 'truth' | null>(null);
   const [actions, setActions] = useState<Asset | null>(null);
   /** 「将选中版本载入草稿」的落点：载入后直接打开这张图的画布，历史版本才有实际去处。 */
   const [loadInto, setLoadInto] = useState<{ assetId: string; annotations: Annotation[] } | null>(null);
@@ -86,6 +87,8 @@ export default function ProjectOverview() {
         <Button onClick={() => setDialog('template')}><ShieldCheck size={14} />类别与点位模板</Button>
         <Button onClick={() => setDialog('resources')}><FolderOpen size={14} />资源</Button>
         <Button onClick={() => setDialog('versions')}><Layers size={14} />数据集版本</Button>
+        {/* 标准答案集的人工答案与固定版本入口：界面重构移除旧页面后，它一直没有新落点，评测因此没法为新项目建真值。 */}
+        <Button onClick={() => setDialog('truth')}><ClipboardCheck size={14} />标准答案集</Button>
         <Button className="primary" disabled={isDemo} onClick={() => setDialog('export')}><Download size={14} />导出</Button></>} />
     {error && <p role="alert" className="inline-error">{error}</p>}
 
@@ -167,6 +170,7 @@ export default function ProjectOverview() {
         onClose={() => { setPreview(null); setLoadInto(null); }}
         onSaved={updated => setAssets(list => list.map(item => item.id === updated.id ? updated : item))} />
     </Modal>}
+    {dialog === 'truth' && <TruthSets onClose={() => setDialog(null)} />}
     {dialog === 'versions' && <DatasetVersionDialog project={project} onClose={() => setDialog(null)}
       onOpenTemplate={() => setDialog('template')}
       onOpenExport={() => setDialog('export')}
