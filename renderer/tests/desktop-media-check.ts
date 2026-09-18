@@ -3,11 +3,22 @@ import assert from 'node:assert/strict';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { keypointEdges } from '../src/keypointEdges';
+import { gotoTasks, openProjectOverview } from './desktop-navigation';
 
+/**
+ * 视频抽帧参数、帧记录与时间轴预览验收。
+ *
+ * 覆盖范围：抽帧参数的校验（时间段不重叠、输出尺寸/格式/JPEG 质量）、逐帧记录与真实帧时间、
+ * 产物导入前后的状态，以及时间轴帧条与预览。项目归属走欢迎页的确认框（选已有项目）。
+ *
+ * 不再覆盖「素材筛选 + 明确排除 + 跑整条流程」：那一段的入口是流程编排页，而流程改由对话发起后
+ * 该页已从界面移除，筛选任务在界面上不再有创建入口。留着只会让这条检查一直红着却看不出原因，
+ * 所以这里如实写明不再覆盖，不假装还有。
+ */
 export async function checkDesktopMedia(window: BrowserWindow, output: string): Promise<void> {
   const checks: unknown[] = [], json = JSON.stringify, userData = process.env.AUTOLABEL_TEST_USER_DATA!;
   assert.ok(userData); const fixtures = path.join(userData, 'fixtures'); await mkdir(fixtures, { recursive: true });
-  const videoPath = path.join(fixtures, 'vtest.avi'); if (process.env.AUTOLABEL_MEDIA_EXISTING_ONLY !== '1') await copyFile(path.resolve('.qa/media-samples/vtest.avi'), videoPath);
+  const videoPath = path.join(fixtures, 'vtest.avi'); await copyFile(path.resolve('.qa/media-samples/vtest.avi'), videoPath);
   const js = <T = any>(code: string): Promise<T> => window.webContents.executeJavaScript(code);
   const api = (command: string, payload: unknown = {}) => js(`window.autoLabel.request(${json(command)},${json(payload)})`);
   const dialog = "document.querySelector('dialog[open]')";
@@ -18,65 +29,54 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
   async function select(selector: string, value: string) { await wait(`!!document.querySelector(${json(selector)})&&!document.querySelector(${json(selector)}).disabled`); await js(`(()=>{const e=document.querySelector(${json(selector)});e.value=${json(value)};e.dispatchEvent(new Event('change',{bubbles:true}));})()`); }
   async function queue(kind: string, file: string) { await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind, paths: [file] }])); }
   async function capture(suffix: string, selector: string) { await js(`document.activeElement?.blur();document.querySelector(${json(selector)}).scrollIntoView({block:'start',behavior:'instant'})`); await new Promise(r => setTimeout(r, 350)); await writeFile(output.replace(/\.json$/, suffix), (await window.webContents.capturePage()).toPNG()); }
-  async function node(label: string) { await js(`[...document.querySelectorAll('.flow-node')].find(b=>b.innerText.includes(${json(label)})).click()`); await wait(`document.querySelector('.flow-inspector h2')?.innerText.includes(${json(label)})`); }
   async function settled(jobId: string) { await wait(`window.autoLabel.request('media.job.get',{jobId:${json(jobId)}}).then(j=>['completed','failed','interrupted','cancelled'].includes(j.status))`, 60000); const job = await api('media.job.get', { jobId }); assert.equal(job.status, 'completed', json(job)); return job; }
+  const driver = { js, wait };
   window.setContentSize(1440, 940); window.showInactive();
   try {
     const points = [{ name: 'A', x: 2, y: 3, visibility: 2 as const }, { name: 'B', x: 0, y: 0, visibility: 0 as const }, { name: 'C', x: 8, y: 9, visibility: 1 as const }];
     assert.deepEqual(keypointEdges(points, [[0, 1], [1, 2]]), []); assert.deepEqual(keypointEdges(points, [['A', 'B'], ['B', 'C']]), []); assert.deepEqual(keypointEdges(points, [['A', 'C']]), [[points[0], points[2]]]); assert.deepEqual(keypointEdges(points, undefined), []);
     checks.push({ check: 'explicit-keypoint-template-edges', invisiblePointNotBridged: true, namesAndZeroBasedIndices: true, noTemplateNoEdges: true });
     await wait(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);
-    if (process.env.AUTOLABEL_MEDIA_EXISTING_ONLY === '1') {
-      await js(`window.__mediaClicks=[];document.addEventListener('click',e=>{const b=e.target.closest('button');if(b)window.__mediaClicks.push({text:b.innerText, trusted:e.isTrusted,page:location.hash});},true)`);
-      const project = (await api('project.list')).find((p: any) => p.name.startsWith('视频与筛选验收-')); assert.ok(project);
-      const jobs = await api('media.job.list', { projectId: project.id }), videoJob = jobs.items.find((j: any) => j.kind === 'video_extract'), screeningJob = jobs.items.find((j: any) => j.kind === 'image_screening');
-      assert.equal(videoJob.assetsCommitted, true); assert.equal(screeningJob.status, 'completed');
-      await js(`[...document.querySelectorAll('.project-row')].find(e=>e.innerText.includes(${json(project.name)})).click()`); await wait(`!!document.querySelector('.workbench')`);
-      await click('.nav-item:nth-child(4)'); await button('素材处理'); await wait(`!!document.querySelector('.media-job-list>button')`); await js(`[...document.querySelectorAll('.media-job-list>button')].find(b=>b.innerText.includes('素材筛选分析')).click()`); await wait(`!!document.querySelector('.screening-results')`);
-      for (const section of ['精确重复', '近重复候选', '来源跨分区', '逐图分析']) { await button(section, "document.querySelector('.screening-section-tabs')"); await wait(`!!document.querySelector('.screening-results')&&!document.querySelector('.screening-results').innerText.includes('正在读取已保存的分析结果')`); }
-      await capture('-screening.png', '.screening-summary');
-      const result = await api('media.screening.result', { jobId: screeningJob.id, section: 'items', offset: 0, limit: 20 }); assert.equal(result.summary.status, 'incomplete'); assert.equal(result.summary.nearCheck.unexaminedContentPairs, 6);
-      if (process.env.AUTOLABEL_MEDIA_DISPLAY_ONLY === '1') {
-        const flowsBefore = await api('flow.list', { projectId: project.id });
-        await click('.nav-item:nth-child(3)'); await button('运行记录'); await click('.flow-run-list>button'); await wait(`!!document.querySelector('.flow-run-detail h3')`);
-        await button('查看固定产物'); await wait(`!!document.querySelector('.flow-artifact-table')`);
-        assert.ok(await js(`document.querySelector('.flow-artifact-view').innerText.includes('按明确选择排除')`));
-        await capture('-filter-output.png', '.flow-artifact-view');
-        assert.equal((await api('media.job.list', { projectId: project.id })).total, jobs.total);
-        assert.equal((await api('flow.list', { projectId: project.id })).total, flowsBefore.total);
-        assert.equal((await api('run.list')).length, 0);
-        await writeFile(output, json({ passed: true, mode: 'media-display-only', newExtractionJobs: 0, newModelRuns: 0, newFlowRuns: 0, mediaJobsUnchanged: true, checks })); return;
-      }
-      const definition = (await api('project.open', { projectId: project.id })).settings.flow, excludedId = definition.steps[0].parameters.excludeAssetIds[0];
-      const protectedItem = result.items.find((i: any) => i.protected), original = await api('asset.get', { assetId: protectedItem.assetId });
-      await click('.nav-item:nth-child(3)'); await wait(`!!document.querySelector('.flow-node')`); await button('预检当前流程'); await wait(`!!document.querySelector('.flow-preflight')||!!document.querySelector('.workflow-page>.inline-error')`);
-      assert.ok(await js(`document.querySelector('.flow-preflight')?.innerText.includes('预检通过')`), await js('document.body.innerText'));
-      await button('运行完整流程'); await wait(`!!document.querySelector('.flow-run-detail h3')`); const flow = (await api('flow.list', { projectId: project.id })).items[0];
-      await wait(`window.autoLabel.request('flow.get',{flowRunId:${json(flow.id)}}).then(r=>['completed','completed_with_errors','failed','needs_attention'].includes(r.status))`, 60000); const finished = await api('flow.get', { flowRunId: flow.id }); assert.equal(finished.status, 'completed', json(finished)); const artifact = await api('flow.artifact', { artifactId: finished.steps[0].outputArtifactId });
-      assert.equal(artifact.items.filter((i: any) => i.outcome === 'included').length, 3); assert.equal(artifact.items.find((i: any) => i.assetId === excludedId).outcome, 'excluded'); const after = await api('asset.get', { assetId: protectedItem.assetId }); assert.equal(after.version, original.version); assert.deepEqual(after.annotations, original.annotations); assert.equal((await api('asset.list', { projectId: project.id })).total, 4); assert.equal((await api('run.list')).length, 0);
-      await button('查看固定产物'); await wait(`!!document.querySelector('.flow-artifact-view')`); await capture('-filter-output.png', '.flow-artifact-view');
-      checks.push({ check: 'existing-media-results-and-explicit-exclusion', projectId: project.id, mediaJobsBefore: jobs.total, mediaJobsAfter: (await api('media.job.list', { projectId: project.id })).total, videoJobId: videoJob.id, screeningJobId: screeningJob.id, summary: result.summary, flowRunId: flow.id, artifactId: artifact.id, explicitExcludedAssetId: excludedId, included: 3, projectAssetsPreserved: 4, manualVersionPreserved: true });
-      await writeFile(output, json({ passed: true, mode: 'media-existing-ui', newExtractionJobs: 0, newModelRuns: 0, checks })); return;
-    }
-    const name = `视频与筛选验收-${Date.now()}`, project = await api('project.create', { name, taskType: 'detect', classes: [{ id: 'person', name: '行人', color: '#477b93' }] });
-    await new Promise<void>(resolve => { window.webContents.once('did-finish-load', resolve); window.webContents.reload(); }); await wait(`document.body.innerText.includes(${json(name)})&&!!document.querySelector('.project-row')`); await js(`[...document.querySelectorAll('.project-row')].find(e=>e.innerText.includes(${json(name)})).click()`); await wait(`!!document.querySelector('.workbench')`);
-    await button('从视频抽帧'); await queue('video', videoPath); await button('选择并检查视频'); await wait(`!!document.querySelector('.video-inspection')`, 60000);
+
+    // ===== 入口：欢迎页「导入视频」→ 项目归属确认框里选已有项目 =====
+    const name = `视频抽帧验收-${Date.now()}`, project = await api('project.create', { name, taskType: 'detect', classes: [{ id: 'person', name: '行人', color: '#477b93' }] });
+    await new Promise<void>(resolve => { window.webContents.once('did-finish-load', resolve); window.webContents.reload(); });
+    await wait(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);
+    await queue('video', videoPath);
+    await js(`([...document.querySelectorAll('.onboarding-lane button')].find(b=>b.innerText.trim()==='导入视频')).click()`);
+    await button('选择已有项目', dialog);
+    await js(`(()=>{const e=${dialog}.querySelector('select');e.value=${json(project.id)};e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await button('继续');
+    await wait(`!!document.querySelector('.video-inspection')`, 60000);
     const inspection = await js<string>(`document.querySelector('.video-inspection').innerText`); assert.ok(inspection.includes('768 × 576')); assert.ok(inspection.includes('79.50 秒'));
     await select('[aria-label="视频采样方式"]', 'every_n'); await fill('[aria-label="视频采样值"]', '3'); await select('[aria-label="视频采样方式"]', 'fps'); await fill('[aria-label="视频采样值"]', '2'); await select('[aria-label="视频采样方式"]', 'interval'); await fill('[aria-label="视频采样值"]', '1');
     await click('.video-ranges>summary'); await click('.video-ranges>.checkbox-row input'); await fill('[aria-label="视频时间段 1 终点"]', '2'); await button('添加时间段'); await fill('[aria-label="视频时间段 2 起点"]', '1'); await fill('[aria-label="视频时间段 2 终点"]', '6'); await button('创建抽帧任务'); await wait(`document.querySelector('.video-import .media-error')?.textContent.includes('时间段')`); assert.equal((await api('media.job.list', { projectId: project.id })).total, 0);
     await fill('[aria-label="视频时间段 2 起点"]', '4'); await click('.video-output-options>summary'); await click('.video-output-options>.checkbox-row input'); await fill('[aria-label="视频输出宽度"]', '384'); await fill('[aria-label="视频输出高度"]', '288'); await select('[aria-label="视频尺寸适配"]', 'contain'); await select('[aria-label="视频输出格式"]', 'jpg'); assert.equal(await js(`document.querySelector('[aria-label="视频JPEG质量"]').value`), '3'); await select('[aria-label="视频输出格式"]', 'png');
-    await capture('-parameters.png', 'dialog[open] .modal-inner>header'); await button('创建抽帧任务'); await wait(`!!document.querySelector('.media-job-detail')&&!document.querySelector('dialog[open]')`);
+    await capture('-parameters.png', 'dialog[open] .modal-inner>header'); await button('创建抽帧任务'); await wait(`!document.querySelector('dialog[open]')`);
+
+    // ===== 任务详情：抽帧产物与逐帧记录在「任务 · 素材任务」里回看 =====
+    await gotoTasks(driver, '素材任务');
+    await wait(`!!document.querySelector('.media-job-row')`);
+    await js(`document.querySelector('.media-job-row .media-job-open').click()`);
+    await wait(`!!document.querySelector('.media-job-detail')`);
     const firstJob = (await api('media.job.list', { projectId: project.id, kind: 'video_extract' })).items[0], extracted = await settled(firstJob.id); assert.equal(extracted.stage, 'ready'); assert.equal(extracted.artifactCommitted, true); assert.equal(extracted.assetsCommitted, false); assert.equal(extracted.canImport, true); assert.equal((await api('asset.list', { projectId: project.id })).total, 0);
     assert.deepEqual(extracted.parameters.ranges, [{ start: 0, end: 2 }, { start: 4, end: 6 }]); assert.equal(extracted.parameters.mode, 'interval'); assert.equal(extracted.parameters.everyNFrames, undefined); assert.equal(extracted.parameters.targetFps, undefined);
     const frames = await api('media.video.frames', { jobId: firstJob.id, offset: 0, limit: 20 }); assert.equal(frames.total, 4); assert.deepEqual(frames.items.map((f: any) => f.timeSeconds), [0, 1, 4, 5]); for (const frame of frames.items) { assert.equal(frame.width, 384); assert.equal(frame.height, 288); assert.equal(typeof frame.sourcePts, 'string'); assert.equal(frame.assetId, undefined); }
-    await wait(`document.querySelector('.media-job-detail')?.innerText.includes('抽帧就绪，待导入')`); assert.equal(await js(`[...document.querySelectorAll('button')].find(b=>b.innerText.trim()==='打开已导入素材').disabled`), true); await button('查看抽帧记录'); await wait(`document.querySelectorAll('.video-frame-list>div:not(.pagination)').length===4`); await capture('-ready.png', '.media-job-detail');
+    await wait(`document.querySelector('.media-job-detail')?.innerText.includes('抽帧就绪，待导入')`); await button('查看抽帧记录'); await wait(`document.querySelectorAll('.video-frame-list>div:not(.pagination)').length===4`); await capture('-ready.png', '.media-job-detail');
     checks.push({ check: 'video-inspect-extract-before-import', inspection, jobId: firstJob.id, geometryNoticeVisible: await js(`document.querySelector('.media-job-detail .notice')?.innerText??null`), frames: frames.items, overlappingRangesBlocked: true, assetCountBeforeImport: 0 });
+
+    // ===== 导入：产物入库后才可用，素材在项目概览里可见 =====
     await button('将抽帧导入项目'); await wait(`window.autoLabel.request('media.job.get',{jobId:${json(firstJob.id)}}).then(j=>j.status==='completed'&&j.stage==='done'&&j.assetsCommitted)`, 60000); const importedFrames = await api('media.video.frames', { jobId: firstJob.id, offset: 0, limit: 20 }); assert.ok(importedFrames.items.every((f: any) => f.assetId)); const all = await api('asset.list', { projectId: project.id, limit: 100 }); assert.equal(all.total, 4);
-    await button('打开已导入素材'); await wait(`!!document.querySelector('.workbench')&&document.querySelectorAll('.thumbnail').length===4`);
+    await openProjectOverview(driver, name);
+    await wait(`document.querySelectorAll('.result-thumb').length===4`);
+    checks.push({ check: 'explicit-frame-import', jobId: firstJob.id, assetsCommitted: true, imported: all.total, sourceIdentityRetained: true, overviewVisible: 4 });
+
+    // ===== 时间轴：帧条、预览与真实帧时间 =====
     const timeline = await api('track.timeline.create', { projectId: project.id, mediaJobId: firstJob.id });
     const timelineFrames = await api('track.timeline.frames', { timelineId: timeline.id, offset: 0, limit: 50 });
     assert.equal(timelineFrames.total, 4); assert.ok(timelineFrames.items.every((frame: any) => frame.assetId && typeof frame.sourcePts === 'string'));
-    await button('视频轨迹'); await wait(`!!document.querySelector('.video-timeline')`);
+    await gotoTasks(driver, '轨迹标注');
+    await wait(`!!document.querySelector('.video-timeline')`);
     await select('[aria-label="视频时间轴"]', timeline.id); await wait(`document.querySelectorAll('.timeline-frame-strip button').length===4`);
     await wait(`!!document.querySelector('.timeline-frame-preview img')&&document.querySelector('.timeline-frame-preview img').complete&&document.querySelector('.timeline-frame-preview img').naturalWidth>0`);
     await js(`document.querySelector('.timeline-frame-preview details')?.setAttribute('open','')`);
@@ -84,17 +84,6 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     assert.equal(timelineView.frameCount, 4); assert.equal(timelineView.previewLoaded, true); assert.equal(timelineView.sourcePtsVisible, true);
     await capture('-timeline.png', '.timeline-frame-preview');
     checks.push({ check: 'timeline-ui-preview', timelineId: timeline.id, frameCount: timelineView.frameCount, previewLoaded: timelineView.previewLoaded, sourcePtsVisible: timelineView.sourcePtsVisible });
-    const protectedId = all.items[0].id, excludedId = all.items[1].id; await api('annotation.save', { assetId: protectedId, baseVersion: 0, confirm: false, annotations: [{ id: 'protected-video-manual', type: 'detect', classId: 'person', bbox: { x: 10, y: 10, width: 60, height: 80 } }] }); const original = await api('asset.get', { assetId: protectedId });
-    checks.push({ check: 'explicit-frame-import', jobId: firstJob.id, assetsCommitted: true, imported: all.total, sourceIdentityRetained: true });
-    await click('.nav-item:nth-child(3)'); await wait(`document.querySelectorAll('.flow-node').length===4`); for (const label of ['导入素材', 'API 标注', '检查与复核', '数据集导出']) { await node(label); await click('[aria-label="移除步骤"]'); }
-    await button('添加步骤'); await wait(`!!${dialog}`); await js(`[...${dialog}.querySelectorAll('button')].find(b=>b.innerText.includes('素材筛选')).click()`); await wait(`!!document.querySelector('.screening-parameters')`); await click('.screening-parameters>summary'); await click('[aria-label="检查模糊"]'); await fill('[aria-label="筛选模糊阈值"]', '100000'); await fill('[aria-label="筛选maxComparisons"]', '0'); await button('预览已有素材筛选'); await button('开始只读筛选分析'); await wait(`!!document.querySelector('.screening-results')`, 60000);
-    const screeningJob = (await api('media.job.list', { projectId: project.id, kind: 'image_screening' })).items[0], result = await api('media.screening.result', { jobId: screeningJob.id, section: 'items', offset: 0, limit: 20 });
-    assert.equal(result.summary.status, 'incomplete'); assert.equal(result.summary.nearCheck.status, 'incomplete'); assert.ok(result.summary.nearCheck.unexaminedContentPairs > 0); assert.equal(result.summary.changesApplied, false); assert.equal(result.parameters.maxComparisons, 0); assert.equal(result.parameters.blurThreshold, 100000); assert.equal(result.items.find((i: any) => i.assetId === protectedId).recommendation, 'keep_protected');
-    await wait(`document.querySelector('.screening-summary')?.innerText.includes('未检查')`); for (const section of ['精确重复', '近重复候选', '来源跨分区', '逐图分析']) { await button(section, "document.querySelector('.screening-section-tabs')"); await wait(`!document.querySelector('.screening-results').innerText.includes('正在读取已保存的分析结果')`); }
-    await click(`[aria-label="排除素材 ${excludedId}"]`); await capture('-screening.png', '.screening-summary'); await button('将明确排除项写入当前筛选节点'); await wait(`!document.querySelector('dialog[open]')`); await button('保存流程'); await wait(`!document.querySelector('.page-heading').innerText.includes('放弃流程修改')`); const definition = (await api('project.open', { projectId: project.id })).settings.flow; assert.deepEqual(definition.steps[0].parameters.excludeAssetIds, [excludedId]);
-    await button('预检当前流程'); await wait(`document.querySelector('.flow-preflight')?.innerText.includes('预检通过')`); await button('运行完整流程'); await wait(`!!document.querySelector('.flow-run-detail h3')`); const flow = (await api('flow.list', { projectId: project.id })).items[0]; await wait(`window.autoLabel.request('flow.get',{flowRunId:${json(flow.id)}}).then(r=>['completed','completed_with_errors','failed','needs_attention'].includes(r.status))`, 60000); const finished = await api('flow.get', { flowRunId: flow.id }); assert.equal(finished.status, 'completed', json(finished)); const artifact = await api('flow.artifact', { artifactId: finished.steps[0].outputArtifactId }); assert.equal(artifact.items.filter((i: any) => i.outcome === 'included').length, 3); assert.equal(artifact.items.find((i: any) => i.assetId === excludedId).outcome, 'excluded');
-    const after = await api('asset.get', { assetId: protectedId }); assert.equal(after.version, original.version); assert.deepEqual(after.annotations, original.annotations); assert.equal((await api('asset.list', { projectId: project.id })).total, 4); assert.equal((await api('run.list')).length, 0);
-    checks.push({ check: 'read-only-screening-and-explicit-flow-exclusion', jobId: screeningJob.id, summary: result.summary, parameters: result.parameters, explicitExcludedAssetId: excludedId, artifactId: artifact.id, included: 3, projectAssetsPreserved: 4, manualVersionPreserved: true });
     await writeFile(output, json({ passed: true, mode: 'media-ui', projectId: project.id, newModelRuns: 0, timeline: timelineView, checks }));
-  } catch (e) { await writeFile(output.replace(/\.json$/, '-failure.png'), (await window.webContents.capturePage()).toPNG()); await writeFile(output, json({ passed: false, mode: 'media-ui', checks, error: e instanceof Error ? e.message : String(e), body: await js('document.body.innerText'), clicks: await js('window.__mediaClicks??[]') })); throw e; }
+  } catch (e) { await writeFile(output.replace(/\.json$/, '-failure.png'), (await window.webContents.capturePage()).toPNG()); await writeFile(output, json({ passed: false, mode: 'media-ui', checks, error: e instanceof Error ? e.message : String(e), body: await js('document.body.innerText') })); throw e; }
 }
