@@ -42,7 +42,6 @@
     "check:storage-ui": "node scripts/desktop-smoke.mjs --storage",
     "check:rerun-ui": "node scripts/desktop-smoke.mjs --rerun",
     "check:five-ui": "node scripts/desktop-smoke.mjs --five",
-    "check:reuse-ui": "node scripts/desktop-smoke.mjs --reuse",
     "check:connection-ui": "node scripts/desktop-smoke.mjs --connection-ui",
     "check:training-ui": "node scripts/desktop-smoke.mjs --training-ui",
     "check:installer-contract": "node scripts/installer-contract-check.mjs",

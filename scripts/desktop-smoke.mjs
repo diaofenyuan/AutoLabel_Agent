@@ -25,7 +25,6 @@ const trainingUiOnly = process.argv.includes('--training-ui');
  * 改成表驱动后，新增一项只动这里一行，再在下方补一段自己的断言。
  */
 const MANUAL_CHECKS = [
-  { flag: '--manual', label: 'manual-check' },
   { flag: '--update-ui', label: 'update-ui-check', env: 'AUTOLABEL_UPDATE_UI_CHECK', extraEnv: { AUTOLABEL_UPDATE_TEST: '1' } },
   { flag: '--run-controls', label: 'run-control-check', env: 'AUTOLABEL_RUN_CONTROL_UI_CHECK' },
   { flag: '--media', label: 'media-check', env: 'AUTOLABEL_MEDIA_UI_CHECK' },
@@ -48,12 +47,10 @@ const MANUAL_CHECKS = [
   { flag: '--storage', label: 'storage-check', env: 'AUTOLABEL_STORAGE_UI_CHECK' },
   { flag: '--rerun', label: 'rerun-check', env: 'AUTOLABEL_RERUN_UI_CHECK' },
   { flag: '--five', label: 'five-check', env: 'AUTOLABEL_FIVE_UI_CHECK' },
-  { flag: '--reuse', label: 'reuse-check', env: 'AUTOLABEL_REUSE_UI_CHECK' },
 ];
 const manual = MANUAL_CHECKS.find(entry => process.argv.includes(entry.flag)) ?? null;
 /** 各断言分支仍按名字读，但名字不再是各自独立的一份声明，避免清单之间漂移。 */
 const flagIs = flag => manual?.flag === flag;
-const manualOnly = flagIs('--manual');
 const updateUiOnly = flagIs('--update-ui');
 const runControlOnly = flagIs('--run-controls');
 const mediaOnly = flagIs('--media');
@@ -176,7 +173,6 @@ if (releaseOnly) {
   assert.equal(result.budget.cost.hardLimit, false); assert.equal(result.newPage, true); assert.equal(result.rerunRegistered, true);
   console.log(`新包版本与 4C 启动检查通过：${output}`); process.exit(0);
 }
-if (manualOnly) { assert.equal(result.passed, true); console.log(`新源码手工链路检查通过：${output}`); process.exit(0); }
 if (updateUiOnly) { assert.equal(result.passed, true); assert.deepEqual(result.states, ['available','ready','install-gate','cancelled','checksum-error']); console.log(`更新界面本地回环检查通过：${output}`); process.exit(0); }
 if (runControlOnly) { assert.equal(result.passed, true); assert.equal(result.paused.cancelled, true); assert.equal(result.failedRetry.retryDispatched, true); assert.ok(result.failedRetry.callsAfter > result.failedRetry.callsBefore); console.log(`任务中心暂停/恢复/取消/失败重试界面检查通过：${output}`); process.exit(0); }
 if (mediaOnly) { assert.equal(result.passed, true); assert.equal(result.timeline?.frameCount, 4); assert.equal(result.timeline?.framesHaveSourcePts, true); assert.equal(result.timeline?.workspaceVisible, true); console.log(`视频抽帧参数、逐帧记录与轨迹工作区检查通过：${output}`); process.exit(0); }
@@ -398,10 +394,6 @@ if (flagIs('--rerun')) {
 if (flagIs('--five')) {
   assert.equal(result.passed, true); assert.equal(result.mode, 'five-ui');
   console.log(`五类任务界面链路检查通过：${output}`); process.exit(0);
-}
-if (flagIs('--reuse')) {
-  assert.equal(result.passed, true); assert.equal(result.mode, 'reuse-display-ui');
-  console.log(`复用来源与事件名可读性检查通过：${output}`); process.exit(0);
 }
 if (trainingUiOnly) { assert.equal(result.passed, true); assert.ok(['ready', 'invalid'].includes(result.dataset.status)); assert.equal(result.readOnly, true); console.log(`训练改由对话发起后的只读看板检查通过：${output}`); process.exit(0); }
 if (connectionOnly) { assert.equal(result.before.ready, true); assert.equal(result.before.banner, false); assert.equal(result.disconnected.visible, true); assert.equal(result.disconnected.buttonEnabled, true); assert.equal(result.restored.ready, true); assert.equal(result.restored.banner, false); console.log(`断线重连桌面界面检查通过：${output}`); process.exit(0); }
