@@ -2,6 +2,7 @@ import type { BrowserWindow } from 'electron';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { writeFile } from 'node:fs/promises';
+import { gotoTasks, openExampleCanvas } from './desktop-navigation';
 
 // 只使用回环失败夹具与缺少凭据的本地状态，不触碰真实模型或用户目录。
 export async function checkDesktopRunControls(window: BrowserWindow, output: string): Promise<void> {
@@ -38,8 +39,8 @@ export async function checkDesktopRunControls(window: BrowserWindow, output: str
   try {
     window.show();
     await wait(`!!document.querySelector('.onboarding-lanes button')&&!document.querySelector('.connection-banner')`);
-    await button('打开示例'); await wait(`!!document.querySelector('.annotation-canvas image')`);
-    const asset = await api<any>('asset.get', { assetId: await js<string>(`new URL(document.querySelector('.annotation-canvas image').getAttribute('href')).pathname.slice(1)`) });
+    const driver = { js, wait };
+    const asset = await api<any>('asset.get', { assetId: await openExampleCanvas(driver) });
     const projectId = String(asset.projectId);
     const address = server.address() as { port: number };
     const pausedProvider = await api<any>('provider.save', { name: `任务控制缺失凭据-${Date.now()}`, baseUrl: `http://127.0.0.1:${address.port}/v1`, protocol: 'chat-completions', maxRetries: 0 });
@@ -49,7 +50,7 @@ export async function checkDesktopRunControls(window: BrowserWindow, output: str
     await api('credential.set', { providerId: pausedProvider.id, key: 'isolated-paused-second' });
     await runStatus(pausedRun.id, ['paused']);
 
-    await js(`document.querySelectorAll('.nav-item')[3].click()`); await wait(`!!document.querySelector('.task-kind-tabs')`); await button('标注任务');
+    await gotoTasks(driver, '标注任务');
     await wait(`[...document.querySelectorAll('.run-list .run-row')].some(e=>e.innerText.includes('fixture-paused'))`);
     await js(`[...document.querySelectorAll('.run-list .run-row')].find(e=>e.innerText.includes('fixture-paused')).click()`); await wait(`!!document.querySelector('.run-detail')`);
     const controls = await js<Record<string, boolean>>(`(()=>Object.fromEntries([...document.querySelectorAll('.run-controls button')].map(b=>[b.innerText.trim(),!b.disabled])))()`);

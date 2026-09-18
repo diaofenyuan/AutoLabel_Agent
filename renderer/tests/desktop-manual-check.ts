@@ -28,6 +28,7 @@ import { checkDesktopComposer } from './desktop-composer-check';
 import { checkDesktopSettings } from './desktop-settings-check';
 import { checkDesktopErrorAction } from './desktop-error-action-check';
 import { checkDesktopSidebar } from './desktop-sidebar-check';
+import { gotoNav, openExampleCanvas } from './desktop-navigation';
 
 // 只在桌面显式验收入口运行；所有文件夹、对话框选择及破坏性夹具均限制在独立测试目录。
 export async function checkDesktopManual(window:BrowserWindow, output:string):Promise<void> {
@@ -76,7 +77,8 @@ export async function checkDesktopManual(window:BrowserWindow, output:string):Pr
   window.show();
   try {
     await waitFor(`!!document.querySelector('.onboarding-lanes button')&&!document.querySelector('.skeleton-list')&&!document.querySelector('.connection-banner')`);
-    await button('打开示例');await waitFor(`!!document.querySelector('[aria-label="对象x"]')`);
+    await openExampleCanvas({ js, wait: waitFor });
+    await waitFor(`!!document.querySelector('[aria-label="对象x"]')`);
     const assetId=await js<string>(`new URL(document.querySelector('.annotation-canvas image').getAttribute('href')).pathname.slice(1)`);
     let saved=await api('asset.get',{assetId});const initialX=saved.annotations[0].bbox.x;const initialVersion=saved.version;
     await fill('[aria-label="对象x"]',String(initialX+5));await more('版本记录');
@@ -126,7 +128,7 @@ export async function checkDesktopManual(window:BrowserWindow, output:string):Pr
     await queue({kind:'directory',paths:[exportParent]});await button('选择',dialog);await button('校验并生成新副本',dialog);await waitIdle();await waitFor(`${dialog}.innerText.includes('导出状态：已完成')`);
     const list=await api<any[]>('export.list',{projectId});const reproduced=list.find(r=>r.sourceExportId===first.id)!;assert.ok(reproduced);const originalManifest=JSON.parse(await readFile(path.join(first.path,'manifest.json'),'utf8'));const reproducedManifest=JSON.parse(await readFile(path.join(reproduced.path,'manifest.json'),'utf8'));assert.deepEqual(reproducedManifest.assets,originalManifest.assets);
     checks.push({check:'fixed-export-history',changedVersionVisible:true,reproducedFixedSource:true,currentEditsExcluded:true});await close();
-    await js(`document.querySelectorAll('.nav-item')[6].click()`);await waitFor(`!!document.querySelector('.settings-tabs')`);await button('应用更新');await waitFor(`!!document.querySelector('.update-status')&&!document.querySelector('.update-status').innerText.includes('正在读取桌面更新状态')`);
+    await gotoNav({ js, wait: waitFor }, '设置');await waitFor(`!!document.querySelector('.settings-tabs')`);await button('应用更新');await waitFor(`!!document.querySelector('.update-status')&&!document.querySelector('.update-status').innerText.includes('正在读取桌面更新状态')`);
     assert.equal((await api('update.status')).state,'unconfigured');assert.equal(await js(`[...document.querySelectorAll('.update-actions button')].find(b=>b.innerText.trim()==='下载更新').disabled`),true);assert.equal(await js(`document.querySelectorAll('.download-progress progress').length`),0);
     checks.push({check:'unconfigured-update',nativeState:true,downloadDisabled:true,noSyntheticProgress:true});
     await writeFile(output,json({checks,passed:true}));
