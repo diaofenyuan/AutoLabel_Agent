@@ -10,54 +10,78 @@ const packaged = process.argv.includes('--packaged');
 const windowOnly = process.argv.includes('--window');
 const uiOnly = process.argv.includes('--ui');
 const connectionOnly = process.argv.includes('--connection-ui');
-const manualOnly = process.argv.includes('--manual');
 const releaseOnly = process.argv.includes('--release');
 const release5Only = process.argv.includes('--release5');
 const release6aOnly = process.argv.includes('--release6a');
 const release6bOnly = process.argv.includes('--release6b');
 const release7aOnly = process.argv.includes('--release7a');
 const release7bOnly = process.argv.includes('--release7b');
-const updateUiOnly = process.argv.includes('--update-ui');
-const runControlOnly = process.argv.includes('--run-controls');
-const mediaOnly = process.argv.includes('--media');
-const reasonOnly = process.argv.includes('--reason');
-const annotateOnly = process.argv.includes('--annotate');
-const unknownRetryOnly = process.argv.includes('--unknown-retry');
-const frameScopeOnly = process.argv.includes('--frame-scope');
-const projectIdentityOnly = process.argv.includes('--project-identity');
-const directoryImportOnly = process.argv.includes('--directory-import');
-const onboardingOnly = process.argv.includes('--onboarding-ui');
-const aiPresetOnly = process.argv.includes('--ai-preset');
-const composerOnly = process.argv.includes('--composer-ui');
-const settingsUiOnly = process.argv.includes('--settings-ui');
-const errorActionOnly = process.argv.includes('--error-action');
-const sidebarOnly = process.argv.includes('--sidebar-ui');
 const trainingUiOnly = process.argv.includes('--training-ui');
-if ((manualOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly || settingsUiOnly || errorActionOnly || sidebarOnly) && packaged) throw new Error('手工开发验收不能在稳定安装包中运行');
-const label = trainingUiOnly ? 'training-ui-check' : sidebarOnly ? 'sidebar-check' : errorActionOnly ? 'error-action-check' : settingsUiOnly ? 'settings-check' : composerOnly ? 'composer-check' : aiPresetOnly ? 'ai-preset-check' : onboardingOnly ? 'onboarding-check' : directoryImportOnly ? 'directory-import-check' : projectIdentityOnly ? 'project-identity-check' : frameScopeOnly ? 'frame-scope-check' : unknownRetryOnly ? 'unknown-retry-check' : annotateOnly ? 'annotate-check' : mediaOnly ? 'media-check' : reasonOnly ? 'reason-check' : runControlOnly ? 'run-control-check' : updateUiOnly ? 'update-ui-check' : connectionOnly ? 'connection-ui-check' : release7bOnly ? 'release7b-check' : release7aOnly ? 'release7a-check' : release6bOnly ? 'release6b-check' : release6aOnly ? 'release6a-check' : release5Only ? 'release5-check' : releaseOnly ? 'release-check' : manualOnly ? 'manual-check' : uiOnly ? 'ui-check' : windowOnly ? 'window-check' : packaged ? 'packaged-smoke' : 'desktop-smoke';
+/**
+ * 需要真实界面驱动的手工验收清单：一项一行。
+ *
+ * 这里此前是四份并列的清单（打包守卫、输出标签、独立测试目录、环境变量）外加两份参数拼接，
+ * 新增一条要改七处，漏改一处就变成「脚本里写着、但永远跑不到」的死检查——本轮修的就是这个坑。
+ * 改成表驱动后，新增一项只动这里一行，再在下方补一段自己的断言。
+ */
+const MANUAL_CHECKS = [
+  { flag: '--manual', label: 'manual-check' },
+  { flag: '--update-ui', label: 'update-ui-check', env: 'AUTOLABEL_UPDATE_UI_CHECK', extraEnv: { AUTOLABEL_UPDATE_TEST: '1' } },
+  { flag: '--run-controls', label: 'run-control-check', env: 'AUTOLABEL_RUN_CONTROL_UI_CHECK' },
+  { flag: '--media', label: 'media-check', env: 'AUTOLABEL_MEDIA_UI_CHECK' },
+  { flag: '--reason', label: 'reason-check', env: 'AUTOLABEL_REASON_UI_CHECK' },
+  { flag: '--annotate', label: 'annotate-check', env: 'AUTOLABEL_ANNOTATE_UI_CHECK' },
+  { flag: '--unknown-retry', label: 'unknown-retry-check', env: 'AUTOLABEL_UNKNOWN_RETRY_UI_CHECK' },
+  { flag: '--frame-scope', label: 'frame-scope-check', env: 'AUTOLABEL_FRAME_SCOPE_UI_CHECK' },
+  { flag: '--project-identity', label: 'project-identity-check', env: 'AUTOLABEL_PROJECT_IDENTITY_UI_CHECK' },
+  { flag: '--directory-import', label: 'directory-import-check', env: 'AUTOLABEL_DIRECTORY_IMPORT_UI_CHECK' },
+  { flag: '--onboarding-ui', label: 'onboarding-check', env: 'AUTOLABEL_ONBOARDING_UI_CHECK' },
+  { flag: '--ai-preset', label: 'ai-preset-check', env: 'AUTOLABEL_AI_PRESET_UI_CHECK' },
+  { flag: '--composer-ui', label: 'composer-check', env: 'AUTOLABEL_COMPOSER_UI_CHECK' },
+  { flag: '--settings-ui', label: 'settings-check', env: 'AUTOLABEL_SETTINGS_UI_CHECK' },
+  { flag: '--error-action', label: 'error-action-check', env: 'AUTOLABEL_ERROR_ACTION_UI_CHECK' },
+  { flag: '--sidebar-ui', label: 'sidebar-check', env: 'AUTOLABEL_SIDEBAR_UI_CHECK' },
+  { flag: '--provider-delete', label: 'provider-delete-check', env: 'AUTOLABEL_PROVIDER_DELETE_UI_CHECK' },
+  { flag: '--editing', label: 'editing-check', env: 'AUTOLABEL_EDITING_UI_CHECK' },
+  { flag: '--quality', label: 'quality-check', env: 'AUTOLABEL_QUALITY_UI_CHECK' },
+  { flag: '--local', label: 'local-check', env: 'AUTOLABEL_LOCAL_UI_CHECK' },
+  { flag: '--storage', label: 'storage-check', env: 'AUTOLABEL_STORAGE_UI_CHECK' },
+  { flag: '--rerun', label: 'rerun-check', env: 'AUTOLABEL_RERUN_UI_CHECK' },
+  { flag: '--five', label: 'five-check', env: 'AUTOLABEL_FIVE_UI_CHECK' },
+  { flag: '--reuse', label: 'reuse-check', env: 'AUTOLABEL_REUSE_UI_CHECK' },
+];
+const manual = MANUAL_CHECKS.find(entry => process.argv.includes(entry.flag)) ?? null;
+/** 各断言分支仍按名字读，但名字不再是各自独立的一份声明，避免清单之间漂移。 */
+const flagIs = flag => manual?.flag === flag;
+const manualOnly = flagIs('--manual');
+const updateUiOnly = flagIs('--update-ui');
+const runControlOnly = flagIs('--run-controls');
+const mediaOnly = flagIs('--media');
+const reasonOnly = flagIs('--reason');
+const annotateOnly = flagIs('--annotate');
+const unknownRetryOnly = flagIs('--unknown-retry');
+const frameScopeOnly = flagIs('--frame-scope');
+const projectIdentityOnly = flagIs('--project-identity');
+const directoryImportOnly = flagIs('--directory-import');
+const onboardingOnly = flagIs('--onboarding-ui');
+const aiPresetOnly = flagIs('--ai-preset');
+const composerOnly = flagIs('--composer-ui');
+const settingsUiOnly = flagIs('--settings-ui');
+const errorActionOnly = flagIs('--error-action');
+const sidebarOnly = flagIs('--sidebar-ui');
+if (manual && packaged) throw new Error('手工开发验收不能在稳定安装包中运行');
+const label = manual?.label ?? (trainingUiOnly ? 'training-ui-check' : connectionOnly ? 'connection-ui-check' : release7bOnly ? 'release7b-check' : release7aOnly ? 'release7a-check' : release6bOnly ? 'release6b-check' : release6aOnly ? 'release6a-check' : release5Only ? 'release5-check' : releaseOnly ? 'release-check' : uiOnly ? 'ui-check' : windowOnly ? 'window-check' : packaged ? 'packaged-smoke' : 'desktop-smoke');
 const output = path.join(root, 'build', label + '.json');
 await mkdir(path.dirname(output), { recursive: true });
 const testUserData = process.env.AUTOLABEL_TEST_USER_DATA
   ? path.resolve(root, process.env.AUTOLABEL_TEST_USER_DATA)
-  : path.join(root, 'build', label + ((updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly || settingsUiOnly || errorActionOnly || sidebarOnly || trainingUiOnly) ? `-user-data-${Date.now()}` : '-user-data'));
+  : path.join(root, 'build', label + (manual || trainingUiOnly ? `-user-data-${Date.now()}` : '-user-data'));
 const env = { ...process.env, AUTOLABEL_TEST_USER_DATA: testUserData, AUTOLABEL_SMOKE_OUTPUT: output };
 delete env.ELECTRON_RUN_AS_NODE;
 if (packaged) { env.JAVA_HOME = 'C:\\nonexistent'; env.AUTOLABEL_JAVA_HOME = 'C:\\nonexistent'; }
-if (updateUiOnly) { env.AUTOLABEL_UPDATE_TEST = '1'; env.AUTOLABEL_UPDATE_UI_CHECK = '1'; }
-if (runControlOnly) env.AUTOLABEL_RUN_CONTROL_UI_CHECK = '1';
-if (mediaOnly) env.AUTOLABEL_MEDIA_UI_CHECK = '1';
-if (reasonOnly) env.AUTOLABEL_REASON_UI_CHECK = '1';
-if (annotateOnly) env.AUTOLABEL_ANNOTATE_UI_CHECK = '1';
-if (unknownRetryOnly) env.AUTOLABEL_UNKNOWN_RETRY_UI_CHECK = '1';
-if (frameScopeOnly) env.AUTOLABEL_FRAME_SCOPE_UI_CHECK = '1';
-if (projectIdentityOnly) env.AUTOLABEL_PROJECT_IDENTITY_UI_CHECK = '1';
-if (directoryImportOnly) env.AUTOLABEL_DIRECTORY_IMPORT_UI_CHECK = '1';
-if (onboardingOnly) env.AUTOLABEL_ONBOARDING_UI_CHECK = '1';
-if (aiPresetOnly) env.AUTOLABEL_AI_PRESET_UI_CHECK = '1';
-if (composerOnly) env.AUTOLABEL_COMPOSER_UI_CHECK = '1';
-if (settingsUiOnly) env.AUTOLABEL_SETTINGS_UI_CHECK = '1';
-if (errorActionOnly) env.AUTOLABEL_ERROR_ACTION_UI_CHECK = '1';
-if (sidebarOnly) env.AUTOLABEL_SIDEBAR_UI_CHECK = '1';
+// 环境变量整块由清单推导，不再逐项手写。
+if (manual?.env) env[manual.env] = '1';
+Object.assign(env, manual?.extraEnv ?? {});
 const releaseDirectory = path.resolve(root, process.env.AUTOLABEL_RELEASE_DIR || 'build/release');
 const executable = packaged ? path.join(releaseDirectory, 'win-unpacked/自动标注小助手.exe') : createRequire(import.meta.url)('electron');
 const args = packaged ? ['--desktop-smoke'] : [root, '--desktop-smoke'];
@@ -69,10 +93,10 @@ if (release6aOnly) args.push('--desktop-release6a-check');
 if (release6bOnly) args.push('--desktop-release6b-check');
 if (release7aOnly) args.push('--desktop-release7a-check');
 if (release7bOnly) args.push('--desktop-release7b-check');
-if (updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly || settingsUiOnly || errorActionOnly || sidebarOnly) args.push('--desktop-manual-check');
+if (manual) args.push('--desktop-manual-check');
 if (connectionOnly) args.push('--desktop-connection-check');
 if (trainingUiOnly) args.push('--desktop-training-check');
-if (manualOnly || updateUiOnly || runControlOnly || mediaOnly || reasonOnly || annotateOnly || unknownRetryOnly || frameScopeOnly || projectIdentityOnly || directoryImportOnly || onboardingOnly || aiPresetOnly || composerOnly || settingsUiOnly || errorActionOnly || sidebarOnly) {
+if (manual) {
   const { build } = await import('esbuild');
   await build({ entryPoints: [path.join(root, 'renderer/tests/desktop-manual-check.ts')], bundle: true, platform: 'node', format: 'cjs',
     external: ['electron'], outfile: path.join(root, 'desktop/dist/manual.test.cjs'), logLevel: 'warning' });
@@ -342,6 +366,42 @@ if (annotateOnly) {
   assert.equal(byCheck.get('export-without-output-dir')?.submitted, true);
   assert.equal(byCheck.get('shortcut-copy-matches-capability')?.sidebarChatEntry, true);
   console.log(`素材人工标注入口与文案一致性检查通过：${output}`); process.exit(0);
+}
+/**
+ * 这一组此前没有入口：脚本里既没有开关也没有 npm 脚本，唯一的调度处只认环境变量，
+ * 于是它们永远跑不到，也就没人发现界面改版后它们已经失效。这里补上入口与断言。
+ */
+if (flagIs('--provider-delete')) {
+  assert.equal(result.passed, true); assert.equal(result.deleted, true); assert.equal(result.credentialClearedFeedback, true); assert.equal(result.modelRequests, 0);
+  console.log(`接口删除与凭据清理反馈检查通过：${output}`); process.exit(0);
+}
+if (flagIs('--editing')) {
+  assert.equal(result.passed, true);
+  console.log(`模板与画布编辑边界检查通过：${output}`); process.exit(0);
+}
+if (flagIs('--quality')) {
+  assert.equal(result.passed, true);
+  console.log(`独立人工答案与画布协议检查通过：${output}`); process.exit(0);
+}
+if (flagIs('--local')) {
+  assert.equal(result.passed, true);
+  console.log(`本地推理链路检查通过：${output}`); process.exit(0);
+}
+if (flagIs('--storage')) {
+  assert.equal(result.passed, true); assert.equal(result.mode, 'storage-ui');
+  console.log(`存储位置、备份与迁移检查通过：${output}`); process.exit(0);
+}
+if (flagIs('--rerun')) {
+  assert.equal(result.passed, true); assert.equal(result.mode, 'rerun-ui');
+  console.log(`重跑对比与费用口径检查通过：${output}`); process.exit(0);
+}
+if (flagIs('--five')) {
+  assert.equal(result.passed, true); assert.equal(result.mode, 'five-ui');
+  console.log(`五类任务界面链路检查通过：${output}`); process.exit(0);
+}
+if (flagIs('--reuse')) {
+  assert.equal(result.passed, true); assert.equal(result.mode, 'reuse-display-ui');
+  console.log(`复用来源与事件名可读性检查通过：${output}`); process.exit(0);
 }
 if (trainingUiOnly) { assert.equal(result.passed, true); assert.ok(['ready', 'invalid'].includes(result.dataset.status)); assert.equal(result.readOnly, true); console.log(`训练改由对话发起后的只读看板检查通过：${output}`); process.exit(0); }
 if (connectionOnly) { assert.equal(result.before.ready, true); assert.equal(result.before.banner, false); assert.equal(result.disconnected.visible, true); assert.equal(result.disconnected.buttonEnabled, true); assert.equal(result.restored.ready, true); assert.equal(result.restored.banner, false); console.log(`断线重连桌面界面检查通过：${output}`); process.exit(0); }

@@ -4,6 +4,13 @@ import { createServer } from 'node:http';
 import { writeFile } from 'node:fs/promises';
 
 // 本地协议夹具用于核对复用是否真的少发请求，不代表外部模型的标注质量。
+/**
+ * 复用来源与事件名可读性验收。
+ *
+ * 当前状态：跑不通——主体（配置复用策略、预检、跑完整流程）依赖流程编排页，
+ * 而流程改由对话发起后该页已从界面移除（.flow-node / 移除步骤 / 预检当前流程 均已不存在）；
+ * 剩下的展示分支要看的数据也正由那段流程产出。要恢复得先用接口造出流程运行，再断言界面上复用来源是否可读。
+ */
 export async function checkDesktopReuse(window: BrowserWindow, output: string): Promise<void> {
   let calls = 0, capabilityCalls = 0;
   const checks: unknown[] = [], json = JSON.stringify;

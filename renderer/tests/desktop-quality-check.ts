@@ -5,6 +5,13 @@ import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 // 复用主控质量协议夹具的 target 身份解析；只监听回环，记录为模拟协议，不代表真实模型质量。
+/**
+ * 独立人工答案与画布协议验收。
+ *
+ * 当前状态：跑不通，且原因与「画布协议」无关——它仍引用三处已移除的界面：
+ * 「标准答案集」编辑界面（TruthSets.tsx 已无渲染处）、工作台（.workbench）、旧画布标记（.annotation-canvas / [data-point]）。
+ * 要恢复得按现界面重写：定标与发布走 evaluationSet.*，画布改用 .quality-image img 与 [data-quality-*]。
+ */
 export async function checkDesktopQuality(window:BrowserWindow,output:string):Promise<void>{
   let calls=0;const checks:Record<string,unknown>[]=[];
   const server=createServer(async(incoming,outgoing)=>{let raw='';for await(const part of incoming)raw+=part;const body=JSON.parse(raw);calls++;

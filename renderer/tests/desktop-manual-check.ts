@@ -5,10 +5,7 @@ import path from 'node:path';
 import { checkDesktopQuality } from './desktop-quality-check';
 import { checkDesktopRerun } from './desktop-rerun-check';
 import { checkDesktopFive } from './desktop-five-check';
-import { checkDesktopResources } from './desktop-resource-check';
-import { checkDesktopPagination } from './desktop-pagination-check';
 import { checkDesktopStorage } from './desktop-storage-check';
-import { checkDesktopFlow } from './desktop-flow-check';
 import { checkDesktopReuse } from './desktop-reuse-check';
 import { checkDesktopLocal } from './desktop-local-check';
 import { checkDesktopMedia } from './desktop-media-check';
@@ -30,34 +27,41 @@ import { checkDesktopErrorAction } from './desktop-error-action-check';
 import { checkDesktopSidebar } from './desktop-sidebar-check';
 import { gotoNav, openExampleCanvas } from './desktop-navigation';
 
+/**
+ * 环境变量 → 验收实现。与 scripts/desktop-smoke.mjs 的 MANUAL_CHECKS 一一对应：
+ * 那边决定了「跑哪一条」，这里决定「跑哪一个函数」，两边都只加一行。
+ * 落在表外时走下面的默认分支（--manual）。
+ */
+const DISPATCH: Array<[string, (window: BrowserWindow, output: string) => Promise<void>]> = [
+  ['AUTOLABEL_ONBOARDING_UI_CHECK', checkDesktopOnboarding],
+  ['AUTOLABEL_AI_PRESET_UI_CHECK', checkDesktopAiPreset],
+  ['AUTOLABEL_COMPOSER_UI_CHECK', checkDesktopComposer],
+  ['AUTOLABEL_SETTINGS_UI_CHECK', checkDesktopSettings],
+  ['AUTOLABEL_ERROR_ACTION_UI_CHECK', checkDesktopErrorAction],
+  ['AUTOLABEL_SIDEBAR_UI_CHECK', checkDesktopSidebar],
+  ['AUTOLABEL_DIRECTORY_IMPORT_UI_CHECK', checkDesktopDirectoryImport],
+  ['AUTOLABEL_PROJECT_IDENTITY_UI_CHECK', checkDesktopProjectIdentity],
+  ['AUTOLABEL_FRAME_SCOPE_UI_CHECK', checkDesktopFrameScope],
+  ['AUTOLABEL_UNKNOWN_RETRY_UI_CHECK', checkDesktopUnknownRetry],
+  ['AUTOLABEL_ANNOTATE_UI_CHECK', checkDesktopAnnotate],
+  ['AUTOLABEL_REASON_UI_CHECK', checkDesktopReason],
+  ['AUTOLABEL_PROVIDER_DELETE_UI_CHECK', checkDesktopProviderDelete],
+  ['AUTOLABEL_EDITING_UI_CHECK', checkDesktopEditing],
+  ['AUTOLABEL_MEDIA_UI_CHECK', checkDesktopMedia],
+  ['AUTOLABEL_LOCAL_UI_CHECK', checkDesktopLocal],
+  ['AUTOLABEL_REUSE_UI_CHECK', checkDesktopReuse],
+  ['AUTOLABEL_STORAGE_UI_CHECK', checkDesktopStorage],
+  ['AUTOLABEL_FIVE_UI_CHECK', checkDesktopFive],
+  ['AUTOLABEL_RERUN_UI_CHECK', checkDesktopRerun],
+  ['AUTOLABEL_QUALITY_UI_CHECK', checkDesktopQuality],
+  ['AUTOLABEL_UPDATE_UI_CHECK', checkDesktopUpdateUi],
+  ['AUTOLABEL_RUN_CONTROL_UI_CHECK', checkDesktopRunControls],
+];
+
 // 只在桌面显式验收入口运行；所有文件夹、对话框选择及破坏性夹具均限制在独立测试目录。
 export async function checkDesktopManual(window:BrowserWindow, output:string):Promise<void> {
-  if(process.env.AUTOLABEL_ONBOARDING_UI_CHECK==='1')return checkDesktopOnboarding(window,output);
-  if(process.env.AUTOLABEL_AI_PRESET_UI_CHECK==='1')return checkDesktopAiPreset(window,output);
-  if(process.env.AUTOLABEL_COMPOSER_UI_CHECK==='1')return checkDesktopComposer(window,output);
-  if(process.env.AUTOLABEL_SETTINGS_UI_CHECK==='1')return checkDesktopSettings(window,output);
-  if(process.env.AUTOLABEL_ERROR_ACTION_UI_CHECK==='1')return checkDesktopErrorAction(window,output);
-  if(process.env.AUTOLABEL_SIDEBAR_UI_CHECK==='1')return checkDesktopSidebar(window,output);
-  if(process.env.AUTOLABEL_DIRECTORY_IMPORT_UI_CHECK==='1')return checkDesktopDirectoryImport(window,output);
-  if(process.env.AUTOLABEL_PROJECT_IDENTITY_UI_CHECK==='1')return checkDesktopProjectIdentity(window,output);
-  if(process.env.AUTOLABEL_FRAME_SCOPE_UI_CHECK==='1')return checkDesktopFrameScope(window,output);
-  if(process.env.AUTOLABEL_UNKNOWN_RETRY_UI_CHECK==='1')return checkDesktopUnknownRetry(window,output);
-  if(process.env.AUTOLABEL_ANNOTATE_UI_CHECK==='1')return checkDesktopAnnotate(window,output);
-  if(process.env.AUTOLABEL_REASON_UI_CHECK==='1')return checkDesktopReason(window,output);
-  if(process.env.AUTOLABEL_PROVIDER_DELETE_UI_CHECK==='1')return checkDesktopProviderDelete(window,output);
-  if(process.env.AUTOLABEL_EDITING_UI_CHECK==='1')return checkDesktopEditing(window,output);
-  if(process.env.AUTOLABEL_MEDIA_UI_CHECK==='1')return checkDesktopMedia(window,output);
-  if(process.env.AUTOLABEL_LOCAL_UI_CHECK==='1')return checkDesktopLocal(window,output);
-  if(process.env.AUTOLABEL_REUSE_UI_CHECK==='1')return checkDesktopReuse(window,output);
-  if(process.env.AUTOLABEL_FLOW_UI_CHECK==='1')return checkDesktopFlow(window,output);
-  if(process.env.AUTOLABEL_STORAGE_UI_CHECK==='1')return checkDesktopStorage(window,output);
-  if(process.env.AUTOLABEL_PAGINATION_UI_CHECK==='1')return checkDesktopPagination(window,output);
-  if(process.env.AUTOLABEL_RESOURCE_UI_CHECK==='1')return checkDesktopResources(window,output);
-  if(process.env.AUTOLABEL_FIVE_UI_CHECK==='1')return checkDesktopFive(window,output);
-  if(process.env.AUTOLABEL_RERUN_UI_CHECK==='1')return checkDesktopRerun(window,output);
-  if(process.env.AUTOLABEL_QUALITY_UI_CHECK==='1')return checkDesktopQuality(window,output);
-  if(process.env.AUTOLABEL_UPDATE_UI_CHECK==='1')return checkDesktopUpdateUi(window,output);
-  if(process.env.AUTOLABEL_RUN_CONTROL_UI_CHECK==='1')return checkDesktopRunControls(window,output);
+  const entry = DISPATCH.find(([name]) => process.env[name] === '1');
+  if (entry) return entry[1](window, output);
   const userData=path.join(path.dirname(output),'manual-check-user-data');
   const fixtures=path.join(userData,'fixtures');await mkdir(fixtures,{recursive:true});
   const checks:Record<string,unknown>[]=[];

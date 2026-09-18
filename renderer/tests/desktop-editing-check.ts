@@ -5,6 +5,13 @@ import path from 'node:path';
 import { attributeDefinitions, attributeValueIssue } from '../src/templateAttributes';
 import { deletePolygonPoint, insertPolygonPoint, MAX_POLYGON_POINTS } from '../src/polygonEditing';
 
+/**
+ * 模板与画布编辑边界验收。
+ *
+ * 当前状态：跑不通——仍引用已移除的界面：「标准答案集」编辑界面（TruthSets.tsx 已无渲染处）、
+ * 工作台与项目列表（.workbench / .project-row）、旧画布标记（.annotation-canvas / [data-point]）。
+ * 要恢复得按现界面重写导航与标记（.quality-image img、[data-quality-object] / [data-quality-vertex]）。
+ */
 export async function checkDesktopEditing(window: BrowserWindow, output: string): Promise<void> {
   const checks: unknown[] = [], json = JSON.stringify, userData = process.env.AUTOLABEL_TEST_USER_DATA!;
   const js = <T = any>(code: string): Promise<T> => window.webContents.executeJavaScript(code), api = (command: string, payload: unknown = {}) => js(`window.autoLabel.request(${json(command)},${json(payload)})`);

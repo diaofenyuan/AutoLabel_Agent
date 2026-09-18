@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+/**
+ * 存储位置、本地备份与数据目录迁移验收。
+ *
+ * 当前状态：跑不通——它仍引用三处已移除的界面：项目列表（.project-row，含切换数据目录后的等待锚点）、
+ * 资源编辑页（.resources-page，界面已改为项目概览里的只读资源对话框）、旧画布标记（.annotation-canvas）。
+ * 要恢复得把锚点换成侧栏项目行与 .quality-image img，并删掉「资源未保存保护」那一段（该页面已不存在）。
+ */
 export async function checkDesktopStorage(window: BrowserWindow, output: string): Promise<void> {
   const checks: unknown[] = [], json = JSON.stringify;
   const js = <T = any>(code: string): Promise<T> => window.webContents.executeJavaScript(code);

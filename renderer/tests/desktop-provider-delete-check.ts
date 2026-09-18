@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import type { BrowserWindow } from 'electron';
+import { gotoSettings } from './desktop-navigation';
 
 /** 使用真实桌面 IPC 验收删除确认、后端删除和列表刷新；不发送模型请求。 */
 export async function checkDesktopProviderDelete(window: BrowserWindow, output: string): Promise<void> {
@@ -15,7 +16,7 @@ export async function checkDesktopProviderDelete(window: BrowserWindow, output: 
     await api('credential.set', { providerId: provider.id, key: 'delete-ui-fixture' });
     await new Promise<void>(resolve => { window.webContents.once('did-finish-load', () => resolve()); window.webContents.reload(); });
     await wait(`!!document.querySelector('.nav-item')`);
-    await js(`document.querySelectorAll('.nav-item')[5].click()`);
+    await gotoSettings({ js, wait }, '软件 AI 配置');
     await wait(`!!document.querySelector('.provider-list')&&document.body.innerText.includes(${json(name)})`);
     await js(`[...document.querySelectorAll('.provider-list button')].find(b=>b.innerText.includes(${json(name)})).click()`);
     await button('删除接口');
