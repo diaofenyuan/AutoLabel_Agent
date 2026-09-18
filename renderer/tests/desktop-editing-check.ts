@@ -27,7 +27,7 @@ export async function checkDesktopEditing(window: BrowserWindow, output: string)
     assert.equal(insertPolygonPoint(square, 3)!.length, 5); assert.deepEqual(insertPolygonPoint(square, 3)![4], { x: 200, y: 350 }); assert.equal(deletePolygonPoint(square.slice(0, 3), 0), null); assert.equal(insertPolygonPoint(Array(MAX_POLYGON_POINTS).fill({ x: 0, y: 0 }), 0), null);
     assert.equal(attributeDefinitions({ explanation: 'legacy' }), null); assert.equal(attributeValueIssue({ id: 'n', name: '数量', type: 'number', required: true, min: 0 }, 0), null); assert.equal(attributeValueIssue({ id: 'b', name: '遮挡', type: 'boolean', required: true }, false), null); assert.ok(attributeValueIssue({ id: 't', name: '说明', type: 'text', required: true }, '  ')); assert.ok(attributeValueIssue({ id: 's', name: '选项', type: 'select', required: false, options: ['甲'] }, '乙'));
     checks.push({ check: 'editor-boundaries', polygonMin: 3, polygonMax: 4096, closingEdge: true, falseAndZeroValid: true, legacyUntouched: true });
-    await wait(`!!document.querySelector('.getting-started')&&!document.querySelector('.connection-banner')`);
+    await wait(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);
     const name = `7C 编辑验收-${Date.now()}`, project = await api('project.create', { name, taskType: 'segment', classes: [{ id: 'vehicle', name: '车辆', color: '#477b93' }] });
     const legacy = { description: '保留旧属性说明', nested: [1, { visible: true }] }, rules = { boundary: '贴合可见轮廓', preserve: [1, 2] };
     await api('project.update', { projectId: project.id, settings: { attributes: legacy, rules, occlusionRules: '遮挡部分需要注明', blurRules: '不确定时留待复核' } });

@@ -28,7 +28,7 @@ export async function checkDesktopQuality(window:BrowserWindow,output:string):Pr
   }
   window.show();
   try{
-    await wait(`!!document.querySelector('.getting-started button')&&!document.querySelector('.skeleton-list')&&!document.querySelector('.connection-banner')`);await button('打开示例','document');await wait(`!!document.querySelector('.annotation-canvas image')`);
+    await wait(`!!document.querySelector('.onboarding-lanes button')&&!document.querySelector('.skeleton-list')&&!document.querySelector('.connection-banner')`);await button('打开示例','document');await wait(`!!document.querySelector('.annotation-canvas image')`);
     const assetId=await js<string>(`new URL(document.querySelector('.annotation-canvas image').getAttribute('href')).pathname.slice(1)`);const initial=await api('asset.get',{assetId});const projectId=initial.projectId;
     await js(`document.querySelectorAll('.nav-item')[4].click()`);await button('标准答案集','document');await button('新建标准答案集');const name=`独立人工协议验证-${Date.now()}`;await fill('.field input',name);await js(`(${top}).querySelector('.quality-asset-picks input').click()`);await button('创建独立答案集');await wait(`document.querySelector('.quality-detail')?.innerText.includes(${json(name)})`);
     const set=(await api('evaluationSet.list',{projectId})).find((s:any)=>s.name===name);assert.equal(set.truthCount,0);await js(`document.querySelector('.truth-asset-list button').click()`);await wait(`!!document.querySelector('.truth-editor img')&&document.querySelector('.truth-editor img').complete`);

@@ -19,7 +19,7 @@ export async function checkDesktopFlow(window: BrowserWindow, output: string): P
   async function queue(kind: string, file: string) { await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind, paths: [file] }])); }
   window.setContentSize(1440, 940); window.show();
   try {
-    await wait(`!!document.querySelector('.getting-started')&&!document.querySelector('.skeleton-list')&&!document.querySelector('.connection-banner')`);
+    await wait(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.skeleton-list')&&!document.querySelector('.connection-banner')`);
     await button('打开示例'); await wait(`!!document.querySelector('.annotation-canvas image')`);
     const assetId = await js<string>(`new URL(document.querySelector('.annotation-canvas image').getAttribute('href')).pathname.slice(1)`), asset = await api('asset.get', { assetId });
     await click('.nav-item:nth-child(3)'); await wait(`!!document.querySelector('[aria-label="流程输入范围"]')`);

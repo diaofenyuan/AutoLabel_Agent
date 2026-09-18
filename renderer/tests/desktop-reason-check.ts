@@ -13,7 +13,7 @@ import path from 'node:path';
  * 3. 界面与 toast 文本里都不再出现任何下划线风格的原因码。
  *
  * 夹具落在隔离 userData 的 fixtures 子目录内，只代替系统选择器，不代替路径授权或引擎；
- * 项目通过欢迎页「导入图片开始标注」真实建立，验证的是用户实际会走的那条入口。
+ * 项目通过欢迎页「导入图片」真实建立，验证的是用户实际会走的那条入口。
  */
 export async function checkDesktopReason(window: BrowserWindow, output: string): Promise<void> {
   // 夹具队列由主进程的 DialogFixtures 从真实 userData 读取，必须写到同一目录而不是输出文件所在目录。
@@ -49,13 +49,15 @@ export async function checkDesktopReason(window: BrowserWindow, output: string):
   const checks: Record<string, unknown>[] = [];
   window.show();
   try {
-    await waitFor(`!!document.querySelector('.chat-suggestions')&&!document.querySelector('.connection-banner')`);
+    await waitFor(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);
     // 三张内容互不相同的图：引擎按内容指纹去重，同一张图复制三次只会入库一张。
     const sources = ['renderer/design/codex-flow.png', 'renderer/design/codex-projects.png', 'renderer/design/codex-settings.png'];
     for (const [index, source] of sources.entries()) await copyFile(path.resolve(source), path.join(fixtures, `frame-${index + 1}.png`));
     await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind: 'images', paths: sources.map((_, index) => path.join(fixtures, `frame-${index + 1}.png`)) }]));
-    // 真实入口：欢迎页「导入图片开始标注」→ 按文件夹名建项目 → 3 张素材入库（未标注、项目无类别）。
-    await button('导入图片开始标注');
+    // 真实入口：欢迎页「导入图片」→ 按文件夹名建项目 → 3 张素材入库（未标注、项目无类别）。
+    await button('导入图片');
+    // 项目必须由用户确认归属：导入前先过确认框，名称已按文件夹名预填。
+    await button('导入并继续');
     await waitFor(`!!document.querySelector('.chat-panel textarea')`);
     const created = (await api<Array<{ id: string; name: string; assetCount: number }>>('project.list')).find(item => item.name === batch);
     assert.ok(created, `欢迎页导入应建立名为 ${batch} 的项目`);

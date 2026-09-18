@@ -22,9 +22,11 @@ import { checkDesktopUnknownRetry } from './desktop-unknown-retry-check';
 import { checkDesktopFrameScope } from './desktop-frame-scope-check';
 import { checkDesktopProjectIdentity } from './desktop-project-identity-check';
 import { checkDesktopDirectoryImport } from './desktop-directory-import-check';
+import { checkDesktopOnboarding } from './desktop-onboarding-check';
 
 // 只在桌面显式验收入口运行；所有文件夹、对话框选择及破坏性夹具均限制在独立测试目录。
 export async function checkDesktopManual(window:BrowserWindow, output:string):Promise<void> {
+  if(process.env.AUTOLABEL_ONBOARDING_UI_CHECK==='1')return checkDesktopOnboarding(window,output);
   if(process.env.AUTOLABEL_DIRECTORY_IMPORT_UI_CHECK==='1')return checkDesktopDirectoryImport(window,output);
   if(process.env.AUTOLABEL_PROJECT_IDENTITY_UI_CHECK==='1')return checkDesktopProjectIdentity(window,output);
   if(process.env.AUTOLABEL_FRAME_SCOPE_UI_CHECK==='1')return checkDesktopFrameScope(window,output);
@@ -63,7 +65,7 @@ export async function checkDesktopManual(window:BrowserWindow, output:string):Pr
   async function waitIdle(){await waitFor(`!!${dialog} && [...${dialog}.querySelectorAll('button')].some(b=>b.innerText.trim()==='关闭'&&!b.disabled)`);}
   window.show();
   try {
-    await waitFor(`!!document.querySelector('.getting-started button')&&!document.querySelector('.skeleton-list')&&!document.querySelector('.connection-banner')`);
+    await waitFor(`!!document.querySelector('.onboarding-lanes button')&&!document.querySelector('.skeleton-list')&&!document.querySelector('.connection-banner')`);
     await button('打开示例');await waitFor(`!!document.querySelector('[aria-label="对象x"]')`);
     const assetId=await js<string>(`new URL(document.querySelector('.annotation-canvas image').getAttribute('href')).pathname.slice(1)`);
     let saved=await api('asset.get',{assetId});const initialX=saved.annotations[0].bbox.x;const initialVersion=saved.version;

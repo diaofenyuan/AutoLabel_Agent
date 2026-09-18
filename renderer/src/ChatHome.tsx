@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import { FolderPlus, Image as ImageIcon, Film, Upload, ChevronDown } from 'lucide-react';
 import { useApp } from './context';
 import { request, errorMessage, getBridge } from './bridge';
 import { Composer } from './ui';
-import { AiSetupNotice } from './AiSetup';
+import OnboardingLanes from './OnboardingLanes';
 import { DropOverlay } from './fileDrop';
 import VideoImport from './VideoImport';
 import ModelPicker from './ModelPicker';
@@ -159,19 +158,9 @@ export default function ChatHome() {
     <DropOverlay visible={drop.active} />
     <div className="chat-welcome">
       <h1>今天要标注什么？</h1>
-      <AiSetupNotice />
-      <div className="chat-start-actions">
-        <details className="chat-import-actions">
-          <summary><Upload size={14} />导入素材<ChevronDown size={13} /></summary>
-          <div className="chat-import-menu" aria-label="导入方式">
-            <button disabled={busy} onClick={() => void importImages()}><ImageIcon size={14} /><span><strong>图片文件</strong><small>选择一批图片</small></span></button>
-            <button disabled={busy} onClick={() => void importImageFolder()}><FolderPlus size={14} /><span><strong>图片文件夹</strong><small>批量扫描图片</small></span></button>
-            <button disabled={busy} onClick={() => void selectVideo()}><Film size={14} /><span><strong>视频文件</strong><small>选择视频抽帧</small></span></button>
-            <button disabled={busy} onClick={() => void selectVideoFolder()}><FolderPlus size={14} /><span><strong>视频文件夹</strong><small>批量选择视频</small></span></button>
-          </div>
-        </details>
-        <button className="chat-describe-action" onClick={() => document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus()}>先描述标注需求</button>
-      </div>
+      <OnboardingLanes busy={busy}
+        onImportImages={() => void importImages()} onImportImageFolder={() => void importImageFolder()}
+        onImportVideo={() => void selectVideo()} onImportVideoFolder={() => void selectVideoFolder()} />
       {recentProjects.length > 0 && <section className="chat-recent" aria-labelledby="chat-recent-title">
         <div className="chat-recent-heading"><span id="chat-recent-title">继续最近项目</span><small>最近更新</small></div>
         <div className="chat-recent-list">
@@ -209,8 +198,10 @@ export default function ChatHome() {
           <span title="这里的默认值用于新建的对话与任务"><ModelPicker providers={providers} providerId={choice.providerId} model={choice.model} depth={choice.depth} disabled={busy}
             onChange={next => void saveChoice(next)} onDepthChange={next => void saveChoice({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} /></span>
         </div>
-        {/* 把落点规则写在发送之前：发送时会弹框确认项目名称（或选已有项目）。 */}
-        <span className="composer-hint">发送时确认项目名称{pendingExisting ? `（已有同名项目「${pendingExisting.name}」可选）` : ''}</span>
+        {/* 把落点写在发送之前：用户先知道这句话会落到哪个项目，而不是发完才发现又多了一个项目。 */}
+        <span className="composer-hint">{pendingName
+          ? pendingExisting ? `将并入已有项目「${pendingExisting.name}」` : `将新建项目「${pendingName}」（发送时可改名）`
+          : '发送时确认项目名称'}</span>
       </Composer>
     </footer>
     {/* 多选视频或视频文件夹选出来的候选清单：与拖入多个视频共用同一个组件。 */}

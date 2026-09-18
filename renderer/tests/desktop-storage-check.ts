@@ -18,7 +18,7 @@ export async function checkDesktopStorage(window: BrowserWindow, output: string)
   function inside(child: string, parent: string) { const relative = path.relative(parent, child); return relative && !relative.startsWith('..') && !path.isAbsolute(relative); }
   window.show();
   try {
-    await wait(`!!document.querySelector('.getting-started')&&!document.querySelector('.skeleton-list')&&!document.querySelector('.connection-banner')`);
+    await wait(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.skeleton-list')&&!document.querySelector('.connection-banner')`);
     const initial = await api('storage.status'); assert.ok(inside(initial.dataDir, userData), '只能迁移当前独立测试目录');
     await button('打开示例'); await wait(`!!document.querySelector('[aria-label="对象x"]')`);
     const assetId = await js<string>(`new URL(document.querySelector('.annotation-canvas image').getAttribute('href')).pathname.slice(1)`);

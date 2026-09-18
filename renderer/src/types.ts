@@ -28,8 +28,6 @@ export interface Preferences {
   trainingDevice: string; trainingWorkers: number; trainingConcurrency: number; trainingRetentionDays: number;
   /** 新对话默认的思考深度；会话内切换只影响当前会话，不回写这里（见实施计划 6.2）。 */
   chatThinkingDepth: ThinkingDepth;
-  /** 未配置 AI 时的一次性引导是否已被用户关掉；凭据配好后引导由凭据状态直接隐藏，不看这个值。 */
-  aiSetupDismissed?: boolean;
   /** 抽帧产物就绪后是否自动导入项目：默认开，抽帧完成 ≠ 素材可用的那一步不该由人记着。 */
   frameAutoImport?: boolean;
   [key: string]: unknown;

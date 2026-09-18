@@ -40,17 +40,19 @@ export async function checkDesktopProjectIdentity(window: BrowserWindow, output:
   const paths = sources.map((_, index) => path.join(fixtures, `shot-${index + 1}.png`));
   async function importFolder() {
     await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind: 'images', paths }]));
-    await button('导入图片开始标注');
+    await button('导入图片');
+    // 项目必须由用户确认归属：导入前先过确认框。同名项目会默认落在「选择已有项目」上，一并覆盖。
+    await button('导入并继续');
     await waitFor(`!!document.querySelector('.chat-panel textarea')`);
   }
   /** 回到欢迎页：新对话把界面交回欢迎页，由描述建好项目后再开会话。 */
   async function toWelcome() {
     await js(`[...document.querySelectorAll('.sidebar-scroll .nav-item')].find(b=>b.innerText.trim()==='新对话').click()`);
-    await waitFor(`!!document.querySelector('.chat-suggestions')`);
+    await waitFor(`!!document.querySelector('.onboarding-lanes')`);
   }
   try {
     window.show();
-    await waitFor(`!!document.querySelector('.chat-suggestions')&&!document.querySelector('.connection-banner')`);
+    await waitFor(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);
     for (const [index, source] of sources.entries()) await copyFile(path.resolve(source), paths[index]);
 
     // ===== 首次导入：建立项目 =====
@@ -91,7 +93,7 @@ export async function checkDesktopProjectIdentity(window: BrowserWindow, output:
     const reuseHint = await js<string>(`document.querySelector('.composer-hint').innerText`);
     assert.ok(reuseHint.includes(batch), `落点提示应写出项目名，实际：${reuseHint}`);
     await js(`(()=>{const e=document.querySelector('.chat-home textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,'换一个全新的描述');e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-    await waitFor(`document.querySelector('.composer-hint')?.innerText.includes('将新建项目')`, 10000);
+    await waitFor(`document.querySelector('.composer-hint')?.innerText.includes('新建项目')`, 10000);
     const newHint = await js<string>(`document.querySelector('.composer-hint').innerText`);
     assert.ok(newHint.includes('换一个全新的描述'), `新建时也应写出项目名，实际：${newHint}`);
     checks.push({ check: 'home-shows-destination', reuse: reuseHint.replace(/\s+/g, ' '), create: newHint.replace(/\s+/g, ' ') });

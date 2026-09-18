@@ -133,10 +133,13 @@ export default function App() {
         setActiveSessionId(id);
         await request('chat.history.ensure', { sessionId: id, projectId: opened.id, projectName: opened.name, title: firstMessage ?? '新对话' });
       }
+      // 侧栏列表跟着项目一起刷新：导入是「先进项目再刷新列表」之外的路径，
+      // 素材数不在这一刻同步的话，侧栏会在刚导入完的当口显示 0 张。
+      await refreshProjects();
       await refreshChatSessions();
       setPage('chat'); history.replaceState(null, '', '#chat');
     } finally { endTransition(token); setAssetsLoading(false); }
-  }, [chatSessions, refreshChatSessions, beginTransition, endTransition]);
+  }, [chatSessions, refreshChatSessions, refreshProjects, beginTransition, endTransition]);
   /**
    * 新建对话只能发生在项目内：这里只是把界面交回欢迎页，由用户描述要标注什么，
    * 再由欢迎页建好项目并开会话（会话不脱离项目存在）。

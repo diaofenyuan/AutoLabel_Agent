@@ -37,7 +37,7 @@ export async function checkDesktopRunControls(window: BrowserWindow, output: str
   }
   try {
     window.show();
-    await wait(`!!document.querySelector('.getting-started button')&&!document.querySelector('.connection-banner')`);
+    await wait(`!!document.querySelector('.onboarding-lanes button')&&!document.querySelector('.connection-banner')`);
     await button('打开示例'); await wait(`!!document.querySelector('.annotation-canvas image')`);
     const asset = await api<any>('asset.get', { assetId: await js<string>(`new URL(document.querySelector('.annotation-canvas image').getAttribute('href')).pathname.slice(1)`) });
     const projectId = String(asset.projectId);

@@ -52,11 +52,13 @@ export async function checkDesktopUnknownRetry(window: BrowserWindow, output: st
   };
   try {
     window.show();
-    await waitFor(`!!document.querySelector('.chat-suggestions')&&!document.querySelector('.connection-banner')`);
+    await waitFor(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);
     const picture = path.join(fixtures, 'frame-1.png');
     await copyFile(path.resolve('renderer/design/codex-flow.png'), picture);
     await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind: 'images', paths: [picture] }]));
-    await button('导入图片开始标注');
+    await button('导入图片');
+    // 项目必须由用户确认归属：导入前先过确认框，名称已按文件夹名预填。
+    await button('导入并继续');
     await waitFor(`!!document.querySelector('.chat-panel textarea')`);
     const created = (await api<Array<{ id: string; name: string }>>('project.list')).find(item => item.name === batch);
     assert.ok(created, `欢迎页导入应建立名为 ${batch} 的项目`);

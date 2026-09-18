@@ -9,7 +9,7 @@ import path from 'node:path';
  * 走查结论是：能力早在引擎与授权层就绪（`asset.import` 接受 directory、引擎递归收集），界面却没有入口，
  * 用户导入一个含 10 张图的文件夹只能「进目录 → 全选 → 打开」。而引擎的目录扫描只收 jpg/jpeg/png，
  * 按拖入白名单放开会静默少收素材。本次验收断言：
- * 1. 欢迎页有「导入图片文件夹」与「选择视频文件夹」两个入口，且都走真实授权链路；
+ * 1. 欢迎页有「导入图片文件夹」与「导入视频文件夹」两个入口，且都走真实授权链路；
  * 2. 图片文件夹一次导入完成，文件夹里的 webp 与 txt 不会入库；
  * 3. 目录扫描把「有多少文件用不上」如实算出来（界面据此说明，不是猜）；
  * 4. 视频文件夹先列候选清单再逐个发起抽帧，不一次起一堆任务。
@@ -47,7 +47,7 @@ export async function checkDesktopDirectoryImport(window: BrowserWindow, output:
   }
   try {
     window.show();
-    await waitFor(`!!document.querySelector('.chat-suggestions')&&!document.querySelector('.connection-banner')`);
+    await waitFor(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);
     // 文件夹里混入非支持格式：2 张真 JPEG + 1 个真 WEBP + 1 个文本文件。
     await copyFile(path.resolve('.qa/media-samples/sample-1.jpg'), path.join(imageFolder, 'a.jpg'));
     await copyFile(path.resolve('.qa/media-samples/sample-2.jpg'), path.join(imageFolder, 'b.jpg'));
@@ -58,12 +58,14 @@ export async function checkDesktopDirectoryImport(window: BrowserWindow, output:
     await copyFile(path.resolve('.qa/media-samples/vtest-hd.avi'), path.join(videoFolder, 'clip-2.avi'));
 
     // 入口必须在欢迎页可见：能力早就有了，缺的一直是入口。
-    const suggestions = await js<string[]>(`[...document.querySelectorAll('.chat-suggestions button')].map(b=>b.innerText.trim())`);
-    for (const label of ['导入图片文件夹', '选择视频文件夹']) assert.ok(suggestions.some(text => text.includes(label)), `欢迎页缺少「${label}」入口，实际：${json(suggestions)}`);
+    const suggestions = await js<string[]>(`[...document.querySelectorAll('.onboarding-lanes button')].map(b=>b.innerText.trim())`);
+    for (const label of ['导入图片文件夹', '导入视频文件夹']) assert.ok(suggestions.some(text => text.includes(label)), `欢迎页缺少「${label}」入口，实际：${json(suggestions)}`);
 
     // ===== 图片文件夹：一次导入完成，非支持格式不入库 =====
     await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind: 'directory', paths: [imageFolder] }]));
     await button('导入图片文件夹');
+    // 项目必须由用户确认归属：导入前先过确认框，名称已按文件夹名预填。
+    await button('导入并继续');
     await waitFor(`!!document.querySelector('.chat-panel textarea')`);
     const projectName = path.basename(imageFolder);
     const created = (await api<Array<{ id: string; name: string }>>('project.list')).find(item => item.name === projectName);
@@ -100,9 +102,10 @@ export async function checkDesktopDirectoryImport(window: BrowserWindow, output:
 
     // ===== 视频文件夹：先列候选，再逐个发起 =====
     await js(`[...document.querySelectorAll('.sidebar-scroll .nav-item')].find(b=>b.innerText.trim()==='新对话').click()`);
-    await waitFor(`!!document.querySelector('.chat-suggestions')`);
+    await waitFor(`!!document.querySelector('.onboarding-lanes')`);
     await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind: 'directory', paths: [videoFolder] }]));
-    await button('选择视频文件夹');
+    await button('导入视频文件夹');
+    await button('继续');
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('选择要抽帧的视频')`);
     const rows = await js<number>(`${dialog}.querySelectorAll('.board-row').length`);
     assert.equal(rows, 2, `视频文件夹应列出 2 个候选，实际 ${rows}`);

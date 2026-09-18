@@ -25,7 +25,7 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     const points = [{ name: 'A', x: 2, y: 3, visibility: 2 as const }, { name: 'B', x: 0, y: 0, visibility: 0 as const }, { name: 'C', x: 8, y: 9, visibility: 1 as const }];
     assert.deepEqual(keypointEdges(points, [[0, 1], [1, 2]]), []); assert.deepEqual(keypointEdges(points, [['A', 'B'], ['B', 'C']]), []); assert.deepEqual(keypointEdges(points, [['A', 'C']]), [[points[0], points[2]]]); assert.deepEqual(keypointEdges(points, undefined), []);
     checks.push({ check: 'explicit-keypoint-template-edges', invisiblePointNotBridged: true, namesAndZeroBasedIndices: true, noTemplateNoEdges: true });
-    await wait(`!!document.querySelector('.getting-started')&&!document.querySelector('.connection-banner')`);
+    await wait(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);
     if (process.env.AUTOLABEL_MEDIA_EXISTING_ONLY === '1') {
       await js(`window.__mediaClicks=[];document.addEventListener('click',e=>{const b=e.target.closest('button');if(b)window.__mediaClicks.push({text:b.innerText, trusted:e.isTrusted,page:location.hash});},true)`);
       const project = (await api('project.list')).find((p: any) => p.name.startsWith('视频与筛选验收-')); assert.ok(project);

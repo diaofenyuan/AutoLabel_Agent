@@ -34,7 +34,7 @@ export async function checkDesktopUpdateUi(window: BrowserWindow, output: string
   const navigate = async () => { await js(`document.querySelectorAll('.nav-item')[6].click()`); await wait(`!!document.querySelector('.settings-tabs')`); await js(`([...document.querySelectorAll('.settings-tabs button')].find(b=>b.innerText.trim()==='应用更新')).click()`); await wait(`!!document.querySelector('.update-status')`); };
   const states: string[] = [];
   try {
-    window.show(); await wait(`!!document.querySelector('.getting-started button')&&!document.querySelector('.connection-banner')`); await navigate();
+    window.show(); await wait(`!!document.querySelector('.onboarding-lanes button')&&!document.querySelector('.connection-banner')`); await navigate();
     await fill(`${origin}/manifest`); await click('保存更新地址'); await wait(`document.querySelector('.update-status').dataset.state==='idle'`); await click('检查更新'); await wait(`document.querySelector('.update-status').dataset.state==='available'`); states.push('available');
     await click('下载更新'); await wait(`document.querySelector('.update-status').dataset.state==='ready'`); const readyProgress = await js<number>(`Number(document.querySelector('.download-progress progress')?.value||0)`); if (readyProgress !== payload.length) throw new Error('更新 UI 未显示完整实际字节进度'); states.push('ready');
     const installDisabled = await js<boolean>(`[...document.querySelectorAll('.update-status button')].find(b=>b.innerText.includes('退出并安装更新'))?.disabled===true`); if (!installDisabled) throw new Error('未确认安装前不应允许安装');

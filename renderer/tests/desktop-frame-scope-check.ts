@@ -51,14 +51,15 @@ export async function checkDesktopFrameScope(window: BrowserWindow, output: stri
   }
   try {
     window.show();
-    await waitFor(`!!document.querySelector('.chat-suggestions')&&!document.querySelector('.connection-banner')`);
+    await waitFor(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);
     const source = path.resolve('.qa/media-samples/vtest.avi');
     const video = path.join(fixtures, 'vtest.avi');
     await copyFile(source, video);
     await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind: 'video', paths: [video] }]));
 
-    // ===== 真实入口：欢迎页「选择视频抽帧」→ 面板里把密度调成每 20 秒一帧，控制帧数 =====
-    await button('选择视频抽帧');
+    // ===== 真实入口：欢迎页「导入视频」→ 确认项目归属 → 面板里把密度调成每 20 秒一帧，控制帧数 =====
+    await button('导入视频');
+    await button('继续');
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('768 × 576')`, 60000);
     await select('[aria-label="视频采样密度"]', 'custom');
     await select('[aria-label="视频采样方式"]', 'interval');

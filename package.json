@@ -29,6 +29,7 @@
     "check:frame-scope-ui": "node scripts/desktop-smoke.mjs --frame-scope",
     "check:project-identity-ui": "node scripts/desktop-smoke.mjs --project-identity",
     "check:directory-import-ui": "node scripts/desktop-smoke.mjs --directory-import",
+    "check:onboarding-ui": "node scripts/desktop-smoke.mjs --onboarding-ui",
     "check:connection-ui": "node scripts/desktop-smoke.mjs --connection-ui",
     "check:training-ui": "node scripts/desktop-smoke.mjs --training-ui",
     "check:installer-contract": "node scripts/installer-contract-check.mjs",

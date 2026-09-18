@@ -39,13 +39,13 @@ export async function checkDesktopReuse(window: BrowserWindow, output: string): 
       await button('流程运行'); await wait(`!!document.querySelector('.flow-run-list>button')`); await js(`[...document.querySelectorAll('.flow-run-list>button')].find(b=>b.innerText.includes('修订 2')).click()`); await button('查看固定产物'); await wait(`!!document.querySelector('.flow-artifact-view .reuse-provenance')`); await click('.flow-artifact-view .reuse-provenance>summary'); await wait(`document.querySelector('.flow-artifact-view .reuse-provenance dd')?.innerText.includes('自动标注')`); await capture('-flow-source.png', '.flow-artifact-view');
       await writeFile(output, json({ passed: true, mode: 'reuse-display-ui', newModelCalls: calls, chineseEventNames: true, sourceNameReadable: true, idsInCollapsedDiagnostics: true })); return;
     }
-    await wait(`!!document.querySelector('.getting-started')&&!document.querySelector('.connection-banner')`);
+    await wait(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);
     const port = (server.address() as { port: number }).port;
     const provider = await api('provider.save', { name: `复用 UI 本地协议-${Date.now()}`, baseUrl: `http://127.0.0.1:${port}/v1`, protocol: 'chat-completions', model: 'fixture-reuse', maxRetries: 0 });
     await api('credential.set', { providerId: provider.id, key: 'isolated-reuse-ui-fixture' });
     for (const capability of ['image', 'structured']) assert.equal((await api('provider.test', { providerId: provider.id, model: 'fixture-reuse', capability })).status, 'verified');
     await new Promise<void>(resolve => { window.webContents.once('did-finish-load', resolve); window.webContents.reload(); });
-    await wait(`!!document.querySelector('.getting-started')&&!document.querySelector('.connection-banner')`);
+    await wait(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);
     await button('打开示例'); await wait(`!!document.querySelector('.annotation-canvas image')`);
     const assetId = await js<string>(`new URL(document.querySelector('.annotation-canvas image').getAttribute('href')).pathname.slice(1)`), original = await api('asset.get', { assetId });
     await click('.nav-item:nth-child(3)'); await wait(`!!document.querySelector('.flow-node')`);

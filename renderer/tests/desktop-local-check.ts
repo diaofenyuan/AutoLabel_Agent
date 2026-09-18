@@ -44,7 +44,7 @@ export async function checkDesktopLocal(window: BrowserWindow, output: string): 
     // 对话框验收严格限制在 fixtures；真实虚拟环境继承现有依赖，不扩大选择器授权。
     await copyFile(path.resolve('.qa/models/yolo11n-pose.pt'), modelPath); await copyFile(path.resolve('.qa/models/bus.jpg'), imagePath);
     await promisify(execFile)(basePython, ['-m', 'venv', '--system-site-packages', '--without-pip', environment], { windowsHide: true });
-    await wait(`!!document.querySelector('.getting-started')&&!document.querySelector('.connection-banner')`);
+    await wait(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);
     const name = `Pose 本地验收-${Date.now()}`;
     const project = await api('project.create', { name, taskType: 'pose', classes: [{ id: 'person', name: '行人', color: '#477b93' }] });
     await api('project.update', { projectId: project.id, settings: { keypointNames } });
