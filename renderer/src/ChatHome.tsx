@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FolderPlus, Image as ImageIcon, Film } from 'lucide-react';
+import { FolderPlus, Image as ImageIcon, Film, Upload, ChevronDown } from 'lucide-react';
 import { useApp } from './context';
 import { request, errorMessage, getBridge } from './bridge';
 import { Composer } from './ui';
@@ -160,15 +160,26 @@ export default function ChatHome() {
     <div className="chat-welcome">
       <h1>今天要标注什么？</h1>
       <AiSetupNotice />
-      <div className="chat-suggestions" aria-label="建议">
-        <button disabled={busy} onClick={() => void importImages()}><ImageIcon size={14} />导入图片开始标注</button>
-        <button disabled={busy} onClick={() => void importImageFolder()}><FolderPlus size={14} />导入图片文件夹</button>
-        <button disabled={busy} onClick={() => void selectVideo()}><Film size={14} />选择视频抽帧</button>
-        <button disabled={busy} onClick={() => void selectVideoFolder()}><FolderPlus size={14} />选择视频文件夹</button>
-        {recentProjects.map(item => <button key={item.id} disabled={busy} title={`最近更新的项目 · ${item.assetCount} 张素材`}
-          onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}>继续 {item.name}（{item.assetCount} 张）</button>)}
+      <div className="chat-start-actions">
+        <details className="chat-import-actions">
+          <summary><Upload size={14} />导入素材<ChevronDown size={13} /></summary>
+          <div className="chat-import-menu" aria-label="导入方式">
+            <button disabled={busy} onClick={() => void importImages()}><ImageIcon size={14} /><span><strong>图片文件</strong><small>选择一批图片</small></span></button>
+            <button disabled={busy} onClick={() => void importImageFolder()}><FolderPlus size={14} /><span><strong>图片文件夹</strong><small>批量扫描图片</small></span></button>
+            <button disabled={busy} onClick={() => void selectVideo()}><Film size={14} /><span><strong>视频文件</strong><small>选择视频抽帧</small></span></button>
+            <button disabled={busy} onClick={() => void selectVideoFolder()}><FolderPlus size={14} /><span><strong>视频文件夹</strong><small>批量选择视频</small></span></button>
+          </div>
+        </details>
+        <button className="chat-describe-action" onClick={() => document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus()}>先描述标注需求</button>
       </div>
-      <p className="muted tiny">也可以把图片或视频直接拖进聊天框，发送时再确认项目归属；长任务在对话里选流程发起。</p>
+      {recentProjects.length > 0 && <section className="chat-recent" aria-labelledby="chat-recent-title">
+        <div className="chat-recent-heading"><span id="chat-recent-title">继续最近项目</span><small>最近更新</small></div>
+        <div className="chat-recent-list">
+          {recentProjects.map(item => <button key={item.id} disabled={busy} title={`最近更新的项目 · ${item.assetCount} 张素材`}
+            onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><span>继续</span>{item.name}<small>{item.assetCount} 张素材</small></button>)}
+        </div>
+      </section>}
+      <p className="muted tiny chat-start-hint">选择素材 → 确认项目 → 描述标注要求。也可以把图片或视频直接拖进聊天框。</p>
     </div>
     {/* 输入区同样固定在页面最下方：欢迎语与建议在上方，发送时先确认项目名称与归属，再开始对话。 */}
     <footer className="chat-dock">

@@ -120,7 +120,10 @@ export function AgentSteps({ steps, busy }: { steps: AgentStep[]; busy: boolean 
             const action = failureActions[failureCode(step.result)];
             return <div className="actions"><Button onClick={() => void navigate(action.page, action.section)}>{action.label}</Button></div>;
           })()}
-          <pre>{JSON.stringify(step.result, null, 2)}</pre>
+          <details className="agent-step-raw">
+            <summary>查看原始结果</summary>
+            <pre>{JSON.stringify(step.result, null, 2)}</pre>
+          </details>
         </div>}
       </li>)}
     </ol>

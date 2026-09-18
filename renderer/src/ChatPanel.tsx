@@ -12,11 +12,25 @@ import { DropOverlay } from './fileDrop';
 import { VideoPickList, useChatFileDrop, importAttachments } from './chatDrop';
 import { RichText } from './chatText';
 import { useEffect, useRef } from 'react';
-import { MessageSquare, Settings2, FolderOpen, Sparkles } from 'lucide-react';
+import { MessageSquare, Settings2, FolderOpen, Sparkles, MoreHorizontal } from 'lucide-react';
 import { blankChatSession, useApp, type ChatSession } from './context';
-import { useAiConfigured } from './AiSetup';
 import { request, getBridge, isDemo, errorMessage } from './bridge';
 import { Composer, Button, Empty } from './ui';
+
+type ChatMessageData = { role: 'user' | 'assistant'; content: string };
+
+function ChatMessage({ message, previousUser, onEdit, onRetry, onCopy }: { message: ChatMessageData; previousUser?: string; onEdit: (text: string) => void; onRetry: (text: string) => void; onCopy: (text: string) => void }) {
+  const failed = message.role === 'assistant' && message.content.startsWith('本次调用未完成：');
+  return <div className={`chat-message ${message.role} ${failed ? 'chat-message-failed' : ''}`}>
+    <div className="chat-message-head"><span className={`chat-avatar ${message.role}`} aria-hidden="true">{message.role === 'assistant' ? <Sparkles size={12} /> : '你'}</span><small>{message.role === 'user' ? '你' : '标注助手'}</small></div>
+    <div className="chat-text">{failed&&<span className="chat-error-label">这次没有完成</span>}<RichText text={message.content}/></div>
+    <div className="chat-message-actions" aria-label="消息操作">
+      <button type="button" onClick={() => onCopy(message.content)}>复制</button>
+      {message.role === 'user' && <button type="button" onClick={() => onEdit(message.content)}>编辑</button>}
+      {message.role === 'assistant' && previousUser && <button type="button" onClick={() => onRetry(previousUser)}>重试上一条</button>}
+    </div>
+  </div>;
+}
 
 /**
  * 会话页：一条会话一个消息流，状态按会话标识存放。
@@ -26,7 +40,6 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
   const { project, prefs, notify, navigate, chats, setChats, assets, assetTotal, selectedAssetIds, assetsLoading, providers, events, activeSessionId, refreshChatSessions, refreshAssets, setMediaJob, setMediaTaskId, pendingVideoImports, setPendingVideoImports } = useApp();
   const chatConfig=resolveConfiguration('chat',prefs,project?.settings);
   const annotationConfig=resolveConfiguration('annotation',prefs,project?.settings);
-  const aiConfigured = useAiConfigured();
   // 拖入文件只在会话页生效；工作台里的紧凑面板由工作台自己管导入。
   // 拖进来的文件先挂进当前会话的附件条，发送时才导入项目。
   const drop = useChatFileDrop(items => {
@@ -149,9 +162,27 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
   const effectiveScope = session.scope === 'selected' && !selectedAssetIds.length ? 'project'
     : session.scope === 'page' && !assets.length ? 'project'
     : session.scope === 'current' && !assetId ? 'project' : session.scope;
+  function editComposer(text: string) {
+    update({ input: text });
+    window.requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus());
+  }
+  function copyMessage(text: string) {
+    if (!navigator.clipboard) {
+      notify('当前环境不支持自动复制，请手动选择文本。', true);
+      return;
+    }
+    void navigator.clipboard.writeText(text).then(() => notify('消息已复制。')).catch(() => notify('复制失败，请手动选择文本。', true));
+  }
+  function retryMessage(text: string) {
+    if (!session || session.busy) return;
+    void send({ message: text });
+  }
   return <div className={`chat-panel ${compact ? 'compact' : ''} ${dropActive ? 'drop-active' : ''}`} {...(compact ? {} : drop.handlers)}>
     {!compact && <DropOverlay visible={dropActive} />}
-    <div className="chat-messages" aria-live="polite">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><Button onClick={() => void navigate('settings', 'ai')}><Settings2 size={14} />配置对话模型</Button></Empty> : session.messages.map((message,i) => <div className={`chat-message ${message.role}`} key={i}><div className="chat-message-head"><span className={`chat-avatar ${message.role}`} aria-hidden="true">{message.role === 'assistant' ? <Sparkles size={12} /> : '你'}</span><small>{message.role === 'user' ? '你' : '标注助手'}</small></div><div className="chat-text"><RichText text={message.content}/></div></div>)}{session.busy && session.streamingText && <div className="chat-message assistant streaming"><div className="chat-message-head"><span className="chat-avatar assistant" aria-hidden="true"><Sparkles size={12} /></span><small>标注助手</small></div><div className="chat-text"><RichText text={session.streamingText}/></div></div>}{session.busy && <div className="chat-wait"><span className="waiting-dots">•••</span>{session.cancelRequested ? '正在请求停止 · 已发送请求的结果仍需核对' : chatStatus(events, session.id)} · {session.runningScope}</div>}
+    <div className="chat-messages" role="log" aria-label="对话消息">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><Button onClick={() => void navigate('settings', 'ai')}><Settings2 size={14} />配置对话模型</Button></Empty> : session.messages.map((message, i) => {
+      const previousUser = [...session.messages.slice(0, i)].reverse().find(item => item.role === 'user')?.content;
+      return <ChatMessage key={i} message={message} previousUser={previousUser} onEdit={editComposer} onRetry={retryMessage} onCopy={copyMessage} />;
+    })}{session.busy && session.streamingText && <div className="chat-message assistant streaming"><div className="chat-message-head"><span className="chat-avatar assistant" aria-hidden="true"><Sparkles size={12} /></span><small>标注助手</small></div><div className="chat-text"><RichText text={session.streamingText}/></div></div>}{session.busy && <div className="chat-wait" role="status" aria-live="polite"><span className="waiting-dots">•••</span>{session.cancelRequested ? '正在请求停止 · 已发送请求的结果仍需核对' : chatStatus(events, session.id)} · {session.runningScope}</div>}
       {/* 结果卡片跟着会话走：已经有回复且绑定了项目时才展开实际结果，避免空转读取。 */}
       {!compact && <AgentSteps steps={steps} busy={session.busy} />}
       {!compact && session.planned?.length ? <PlanCard actions={session.planned} busy={session.busy}
@@ -169,22 +200,26 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
       {!compact && project && session.messages.some(message => message.role === 'assistant') && <ResultCard project={project} />}</div>
     {/* 输入区固定在页面最下方：上面只有消息在滚动，控制项与模型选择跟着输入框走。 */}
     <footer className="chat-dock">
-      {project&&<ReferencePicker project={project} value={session.referenceResources??[]} onChange={referenceResources=>update({referenceResources})} disabled={session.busy}/>}
-      <ConfigurationView value={chatConfig} providers={providers} compact/>
+      <ConfigurationView value={chatConfig} providers={providers} compact onConfigure={() => void navigate('settings', 'ai')}/>
       <Composer value={session.input} onChange={input => update({ input })} onSend={() => void send()} placeholder="描述你的标注任务…" busy={session.busy}
         attachments={session.attachments} onRemoveAttachment={id => update({ attachments: (session.attachments ?? []).filter(item => item.id !== id) })}
         onCancel={() => { if (session.cancelRequested) return; update({ cancelRequested: true }); void request('agent.cancel', { sessionId: session.id }).catch(e => { update({ cancelRequested: false }); notify(errorMessage(e), true); }); }}>
         <div className="chat-options">
-          <FlowPicker disabled={session.busy} onPick={prompt => { update({ input: prompt }); document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus(); }} />
           <select aria-label="助手处理范围" disabled={session.busy} value={effectiveScope} onChange={e => update({ scope: e.target.value as ChatSession['scope'] })}>{assetId && <option value="current">当前图片</option>}<option value="project">全项目 · {assetTotal} 张</option>{!!assets.length && <option value="page">当前页 · {assets.length} 张</option>}{!!selectedAssetIds.length && <option value="selected">已勾选（跨页）· {selectedAssetIds.length} 张</option>}</select>
           <select aria-label="助手执行方式" disabled={session.busy} value={String(session.autoExecute)} onChange={e => update({ autoExecute: e.target.value === 'true' })}><option value="true">直接执行</option><option value="false">先看方案</option></select>
-          <button title={session.exportDir || '授权本次对话的导出目录'} onClick={() => void getBridge().then(b => b.chooseFiles({ kind: 'directory' })).then(paths => { if (paths[0]) update({ exportDir: paths[0] }); }).catch(e => notify(errorMessage(e), true))}><FolderOpen size={12} />{session.exportDir ? '已选目录' : '导出目录'}</button>
-          {/* 模型选择收进输入卡的工具行；会话内切换只影响本会话。 */}
           <ModelPicker providers={providers} providerId={selectedProviderId} model={selectedModel} depth={depth} disabled={session.busy}
             onChange={choice => update({ providerId: choice.providerId, model: choice.model })}
             onDepthChange={next => update({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} />
+          <details className="composer-more">
+            <summary><MoreHorizontal size={14} />更多</summary>
+            <div className="composer-more-menu">
+              <FlowPicker disabled={session.busy} onPick={prompt => { update({ input: prompt }); document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus(); }} />
+              <button title={session.exportDir || '授权本次对话的导出目录'} onClick={() => void getBridge().then(b => b.chooseFiles({ kind: 'directory' })).then(paths => { if (paths[0]) update({ exportDir: paths[0] }); }).catch(e => notify(errorMessage(e), true))}><FolderOpen size={12} />{session.exportDir ? '已选目录' : '导出目录'}</button>
+              {project && <ReferencePicker project={project} value={session.referenceResources ?? []} onChange={referenceResources => update({ referenceResources })} disabled={session.busy} />}
+            </div>
+          </details>
         </div>
-        {!aiConfigured && <span className="composer-hint">配置 AI 后可自动标注</span>}
+        <span className="composer-hint">Enter 换行 · Ctrl + Enter 发送{session.attachments?.length ? ` · 已添加 ${session.attachments.length} 个文件` : ''}</span>
       </Composer>
     </footer>
     {/* 拖入多个视频时先给候选清单：原先只打开第一个，其余文件名连提都不提。 */}

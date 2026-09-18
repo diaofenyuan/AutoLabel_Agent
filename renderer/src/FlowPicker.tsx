@@ -28,7 +28,7 @@ export default function FlowPicker({ disabled, onPick }: { disabled?: boolean; o
     return () => { document.removeEventListener('mousedown', onPointerDown); document.removeEventListener('keydown', onKeyDown); };
   }, [open]);
   return <div className="flow-picker" ref={root}>
-    <button type="button" disabled={disabled} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(value => !value)}>
+    <button type="button" disabled={disabled} aria-label="选择任务流程" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(value => !value)}>
       <ListTodo size={13} />任务流程<ChevronDown size={11} />
     </button>
     {open && <div className="picker-popover flow-picker-menu" role="dialog" aria-label="选择任务流程">

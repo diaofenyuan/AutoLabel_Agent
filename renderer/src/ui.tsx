@@ -33,19 +33,25 @@ export function Loading({ label = '正在读取…', compact = false }: { label?
 export function Notice({ children }: { children: ReactNode }) { return <div className="notice"><Info size={16} /><div>{children}</div></div>; }
 export function Composer({ value, onChange, onSend, placeholder, busy, onCancel, children, attachments, onRemoveAttachment }: { value: string; onChange: (v: string) => void; onSend: () => void; placeholder: string; busy?: boolean; onCancel?: () => void; children?: ReactNode; attachments?: ChatAttachment[]; onRemoveAttachment?: (id: string) => void }) {
   const hasAttachments = Boolean(attachments?.length);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const iconOf = (kind: ChatAttachment['kind']) => kind === 'image' ? <ImageIcon size={12} /> : kind === 'video' ? <Film size={12} /> : <Folder size={12} />;
+  function resizeTextarea(target: HTMLTextAreaElement) {
+    target.style.height = 'auto';
+    target.style.height = `${Math.min(168, Math.max(42, target.scrollHeight))}px`;
+  }
+  useEffect(() => { if (textareaRef.current) resizeTextarea(textareaRef.current); }, [value]);
   return <div className="composer">
     {/* 拖进来的文件先挂在这里，发送时才入库并确定项目归属；单枚可移除。 */}
     {hasAttachments && <div className="composer-attachments">{attachments!.map(item => <span className="attachment-chip" key={item.id} title={item.path}>
       {iconOf(item.kind)}<span className="truncate">{item.name}</span>
       {onRemoveAttachment && <button aria-label={`移除 ${item.name}`} onClick={() => onRemoveAttachment(item.id)}><X size={12} /></button>}
     </span>)}</div>}
-    <textarea aria-label={placeholder} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !busy) { e.preventDefault(); onSend(); } }} />
+    <textarea ref={textareaRef} aria-label={placeholder} value={value} onChange={e => { resizeTextarea(e.currentTarget); onChange(e.target.value); }} placeholder={placeholder} onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !busy) { e.preventDefault(); onSend(); } }} />
     {/* 工具行收进卡片内：流程/模型/范围在左，快捷键提示与发送钮在右，不再散落在框外。 */}
     <div className="composer-toolbar">
       <div className="composer-tools">{children}</div>
       <kbd className="composer-kbd">Ctrl + Enter</kbd>
-      <button className="send-button" aria-label={busy ? '停止对话' : '发送'} disabled={!busy && !value.trim() && !hasAttachments} onClick={busy ? onCancel : onSend}>{busy ? <Square size={13} /> : <ArrowUp size={17} />}</button>
+      <button className="send-button" aria-label={busy ? '停止对话' : '发送'} disabled={!busy && !value.trim() && !hasAttachments} onClick={busy ? onCancel : onSend}>{busy ? <Square size={13} /> : <ArrowUp size={17} />}<span className="send-button-label">{busy ? '停止' : '发送'}</span></button>
     </div>
   </div>;
 }
