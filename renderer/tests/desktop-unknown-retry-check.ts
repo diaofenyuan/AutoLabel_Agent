@@ -82,6 +82,9 @@ export async function checkDesktopUnknownRetry(window: BrowserWindow, output: st
     await js(`[...document.querySelectorAll('.sidebar-bottom .nav-item')].find(b=>b.innerText.trim()==='任务').click()`);
     await waitFor(`!!document.querySelector('.task-kind-tabs')`);
     await button('标注任务');
+    // 列表由事件驱动刷新，可能比引擎状态晚一拍；等这一行自己写出「需要处理」再点，
+    // 否则点开的是落定之前的旧状态，下面的下一步区块会「不存在」。
+    await waitFor(`[...document.querySelectorAll('.run-list .run-row')].some(e=>e.innerText.includes('fixture-unknown')&&e.innerText.includes('需要处理'))`);
     await js(`[...document.querySelectorAll('.run-list .run-row')].find(e=>e.innerText.includes('fixture-unknown')).click()`);
     await waitFor(`!!document.querySelector('.run-detail')`);
     const controls = await js<Record<string, boolean>>(`(()=>Object.fromEntries([...document.querySelectorAll('.run-controls button')].map(b=>[b.innerText.trim(),!b.disabled])))()`);
