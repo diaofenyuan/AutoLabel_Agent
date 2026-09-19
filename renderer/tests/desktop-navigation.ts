@@ -61,6 +61,19 @@ export async function gotoSettings(driver: UiDriver, tab: string): Promise<void>
 }
 
 /**
+ * 本地推理页的解释器入口。
+ * 「一键准备」是主入口，手动选解释器折在「高级」里；需要走手动路径的验收先调这里展开，
+ * 免得每个脚本各自记一遍折叠状态。
+ */
+export async function openPythonPicker(driver: UiDriver): Promise<void> {
+  await driver.wait(`!!document.querySelector('.local-runtime-advanced-toggle')`);
+  if (!(await driver.js<boolean>(`!!document.querySelector('[aria-label="手动选择 Python 解释器"]')`))) {
+    await driver.js(`document.querySelector('.local-runtime-advanced-toggle').click()`);
+  }
+  await driver.wait(`[...document.querySelectorAll('.local-runtime-settings button')].some(node=>node.innerText.trim()==='选择 Python 解释器'&&!node.disabled)`);
+}
+
+/**
  * 从侧栏进入某个项目的会话。
  * 与「只看概览」不同：这一步会把该项目的素材加载进应用层，标准答案集的素材选择器读的正是这份数据。
  */

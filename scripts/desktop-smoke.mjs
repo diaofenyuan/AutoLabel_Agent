@@ -39,6 +39,9 @@ const MANUAL_CHECKS = [
   { flag: '--composer-ui', label: 'composer-check', env: 'AUTOLABEL_COMPOSER_UI_CHECK' },
   { flag: '--settings-ui', label: 'settings-check', env: 'AUTOLABEL_SETTINGS_UI_CHECK' },
   { flag: '--model-library', label: 'model-library-check', env: 'AUTOLABEL_MODEL_LIBRARY_UI_CHECK' },
+  { flag: '--runtime-setup', label: 'runtime-setup-check', env: 'AUTOLABEL_RUNTIME_SETUP_UI_CHECK' },
+  // 断网场景：镜像指向不可达主机，验证「装不上时明确失败且不动原有配置」。
+  { flag: '--runtime-setup-offline', label: 'runtime-setup-offline-check', env: 'AUTOLABEL_RUNTIME_SETUP_UI_CHECK', extraEnv: { AUTOLABEL_RUNTIME_SETUP_OFFLINE: '1', AUTOLABEL_RUNTIME_INDEX_URL: 'https://127.0.0.1:9/simple' } },
   { flag: '--error-action', label: 'error-action-check', env: 'AUTOLABEL_ERROR_ACTION_UI_CHECK' },
   { flag: '--sidebar-ui', label: 'sidebar-check', env: 'AUTOLABEL_SIDEBAR_UI_CHECK' },
   { flag: '--provider-delete', label: 'provider-delete-check', env: 'AUTOLABEL_PROVIDER_DELETE_UI_CHECK' },
@@ -119,7 +122,9 @@ if (collect) {
 }
 return new Promise((resolve, reject) => {
   // 打包态首次启动（解压 asar 与初始化运行时）可能超过默认 60 秒，受限环境可显式放宽。
-  const timeoutMs = Number(process.env.AUTOLABEL_SMOKE_TIMEOUT ?? 60000);
+  // 一键准备要真实下载并安装 PyTorch（几百 MB），它的两个场景自带更长的上限，否则会被误杀。
+  const slowSetup = manual?.flag === '--runtime-setup' || manual?.flag === '--runtime-setup-offline';
+  const timeoutMs = Number(process.env.AUTOLABEL_SMOKE_TIMEOUT ?? (slowSetup ? 1800000 : 60000));
   const timeout = setTimeout(() => { child.kill(); reject(new Error('桌面验收超时')); }, timeoutMs);
   child.once('error', error => { clearTimeout(timeout); reject(error); });
   child.once('exit', code => { clearTimeout(timeout); resolve(code); });
@@ -253,6 +258,27 @@ if (flagIs('--model-library')) {
   assert.ok(String(byCheck.get('changed-weights-rejected')?.message ?? '').includes('local_model_changed'));
   assert.equal(byCheck.get('restored-weights-load')?.restored, true);
   console.log(`模型库列表、一键启用、加载与哈希反例检查通过：${output}`); process.exit(0);
+}
+if (flagIs('--runtime-setup')) {
+  assert.equal(result.passed, true); assert.equal(result.mode, 'runtime-setup-ui');
+  const byCheck = new Map(result.checks.map(check => [check.check, check]));
+  // 主入口在显眼处、手动路径折在高级里。
+  assert.ok(String(byCheck.get('prepare-entry-and-advanced-toggle')?.primary ?? '').includes('一键准备'));
+  // 真实装完一轮后必须检测到依赖版本，且记录里的版本与固定版本一致。
+  const prepared = byCheck.get('prepare-installs-usable-environment');
+  assert.ok(prepared?.ultralyticsVersion && prepared?.torchVersion, `一键准备后没有检测到依赖版本：${JSON.stringify(prepared)}`);
+  assert.deepEqual(prepared?.dependencies?.map(item => item.name), ['torch', 'torchvision', 'ultralytics']);
+  console.log(`一键准备本地推理环境检查通过：${output}`); process.exit(0);
+}
+if (flagIs('--runtime-setup-offline')) {
+  assert.equal(result.passed, true); assert.equal(result.mode, 'runtime-setup-offline-ui');
+  const byCheck = new Map(result.checks.map(check => [check.check, check]));
+  // 装不上必须说清原因、留下输出，并且不动用户原有的解释器配置。
+  const failed = byCheck.get('offline-failure-keeps-existing');
+  assert.ok(failed?.message, `失败必须给出原因：${JSON.stringify(failed)}`);
+  assert.ok(failed?.logLines > 0, '失败时必须留下安装输出');
+  assert.equal(failed?.configuredBefore, true); assert.equal(failed?.configuredAfter, true); assert.equal(failed?.availableAfter, true);
+  console.log(`一键准备失败时保护原有配置检查通过：${output}`); process.exit(0);
 }
 if (composerOnly) {
   assert.equal(result.passed, true);

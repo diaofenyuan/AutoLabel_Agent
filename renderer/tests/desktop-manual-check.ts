@@ -25,6 +25,7 @@ import { checkDesktopSettings } from './desktop-settings-check';
 import { checkDesktopErrorAction } from './desktop-error-action-check';
 import { checkDesktopSidebar } from './desktop-sidebar-check';
 import { checkDesktopModelLibrary } from './desktop-model-library-check';
+import { checkDesktopRuntimeSetup } from './desktop-runtime-setup-check';
 import { gotoNav, openExampleCanvas } from './desktop-navigation';
 
 /**
@@ -38,6 +39,7 @@ const DISPATCH: Array<[string, (window: BrowserWindow, output: string) => Promis
   ['AUTOLABEL_COMPOSER_UI_CHECK', checkDesktopComposer],
   ['AUTOLABEL_SETTINGS_UI_CHECK', checkDesktopSettings],
   ['AUTOLABEL_MODEL_LIBRARY_UI_CHECK', checkDesktopModelLibrary],
+  ['AUTOLABEL_RUNTIME_SETUP_UI_CHECK', checkDesktopRuntimeSetup],
   ['AUTOLABEL_ERROR_ACTION_UI_CHECK', checkDesktopErrorAction],
   ['AUTOLABEL_SIDEBAR_UI_CHECK', checkDesktopSidebar],
   ['AUTOLABEL_DIRECTORY_IMPORT_UI_CHECK', checkDesktopDirectoryImport],

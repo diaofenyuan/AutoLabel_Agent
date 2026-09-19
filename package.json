@@ -41,6 +41,8 @@
     "check:local-ui": "node scripts/desktop-smoke.mjs --local",
     "check:storage-ui": "node scripts/desktop-smoke.mjs --storage",
     "check:model-library-ui": "node scripts/desktop-smoke.mjs --model-library",
+    "check:runtime-setup-ui": "node scripts/desktop-smoke.mjs --runtime-setup",
+    "check:runtime-setup-offline-ui": "node scripts/desktop-smoke.mjs --runtime-setup-offline",
     "check:rerun-ui": "node scripts/desktop-smoke.mjs --rerun",
     "check:five-ui": "node scripts/desktop-smoke.mjs --five",
     "check:connection-ui": "node scripts/desktop-smoke.mjs --connection-ui",

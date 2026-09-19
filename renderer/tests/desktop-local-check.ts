@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import type { InputResult, LocalModel, LocalRuntimeState } from '../../shared/inference';
-import { gotoWelcome, gotoSettings } from './desktop-navigation';
+import { gotoWelcome, gotoSettings, openPythonPicker } from './desktop-navigation';
 
 /**
  * 本地推理链路验收。
@@ -74,7 +74,7 @@ export async function checkDesktopLocal(window: BrowserWindow, output: string): 
 
     await gotoSettings({ js, wait }, '本地推理');
     await wait(`!!document.querySelector('.local-runtime-settings')&&[...document.querySelectorAll('button')].some(b=>b.innerText.trim()==='重新检测环境'&&!b.disabled)`);
-    await queue('python', pythonPath); await button('选择 Python 解释器');
+    await queue('python', pythonPath); await openPythonPicker({ js, wait }); await button('选择 Python 解释器');
     await wait(`document.querySelector('.local-runtime-summary')?.innerText.includes('解释器配置：已配置')`);
     await button('重新检测环境');
     await wait(`document.querySelector('.local-runtime-summary')?.innerText.includes('环境检测通过')&&[...document.querySelectorAll('button')].some(b=>b.innerText.trim()==='重新检测环境'&&!b.disabled)`, 60000);

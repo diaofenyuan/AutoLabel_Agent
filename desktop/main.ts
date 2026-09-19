@@ -12,6 +12,7 @@ import { DialogFixtures } from './dialog-fixtures';
 import { CredentialVault } from './vault';
 import { LocalExecutionSettings } from './local-execution';
 import { ModelLibrary } from './model-library';
+import { RuntimeSetup } from './runtime-setup';
 import { MediaExecutionSettings } from './media-execution';
 import { VideoTranscoder } from './transcode';
 import { DataStorage, DesktopPreferences, initializeStorageLocation, scopedVaultPath, type StorageLocation } from './storage';
@@ -61,6 +62,38 @@ const modelLibrary = new ModelLibrary({
 });
 let vault: CredentialVault;
 let engine: EngineManager;
+/**
+ * 一键准备本地推理环境：只探测与安装，装完由这里把解释器授权后交给引擎。
+ * 失败不写任何配置——用户原有的解释器不会因为一次失败的安装被清掉。
+ */
+const runtimeSetup = new RuntimeSetup({
+  storageRoot: () => storagePaths?.root,
+  dataDirectory: () => dataDir,
+  onReady: async pythonPath => {
+    const ready = await waitForEngine();
+    const selected = await grants.add(pythonPath, 'python');
+    await localExecution.configure(ready, selected, () => {
+      if (storage?.busy || engine !== ready || shutdownStarted) throw new DesktopError('STORAGE_BUSY', '配置保存时数据目录或引擎状态已变化，请重新操作');
+    });
+    // 装完必须当场给出「能不能用」的结论：只写配置不检测，界面会停在「已配置但未检测」，
+    // 用户以为准备好了，直到第一次标注才发现问题。
+    const probed = await ready.request('local.runtime.probe', {}, 120000) as { available?: boolean; issue?: { message?: string } };
+    if (probed?.available !== true) throw new DesktopError('RUNTIME_SETUP_PROBE_FAILED', `依赖已装好，但引擎检测未通过：${probed?.issue?.message ?? '未说明原因'}`);
+  },
+  log: message => engine?.log(message),
+});
+/** 装完依赖后引擎可能仍在启动或恰好断开；给它一段时间，别让几分钟的安装白费。 */
+async function waitForEngine(): Promise<EngineManager> {
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    // 每轮重新读状态：start() 之后状态才会变，闭包里的旧值判不出结果。
+    const state = engine.status.state;
+    if (state === 'ready') return engine;
+    if (state === 'stopped') await engine.start();
+    else await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  throw new DesktopError('RUNTIME_SETUP_ENGINE_UNAVAILABLE', '依赖已装好，但本地引擎尚未就绪，无法完成检测。请恢复引擎连接后重新执行一次一键准备。');
+}
 // 转码副本只落在系统临时目录：它是「到达抽帧」的一次性中间物，不属于任何项目或数据目录。
 const transcoder = new VideoTranscoder(() => mediaExecution.paths(), path.join(app.getPath('temp'), 'autolabel-transcode'), message => engine?.log(message));
 type ActiveStorage = StorageLocation & { engine: EngineManager; vault: CredentialVault };
@@ -444,6 +477,12 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
   if (validated.command === 'model.library.install') {
     const state = await modelLibrary.install(payload.catalogId as string, { force: payload.force === true });
     return { ...state, enabled: await enableLibraryModel(requestEngine, payload.catalogId as string) };
+  }
+  // 一键准备本地环境：安装是分钟级操作，start 只负责启动，界面用 get 轮询进度。
+  // 放在本地执行忙碌检查之前：装依赖与「正在加载模型」互不相干，不该互相挡住。
+  if (validated.command.startsWith('local.runtime.setup.')) {
+    if (validated.command === 'local.runtime.setup.start') runtimeSetup.start();
+    return { ...runtimeSetup.status(), record: await runtimeSetup.record() };
   }
   const authorizeLocal = async (parameters: Record<string, unknown>) => {
     if (localExecution.busy || localExecution.uncertain) throw new DesktopError('LOCAL_CONFIGURATION_BUSY', '本地执行配置尚未就绪');

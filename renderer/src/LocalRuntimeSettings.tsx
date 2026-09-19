@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import { FolderOpen, RefreshCw } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronRight, FolderOpen, RefreshCw, Sparkles } from 'lucide-react';
 import type { LocalRuntimeState } from '../../shared/inference';
+import { runtimeSetupBusy, RUNTIME_SETUP_PHASE_NAMES, type RuntimeSetupState } from '../../shared/runtime-setup';
 import { getBridge, request, errorMessage, isDemo } from './bridge';
 import { Button, Notice } from './ui';
 
@@ -18,22 +19,66 @@ export function LocalError({ error, code }: { error: string; code?: string }) {
   return error ? <div className="local-error"><p>{action ?? '本地推理操作未完成。请展开诊断详情，确认原因后重试。'}</p><details><summary>诊断详情</summary><p>{code ? `[${code}] ${error}` : error}</p></details></div> : null;
 }
 
+/**
+ * 本地推理环境。
+ *
+ * 主入口是「一键准备」：自己找 Python、建独立环境、按固定版本从国内镜像装好依赖，最后交给引擎检测。
+ * 手动选解释器是给已有环境的人用的，折在「高级」里——两种人都能一次做到，但第一次用的人不用先做选择题。
+ */
 export default function LocalRuntimeSettings({ onBusyChange, beforeConfigure }: { onBusyChange?: (busy: boolean) => void; beforeConfigure?: () => void }) {
   const [runtime, setRuntime] = useState<LocalRuntimeState | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [chosenPath, setChosenPath] = useState('');
   const [checkedAt, setCheckedAt] = useState('');
+  const [setup, setSetup] = useState<RuntimeSetupState | null>(null), [setupError, setSetupError] = useState('');
+  const [advanced, setAdvanced] = useState(false);
+  const settled = useRef('');
   async function execute(command: string, payload: Record<string, unknown> = {}) {
     setBusy(true); onBusyChange?.(true); setError('');
     try { if (command === 'local.runtime.configure') beforeConfigure?.(); setRuntime(await request<LocalRuntimeState>(command, payload)); setCheckedAt(new Date().toLocaleTimeString('zh-CN')); }
     catch (e) { setRuntime(null); setError(errorMessage(e)); } finally { setBusy(false); onBusyChange?.(false); }
   }
   useEffect(() => { if (!isDemo) void execute('local.runtime.get'); }, []);
+  // 安装要几分钟，界面按秒轮询进度；离开设置页不会中断安装，回来时状态还在。
+  useEffect(() => {
+    if (isDemo || !setup || !runtimeSetupBusy(setup.phase)) return;
+    const timer = setInterval(() => { void request<RuntimeSetupState>('local.runtime.setup.get').then(setSetup).catch(() => undefined); }, 1200);
+    return () => clearInterval(timer);
+  }, [setup?.phase]);
+  // 准备完成后刷新一次环境状态：这一步的结果就是「能不能用」，必须当场看到。
+  useEffect(() => {
+    if (!setup || setup.phase !== 'ready' || settled.current === setup.finishedAt) return;
+    settled.current = setup.finishedAt ?? '';
+    void execute('local.runtime.get');
+  }, [setup?.phase, setup?.finishedAt]);
+  async function prepare() {
+    setSetupError('');
+    try { setSetup(await request<RuntimeSetupState>('local.runtime.setup.start')); }
+    catch (e) { setSetupError(errorMessage(e)); }
+  }
   async function choose() {
     try { const paths = await (await getBridge()).chooseFiles({ kind: 'python' }); if (paths[0]) { setChosenPath(paths[0]); await execute('local.runtime.configure', { pythonPath: paths[0] }); } }
     catch (e) { setError(errorMessage(e)); }
   }
-  return <section className="settings-section local-runtime-settings"><div className="section-toolbar"><h2>本地推理环境</h2><Button disabled={isDemo} busy={busy} onClick={() => void execute('local.runtime.probe')}><RefreshCw size={14}/>重新检测环境</Button></div><Notice>{isDemo ? '本地推理需要桌面应用。' : '选择本机已安装 Ultralytics 和 PyTorch 的 Python 解释器。配置只保存在这台电脑，检测结果决定能否使用本地模型。'}</Notice>
+  const preparing = Boolean(setup && runtimeSetupBusy(setup.phase));
+  return <section className="settings-section local-runtime-settings">
+    <div className="section-toolbar"><h2>本地推理环境</h2><Button disabled={isDemo || busy || preparing} busy={busy} onClick={() => void execute('local.runtime.probe')}><RefreshCw size={14}/>重新检测环境</Button></div>
+    <Notice>{isDemo ? '本地推理需要桌面应用。' : '用本机模型标注不需要 API Key，也不需要自己准备 Python 依赖：点「一键准备」即可。已经装好依赖的机器可以直接在「高级」里指定原有解释器。'}</Notice>
     <div className="local-runtime-summary"><strong>{runtime ? runtime.available ? '环境检测通过' : '环境尚未就绪' : '环境状态未确认'}</strong><p>解释器配置：{runtime ? runtime.configured ? '已配置' : '未配置' : '未确认'} · 推理组件：{runtime ? runtime.workerAvailable ? '已检测到' : '不可用' : '未确认'}</p>{checkedAt && <small>状态更新：{checkedAt}</small>}</div>
-    {chosenPath && <p className="muted tiny break-word">本次选择：{chosenPath}</p>}<div className="actions"><Button disabled={isDemo || busy} onClick={() => void choose()}><FolderOpen size={14}/>选择 Python 解释器</Button><Button disabled={isDemo || busy || !runtime?.configured} onClick={() => { setChosenPath(''); void execute('local.runtime.configure', { pythonPath: null }); }}>清除本机解释器配置</Button></div>
+    <div className="actions"><Button className="primary" disabled={isDemo || preparing} busy={preparing} onClick={() => void prepare()}><Sparkles size={14}/>{setup?.phase === 'ready' ? '重新准备' : '一键准备（推荐）'}</Button></div>
+    {setupError && <LocalError error={setupError}/>}
+    {setup && setup.phase !== 'idle' && <div className={`runtime-setup ${setup.phase}`} data-phase={setup.phase}>
+      <div className="runtime-setup-head"><strong>{RUNTIME_SETUP_PHASE_NAMES[setup.phase]}</strong><span className="muted tiny">{setup.environment}</span></div>
+      <p className="runtime-setup-message">{setup.message}</p>
+      {(setup.pythonVersion || setup.basePython) && <p className="muted tiny break-word">Python {setup.pythonVersion ?? '未识别'}（{setup.basePython}）</p>}
+      <ul className="runtime-setup-dependencies">{setup.dependencies.map(item => <li key={item.name}><strong>{item.name} {item.installed ?? item.version}</strong><small>{item.note}</small></li>)}</ul>
+      {setup.phase === 'ready' && <p className="muted tiny">依赖版本已核对，安装记录写在环境目录的 autolabel-env.json 里。</p>}
+      {setup.log.length > 0 && <details className="local-runtime-diagnostics runtime-setup-log"><summary>安装输出</summary><pre>{setup.log.join('\n')}</pre></details>}
+    </div>}
+    <button className="text-button advanced-toggle local-runtime-advanced-toggle" type="button" aria-expanded={advanced} onClick={() => setAdvanced(value => !value)}>高级：手动指定已装好依赖的 Python 解释器<ChevronRight className={advanced ? 'rotate-90' : ''} size={13}/></button>
+    {advanced && <div className="advanced-fields" aria-label="手动选择 Python 解释器">
+      {chosenPath && <p className="muted tiny break-word">本次选择：{chosenPath}</p>}
+      <div className="actions"><Button disabled={isDemo || busy || preparing} onClick={() => void choose()}><FolderOpen size={14}/>选择 Python 解释器</Button><Button disabled={isDemo || busy || preparing || !runtime?.configured} onClick={() => { setChosenPath(''); void execute('local.runtime.configure', { pythonPath: null }); }}>清除本机解释器配置</Button></div>
+      <p className="muted tiny">只接受本机已安装 Ultralytics 与 PyTorch 的解释器；配置只保存在这台电脑。</p>
+    </div>}
     {runtime && <><div className="local-runtime-versions"><span>Python {runtime.pythonVersion ?? '未检测'}</span><span>Ultralytics {runtime.ultralyticsVersion ?? '未检测'}</span><span>PyTorch {runtime.torchVersion ?? '未检测'}</span></div><p className="muted tiny">CUDA：{runtime.cudaAvailable === undefined ? '未确认' : runtime.cudaAvailable ? '可用' : '不可用'}</p>{runtime.devices.length > 0 && <p className="muted">检测到的设备：{runtime.devices.map(d => d.name).join('、')}</p>}{runtime.issue && <LocalError error={runtime.issue.message} code={runtime.issue.code}/>}{runtime.slots.length > 0 && <details className="local-slots"><summary>设备当前状态</summary>{runtime.slots.map(s => <p key={s.device}>{runtime.devices.find(d => d.id === s.device)?.name ?? s.device} · {s.busy ? '正在执行' : '空闲'}{s.modelVersion !== undefined ? ` · 模型版本 ${s.modelVersion}` : ''}</p>)}</details>}</>}
     {runtime && <details className="local-runtime-diagnostics"><summary>环境诊断信息</summary><p>ONNX Runtime：{runtime.onnxruntimeVersion ?? '未检测'}</p><p>NumPy：{runtime.numpyVersion ?? '未检测'}</p><p>OpenCV：{runtime.opencvVersion ?? '未检测'}</p></details>}
     <LocalError error={error}/>

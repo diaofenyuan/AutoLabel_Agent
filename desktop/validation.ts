@@ -444,6 +444,8 @@ const schemas: Record<string, z.ZodType> = {
   'model.library.install': z.strictObject({ catalogId: id, force: z.boolean().optional() }),
   'model.library.remove': z.strictObject({ catalogId: id }),
   'local.runtime.get': empty,
+  'local.runtime.setup.get': empty,
+  'local.runtime.setup.start': empty,
   'local.runtime.probe': empty,
   'local.model.get': z.strictObject({ modelId: id, modelVersion: localModelVersion.optional() }),
   // classNames 可选：登记后训练预检可离线核对类别一致性，缺省时改由训练启动阶段向 worker 核对。

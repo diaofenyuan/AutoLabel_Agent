@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import type { LocalModel, LocalRuntimeState } from '../../shared/inference';
 import type { ModelLibraryState } from '../../shared/model-library';
-import { gotoSettings } from './desktop-navigation';
+import { gotoSettings, openPythonPicker } from './desktop-navigation';
 
 /**
  * 模型库验收。
@@ -131,7 +131,8 @@ export async function checkDesktopModelLibrary(window: BrowserWindow, output: st
     // 选解释器必须经界面：执行授权只认用户显式选择。
     await writeFile(path.join(userData!, 'dialog-fixtures.json'), json([{ kind: 'python', paths: [pythonPath] }]));
     await gotoSettings({ js, wait: waitFor }, '本地推理');
-    await waitFor(`!!document.querySelector('.local-runtime-settings')&&[...document.querySelectorAll('button')].some(b=>b.innerText.trim()==='选择 Python 解释器'&&!b.disabled)`);
+    await waitFor(`!!document.querySelector('.local-runtime-settings')&&[...document.querySelectorAll('button')].some(b=>b.innerText.trim()==='重新检测环境'&&!b.disabled)`);
+    await openPythonPicker({ js, wait: waitFor });
     await js(`([...document.querySelectorAll('button')].find(b=>b.innerText.trim()==='选择 Python 解释器')).click()`);
     await waitFor(`document.querySelector('.local-runtime-summary')?.innerText.includes('解释器配置：已配置')`);
     await js(`([...document.querySelectorAll('button')].find(b=>b.innerText.trim()==='重新检测环境'&&!b.disabled)).click()`);
