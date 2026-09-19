@@ -65,6 +65,16 @@
 .class-picker .field{padding:0 8px}
 .class-picker .notice{margin:6px 8px 0}
 .class-picker .picker-foot{padding:6px 8px 2px}
+/* 直达标注：模型与范围各是一组二选一，其余信息只读，落点在底栏。 */
+.direct-run{position:relative;min-width:0}
+.direct-run-trigger{color:var(--text);font-weight:500}
+.direct-run-body{display:flex;flex-direction:column;gap:6px;padding:6px 8px 2px;overflow-y:auto;min-height:0}
+.direct-run-options{display:flex;gap:5px;flex-wrap:wrap}
+.direct-run-options button{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;text-align:left;padding:6px 9px;border:1px solid transparent;border-radius:8px;background:var(--surface);color:var(--muted);font-size:11px}
+.direct-run-options button:hover:not(:disabled){background:var(--hover)}
+.direct-run-options button.selected{background:var(--selected);border-color:color-mix(in srgb,var(--accent) 26%,transparent);color:var(--text)}
+.direct-run-options small{font-size:10px;color:var(--soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.direct-run-rules{border-left:2px solid var(--border);padding-left:7px}
 /* 设置页模型组合框：输入框 + 下拉候选，复用 picker 弹层与列表样式；down/up 决定展开方向。 */
 .combo{position:relative;min-width:0}
 .combo-input{display:flex;align-items:center;border:1px solid var(--border);border-radius:8px;background:var(--bg);transition:border-color .14s,box-shadow .14s}

@@ -43,6 +43,7 @@ const MANUAL_CHECKS = [
   // 断网场景：镜像指向不可达主机，验证「装不上时明确失败且不动原有配置」。
   { flag: '--runtime-setup-offline', label: 'runtime-setup-offline-check', env: 'AUTOLABEL_RUNTIME_SETUP_UI_CHECK', extraEnv: { AUTOLABEL_RUNTIME_SETUP_OFFLINE: '1', AUTOLABEL_RUNTIME_INDEX_URL: 'https://127.0.0.1:9/simple' } },
   { flag: '--local-annotate', label: 'local-annotate-check', env: 'AUTOLABEL_LOCAL_ANNOTATE_UI_CHECK' },
+  { flag: '--direct-run', label: 'direct-run-check', env: 'AUTOLABEL_DIRECT_RUN_UI_CHECK' },
   { flag: '--builtin-five', label: 'builtin-five-check', env: 'AUTOLABEL_BUILTIN_FIVE_UI_CHECK' },
   { flag: '--error-action', label: 'error-action-check', env: 'AUTOLABEL_ERROR_ACTION_UI_CHECK' },
   { flag: '--sidebar-ui', label: 'sidebar-check', env: 'AUTOLABEL_SIDEBAR_UI_CHECK' },
@@ -69,6 +70,7 @@ const directoryImportOnly = flagIs('--directory-import');
 const onboardingOnly = flagIs('--onboarding-ui');
 const aiPresetOnly = flagIs('--ai-preset');
 const composerOnly = flagIs('--composer-ui');
+const directRunOnly = flagIs('--direct-run');
 const settingsUiOnly = flagIs('--settings-ui');
 const errorActionOnly = flagIs('--error-action');
 const sidebarOnly = flagIs('--sidebar-ui');
@@ -344,6 +346,19 @@ if (composerOnly) {
   // 主操作一眼可读：发送按钮不被挤成两行。
   assert.ok(byCheck.get('composer-send-button-legible')?.width >= 56);
   console.log(`会话输入卡简化检查通过：${output}`); process.exit(0);
+}
+if (directRunOnly) {
+  assert.equal(result.passed, true);
+  const byCheck = new Map(result.checks.map(check => [check.check, check]));
+  // 没有对话模型时，原路径仍然明确拦下——直达标注不是把旧拦截放宽，而是另加一条能走通的路。
+  assert.ok(String(byCheck.get('direct-run-chat-still-blocked')?.toast ?? '').includes('对话'));
+  // 直达标注真的建了任务、真的发了请求、结果落成候选且没有覆盖人工标注。
+  assert.equal(byCheck.get('direct-run-creates-run-without-chat')?.status, 'completed');
+  assert.ok(byCheck.get('direct-run-creates-run-without-chat')?.versionSources?.includes('api'));
+  assert.ok(byCheck.get('direct-run-creates-run-without-chat')?.humanAnnotations >= 2);
+  // 没有类别时必须说清原因并禁用开始。
+  assert.ok(String(byCheck.get('direct-run-blocks-without-classes')?.reason ?? '').includes('还没有类别'));
+  console.log(`直达标注（不依赖对话模型）检查通过：${output}`); process.exit(0);
 }
 if (aiPresetOnly) {
   assert.equal(result.passed, true);

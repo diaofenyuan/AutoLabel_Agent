@@ -10,6 +10,7 @@ import ModelPicker from './ModelPicker';
 import FlowPicker from './FlowPicker';
 import LocalModelPicker from './LocalModelPicker';
 import ClassPicker from './ClassPicker';
+import DirectRun from './DirectRun';
 import { DropOverlay } from './fileDrop';
 import { VideoPickList, useChatFileDrop, importAttachments } from './chatDrop';
 import { RichText } from './chatText';
@@ -266,6 +267,8 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
           <ModelPicker providers={providers} providerId={selectedProviderId} model={selectedModel} depth={depth} disabled={session.busy}
             onChange={choice => update({ providerId: choice.providerId, model: choice.model })}
             onDepthChange={next => update({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} />
+          {/* 直达标注：对话模型没配或不能调工具时，这里是唯一能真正开跑的路。 */}
+          {project && <DirectRun project={project} annotationConfig={annotationConfig} selectedAssetIds={selectedAssetIds} disabled={session.busy} />}
         </div>
         <span className="composer-hint">Enter 换行 · Ctrl + Enter 发送{session.attachments?.length ? ` · 已添加 ${session.attachments.length} 个文件` : ''}</span>
       </Composer>
