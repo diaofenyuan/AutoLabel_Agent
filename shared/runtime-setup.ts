@@ -8,17 +8,24 @@
 export interface RuntimeDependency {
   name: string;
   version: string;
+  /** pip 的发行包名；有些 Python 模块名与发行包名不同（例如 clip/openai-clip）。 */
+  packageName?: string;
+  /** importlib.metadata 使用的发行包名；缺省沿用 packageName 或 name。 */
+  distributionName?: string;
   /** 一句话说明它在做什么，首次出现时给不懂术语的人一个直白解释。 */
   note: string;
 }
 
 /** 固定版本：与仓库里已验证过的运行环境对齐，不跟随上游最新版漂移。 */
 export const RUNTIME_DEPENDENCIES: RuntimeDependency[] = [
+  // openai-clip 1.0.1 仍通过 pkg_resources 暴露 packaging；setuptools 75+ 已移除该兼容入口。
+  { name: 'setuptools', version: '74.1.3', note: '为本地 CLIP 文本编码器提供兼容的 Python 打包运行时' },
   { name: 'torch', version: '2.5.1', note: 'PyTorch，模型真正跑起来的计算库（CPU 版）' },
   { name: 'torchvision', version: '0.20.1', note: '与 PyTorch 配套的图像处理库，版本必须成对' },
   { name: 'ultralytics', version: '8.3.247', note: 'YOLO 系列模型的加载与推理实现' },
   // 开放词汇要用它把类别名编码成文本向量；缺了它只能走内置词表，未命中的类别名会明确报错。
-  { name: 'clip', version: '1.0', note: 'CLIP 文本编码器（英文文本向量）' },
+  // PyPI 上的项目名是 openai-clip，安装后提供 clip 模块；不能写成不存在的 clip==1.0。
+  { name: 'clip', version: '1.0.1', packageName: 'openai-clip', distributionName: 'openai-clip', note: 'OpenAI CLIP 文本编码器（英文文本向量）' },
 ];
 
 /** 国内 PyPI 镜像；装依赖要几百 MB，直连官方源在国内通常下不动。 */

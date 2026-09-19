@@ -119,19 +119,30 @@ export class RuntimeSetup {
 
   /** 依赖装完后的实测：版本对不上就当作没装好，不含糊过去。 */
   private async verify(environment: string): Promise<void> {
-    const script = 'import json,importlib.metadata as m;print(json.dumps({n:m.version(n) for n in ["torch","torchvision","ultralytics","clip"]}))';
+    const distributions = RUNTIME_DEPENDENCIES.map(item => item.distributionName ?? item.packageName ?? item.name);
+    const script = `import json,importlib.metadata as m;import clip;names=${JSON.stringify(distributions)};print(json.dumps({n:m.version(n) for n in names}))`;
     const result = await run(path.join(environment, 'Scripts', 'python.exe'), ['-c', script], { timeoutMs: VERIFY_TIMEOUT_MS, env: { PYTHONIOENCODING: 'utf-8' } });
     const line = result.stdout.split('\n').map(item => item.trim()).find(item => item.startsWith('{'));
     if (result.code !== 0 || !line) throw new DesktopError('RUNTIME_SETUP_VERIFY_FAILED', '依赖装完后无法导入，环境不完整。请重试；若反复失败，请展开下方输出了解细节。');
     const installed = JSON.parse(line) as Record<string, string>;
     // PyPI 上的 CPU 版轮子自报 2.5.1+cpu 这类本地版本号：比对只认主版本，展示仍用实际值。
     const matches = (expected: string, actual?: string) => !!actual && (actual === expected || actual.split('+')[0] === expected);
-    const mismatched = RUNTIME_DEPENDENCIES.filter(dependency => !matches(dependency.version, installed[dependency.name]));
+    const mismatched = RUNTIME_DEPENDENCIES.filter(dependency => {
+      const distribution = dependency.distributionName ?? dependency.packageName ?? dependency.name;
+      return !matches(dependency.version, installed[distribution]);
+    });
     if (mismatched.length) {
       throw new DesktopError('RUNTIME_SETUP_VERSION_MISMATCH',
-        `安装结果与固定版本不一致：${mismatched.map(item => `${item.name} 期望 ${item.version}，实际 ${installed[item.name] ?? '未安装'}`).join('；')}`);
+        `安装结果与固定版本不一致：${mismatched.map(item => {
+          const distribution = item.distributionName ?? item.packageName ?? item.name;
+          return `${item.name} 期望 ${item.version}，实际 ${installed[distribution] ?? '未安装'}`;
+        }).join('；')}`);
     }
-    this.state = { ...this.state, dependencies: this.state.dependencies.map(item => ({ ...item, installed: installed[item.name] })) };
+    this.state = { ...this.state, dependencies: this.state.dependencies.map(item => {
+      const dependency = RUNTIME_DEPENDENCIES.find(candidate => candidate.name === item.name);
+      const distribution = dependency?.distributionName ?? dependency?.packageName ?? item.name;
+      return { ...item, installed: installed[distribution] };
+    }) };
   }
 
   /**
@@ -170,7 +181,7 @@ export class RuntimeSetup {
       }
 
       this.patch('installing', `正在从国内镜像安装依赖（约 300 MB）：${RUNTIME_DEPENDENCIES.map(item => item.name).join('、')}…`);
-      const packages = RUNTIME_DEPENDENCIES.map(dependency => `${dependency.name}==${dependency.version}`);
+      const packages = RUNTIME_DEPENDENCIES.map(dependency => `${dependency.packageName ?? dependency.name}==${dependency.version}`);
       const install = await run(environmentPython, ['-m', 'pip', 'install', '--no-input', '--disable-pip-version-check', '--progress-bar', 'off',
         '--index-url', setupIndexUrl(), ...packages], {
         timeoutMs: INSTALL_TIMEOUT_MS,

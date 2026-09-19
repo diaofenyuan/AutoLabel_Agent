@@ -220,7 +220,7 @@ export class ModelLibrary {
       await rm(part, { force: true });
       throw verifyFailures === sources.length
         ? new DesktopError('MODEL_LIBRARY_HASH_MISMATCH', `每个下载源取回的内容都与目录记录的哈希不一致，已全部丢弃。请稍后重试；若反复出现，请反馈以便核对目录。`)
-        : new DesktopError('MODEL_LIBRARY_DOWNLOAD_FAILED', `模型未能下载完成（${lastError}）。已保留可续传的临时文件，稍后重试会接着下。`);
+        : new DesktopError('MODEL_LIBRARY_DOWNLOAD_FAILED', `模型未能下载完成（${lastError}）。无效临时文件已清理，请稍后重试。`);
     } finally { this.busy.delete(model.id); }
   }
 
