@@ -42,6 +42,7 @@ const MANUAL_CHECKS = [
   { flag: '--runtime-setup', label: 'runtime-setup-check', env: 'AUTOLABEL_RUNTIME_SETUP_UI_CHECK' },
   // 断网场景：镜像指向不可达主机，验证「装不上时明确失败且不动原有配置」。
   { flag: '--runtime-setup-offline', label: 'runtime-setup-offline-check', env: 'AUTOLABEL_RUNTIME_SETUP_UI_CHECK', extraEnv: { AUTOLABEL_RUNTIME_SETUP_OFFLINE: '1', AUTOLABEL_RUNTIME_INDEX_URL: 'https://127.0.0.1:9/simple' } },
+  { flag: '--local-annotate', label: 'local-annotate-check', env: 'AUTOLABEL_LOCAL_ANNOTATE_UI_CHECK' },
   { flag: '--error-action', label: 'error-action-check', env: 'AUTOLABEL_ERROR_ACTION_UI_CHECK' },
   { flag: '--sidebar-ui', label: 'sidebar-check', env: 'AUTOLABEL_SIDEBAR_UI_CHECK' },
   { flag: '--provider-delete', label: 'provider-delete-check', env: 'AUTOLABEL_PROVIDER_DELETE_UI_CHECK' },
@@ -123,8 +124,10 @@ if (collect) {
 return new Promise((resolve, reject) => {
   // 打包态首次启动（解压 asar 与初始化运行时）可能超过默认 60 秒，受限环境可显式放宽。
   // 一键准备要真实下载并安装 PyTorch（几百 MB），它的两个场景自带更长的上限，否则会被误杀。
+  // 真实推理与真实下载都要更长的上限，否则会被默认 60 秒误杀。
   const slowSetup = manual?.flag === '--runtime-setup' || manual?.flag === '--runtime-setup-offline';
-  const timeoutMs = Number(process.env.AUTOLABEL_SMOKE_TIMEOUT ?? (slowSetup ? 1800000 : 60000));
+  const slowInference = manual?.flag === '--local-annotate' || manual?.flag === '--five';
+  const timeoutMs = Number(process.env.AUTOLABEL_SMOKE_TIMEOUT ?? (slowSetup ? 1800000 : slowInference ? 900000 : 60000));
   const timeout = setTimeout(() => { child.kill(); reject(new Error('桌面验收超时')); }, timeoutMs);
   child.once('error', error => { clearTimeout(timeout); reject(error); });
   child.once('exit', code => { clearTimeout(timeout); resolve(code); });
@@ -279,6 +282,27 @@ if (flagIs('--runtime-setup-offline')) {
   assert.ok(failed?.logLines > 0, '失败时必须留下安装输出');
   assert.equal(failed?.configuredBefore, true); assert.equal(failed?.configuredAfter, true); assert.equal(failed?.availableAfter, true);
   console.log(`一键准备失败时保护原有配置检查通过：${output}`); process.exit(0);
+}
+if (flagIs('--local-annotate')) {
+  assert.equal(result.passed, true); assert.equal(result.mode, 'local-annotate-ui');
+  assert.equal(result.newApiRequests, 0, '零配置路径不得产生 API 请求');
+  const byCheck = new Map(result.checks.map(check => [check.check, check]));
+  // 入口只写提示词：选中前后运行数量不变。
+  assert.equal(byCheck.get('picker-fills-input-only')?.runsBefore, byCheck.get('picker-fills-input-only')?.runsAfter);
+  // 未命中的类别名必须显式标为忽略，不能被猜掉。
+  assert.equal(byCheck.get('picker-fills-input-only')?.derived?.unmatched, 1);
+  assert.equal(byCheck.get('picker-fills-input-only')?.preview?.includes('忽略'), true);
+  // 端到端：候选框落库、素材转 candidate、词表没走编码器。
+  const annotated = byCheck.get('local-annotate-end-to-end');
+  assert.ok(annotated?.annotations > 0, `候选标注为空：${JSON.stringify(annotated)}`);
+  assert.equal(annotated?.assetStatus, 'candidate');
+  assert.ok(['builtin', 'cache'].includes(String(annotated?.vocabularySource)), `词表来源不该是编码器：${annotated?.vocabularySource}`);
+  // 已有人工标注的素材：候选只落版本，当前状态与版本都不动。
+  assert.equal(byCheck.get('protected-human-not-overwritten')?.historySources?.includes('local'), true, '候选应作为本地版本留在历史里');
+  // 未命中内置词表且没有编码器：必须明确失败，绝不联网。
+  assert.equal(byCheck.get('novel-term-needs-encoder')?.code, 'vocabulary_encoder_missing');
+  assert.ok(byCheck.get('candidate-boxes-visible')?.objects > 0, '画布上没有出现候选框');
+  console.log(`对话内选择内置模型并一键标注（零 API Key）检查通过：${output}`); process.exit(0);
 }
 if (composerOnly) {
   assert.equal(result.passed, true);

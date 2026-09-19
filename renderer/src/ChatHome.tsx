@@ -7,6 +7,7 @@ import { DropOverlay } from './fileDrop';
 import VideoImport from './VideoImport';
 import ModelPicker from './ModelPicker';
 import FlowPicker from './FlowPicker';
+import LocalModelPicker from './LocalModelPicker';
 import ProjectResolveDialog, { type ProjectChoice } from './ProjectResolveDialog';
 import { VideoPickList, useChatFileDrop, importAttachments } from './chatDrop';
 import { VIDEO_EXTENSION_LABEL } from '../../shared/mediaFormats';
@@ -194,6 +195,8 @@ export default function ChatHome() {
         attachments={attachments} onRemoveAttachment={id => setAttachments(list => list.filter(item => item.id !== id))}>
         <div className="chat-options">
           <FlowPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
+          {/* 本机模型与云端接口并列在工具行：不配 API Key 也能开始标注。 */}
+          <LocalModelPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
           {/* 模型选择收进输入卡的工具行；默认值语义挂在悬浮提示里。 */}
           <span title="这里的默认值用于新建的对话与任务"><ModelPicker providers={providers} providerId={choice.providerId} model={choice.model} depth={choice.depth} disabled={busy}
             onChange={next => void saveChoice(next)} onDepthChange={next => void saveChoice({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} /></span>

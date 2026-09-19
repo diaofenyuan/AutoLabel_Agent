@@ -88,4 +88,29 @@ export const LOCAL_TOOL_DEFINITIONS: ToolDefinition[] = [
   { name: 'get_local_runtime', description: '只读查看本地环境、设备槽、已加载模型的固定版本和完整类别，不启动 Python。缺少环境或类别时请用户在设置 · 软件 AI 配置里加载；不会代替用户授权模型文件。',
     parameters: schema({}), mutation: false,
     async execute(args, env) { fields(args, []); return localRuntime(env); } },
+  { name: 'list_builtin_models', description: '只读列出软件自带的模型库：哪些模型已随安装包提供或已下载、体积、是否开放词汇，以及是否已被用户启用（启用后才有可用的模型标识与版本）。'
+      + '用于在对话里替用户挑一个本机模型；不会下载、不会启用、也不会授权执行——这些都只能由用户在模型库里点击完成。',
+    parameters: schema({}), mutation: false,
+    async execute(args, env) {
+      fields(args, []); active(env);
+      const raw = object(await env.engine.request('model.library.status', {}), '模型库状态');
+      if (!Array.isArray(raw.entries) || raw.entries.length > 200 || typeof raw.ready !== 'number' || typeof raw.total !== 'number')
+        throw new AgentError('LOCAL_RESPONSE_INVALID', '模型库状态响应不完整');
+      const models = object(await env.engine.request('local.model.list', { offset: 0, limit: 500 }), '本地模型清单');
+      const registered = Array.isArray(models.items) ? models.items.map(item => object(item, '本地模型')) : [];
+      const entries = raw.entries.map(value => {
+        const entry = object(value, '模型库条目');
+        const catalogId = id(entry.id, '模型库标识');
+        if (typeof entry.name !== 'string' || typeof entry.state !== 'string' || typeof entry.sizeBytes !== 'number')
+          throw new AgentError('LOCAL_RESPONSE_INVALID', '模型库条目信息不完整');
+        const model = registered.find(item => item.catalogId === catalogId);
+        return { id: catalogId, name: String(entry.name), state: entry.state, taskType: entry.taskType ?? null,
+          openVocabulary: entry.openVocabulary === true, tier: entry.tier, sizeBytes: entry.sizeBytes,
+          group: typeof entry.group === 'string' ? entry.group : '', note: typeof entry.note === 'string' ? entry.note : '',
+          ...(entry.message ? { message: String(entry.message) } : {}),
+          // 只有已启用的模型才有能直接用于标注的标识与版本。
+          ...(model ? { modelId: id(model.id, '本地模型'), modelVersion: integer(model.version, '本地模型版本', 1, 2147483647) } : {}) };
+      });
+      return { ready: raw.ready, total: raw.total, entries };
+    } },
 ];

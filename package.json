@@ -43,6 +43,7 @@
     "check:model-library-ui": "node scripts/desktop-smoke.mjs --model-library",
     "check:runtime-setup-ui": "node scripts/desktop-smoke.mjs --runtime-setup",
     "check:runtime-setup-offline-ui": "node scripts/desktop-smoke.mjs --runtime-setup-offline",
+    "check:local-annotate-ui": "node scripts/desktop-smoke.mjs --local-annotate",
     "check:rerun-ui": "node scripts/desktop-smoke.mjs --rerun",
     "check:five-ui": "node scripts/desktop-smoke.mjs --five",
     "check:connection-ui": "node scripts/desktop-smoke.mjs --connection-ui",

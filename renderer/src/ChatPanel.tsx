@@ -8,6 +8,7 @@ import { AgentSteps, PlanCard, useAgentSteps, type AgentStep } from './AgentActi
 import { TaskCards } from './TaskCards';
 import ModelPicker from './ModelPicker';
 import FlowPicker from './FlowPicker';
+import LocalModelPicker from './LocalModelPicker';
 import { DropOverlay } from './fileDrop';
 import { VideoPickList, useChatFileDrop, importAttachments } from './chatDrop';
 import { RichText } from './chatText';
@@ -252,6 +253,8 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
               <p className="muted tiny">直接执行会真的发出请求，可能产生费用；先看方案只列出将要做的操作，你确认后才跑。</p>
               <div className="composer-extra">
                 <FlowPicker disabled={session.busy} onPick={prompt => { update({ input: prompt }); document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus(); }} />
+                {/* 本机模型入口：与云端接口并列，选的是当前项目的类别做映射预览。 */}
+                <LocalModelPicker project={project} disabled={session.busy} onPick={prompt => { update({ input: prompt }); document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus(); }} />
                 <button title={session.exportDir || '授权本次对话的导出目录'} onClick={() => void getBridge().then(b => b.chooseFiles({ kind: 'directory' })).then(paths => { if (paths[0]) update({ exportDir: paths[0] }); }).catch(e => notify(errorMessage(e), true))}><FolderOpen size={12} />{session.exportDir ? '已选目录' : '导出目录'}</button>
                 {project && <ReferencePicker project={project} value={session.referenceResources ?? []} onChange={referenceResources => update({ referenceResources })} disabled={session.busy} />}
               </div>

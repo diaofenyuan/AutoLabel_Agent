@@ -1,4 +1,4 @@
-import { CheckCircle2, Film, FolderPlus, Image as ImageIcon, Play, Settings2, Sparkles } from 'lucide-react';
+import { CheckCircle2, Cpu, Film, FolderPlus, Image as ImageIcon, Play, Settings2, Sparkles } from 'lucide-react';
 import { useAiConfigured } from './aiState';
 import { useApp } from './context';
 import { useExampleProject } from './exampleProject';
@@ -43,6 +43,8 @@ export default function OnboardingLanes({ busy, onImportImages, onImportImageFol
         : <p>配置一个接口与 API Key 后，助手就能按你的描述批量标注。</p>}
       <div className="onboarding-actions">
         <button disabled={busy} onClick={() => void navigate('settings', 'ai')}>{configured ? <><Settings2 size={14} />调整 AI 配置</> : <><Sparkles size={14} />配置 AI</>}</button>
+        {/* 没配云接口时给一条不花钱的路：软件自带的模型在本机跑，不需要 API Key。 */}
+        {!configured && <button disabled={busy} onClick={() => void navigate('settings', 'ai')}><Cpu size={14} />用内置模型标注（无需 API Key）</button>}
       </div>
     </section>
   </div>;
