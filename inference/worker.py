@@ -506,8 +506,20 @@ class Worker:
                 apply_vocabulary(self.model, names, cached[1])
                 return "cache"
         builtin = builtin_vocabulary(names)
-        embeddings, source = (builtin, "builtin") if builtin is not None else (
-            encode_vocabulary(self.model, names, environment_directory(TEXT_ENCODER_ENV)), "encoded")
+        if builtin is None:
+            # CLIP 的文本编码器只认英文：直接把中文名编码出来的是没有意义的向量（实测「人」一个目标都查不到，
+            # 「person」能查到 5 个）。以前这里会静默编码、静默返回近乎空的框，用户会以为「模型看不见」；
+            # 现在未命中内置词表的中文名一律明确拒绝，并给出可用的英文名方向。
+            chinese = [name for name in names if any("\u4e00" <= char <= "\u9fff" for char in name)]
+            if chinese:
+                raise InferenceError(
+                    "vocabulary_term_needs_english",
+                    "这些类别名不在内置词表里，而 CLIP 只认英文：" + "、".join(chinese[:10])
+                    + "。请填英文名（例如「手办」→ figurine、「公仔」→ plush toy、「消防车」→ fire truck），"
+                    + "或换成内置词表里已有的名字；下载文本编码器也不会让中文名生效。")
+            embeddings, source = encode_vocabulary(self.model, names, environment_directory(TEXT_ENCODER_ENV)), "encoded"
+        else:
+            embeddings, source = builtin, "builtin"
         apply_vocabulary(self.model, names, embeddings)
         if cache is not None:
             try:

@@ -30,7 +30,10 @@ CANONICAL_NAMES = [
     # COCO 之外但标注现场常见的目标，用来承接下面的中文别名。
     "traffic sign", "helmet", "safety vest", "container", "dump truck", "tractor", "excavator",
     "crane", "bicycle rack", "street light", "billboard", "trash can", "wire pole", "fence",
-    "stairs", "door", "window", "puddle", "wheelchair", "stroller",
+    "stairs", "door", "window", "puddle", "wheelchair", "stroller", "fire truck",
+    # 桌面 / 摆件场景：手办、公仔这类目标是零样本标注里最常问的，且 CLIP 认不出中文名。
+    "figurine", "action figure", "anime figure", "plush toy", "doll", "statue", "ornament",
+    "figurine stand", "display case",
 ]
 # 中文别名 → 英文规范名。别名本身不单独编码，用规范名的向量，检索效果与英文一致。
 ALIASES = {
@@ -60,6 +63,14 @@ ALIASES = {
     "垃圾桶": "trash can", "广告牌": "billboard", "电线杆": "wire pole", "路灯": "street light",
     "围栏": "fence", "护栏": "fence", "楼梯": "stairs", "门": "door", "窗": "window",
     "积水": "puddle", "轮椅": "wheelchair", "婴儿车": "stroller", "车位锁": "bicycle rack",
+    "消防车": "fire truck", "救火车": "fire truck",
+    # 桌面 / 摆件场景：中文名一律先映射到英文规范名，CLIP 不会去编码中文。
+    "手办": "figurine", "手办模型": "figurine", "人偶": "figurine", "小人偶": "figurine",
+    "可动人偶": "action figure", "黏土人": "figurine", "粘土人": "figurine",
+    "公仔": "plush toy", "毛绒公仔": "plush toy", "毛绒玩具": "plush toy", "毛绒玩偶": "plush toy",
+    "玩偶": "doll", "布偶": "doll", "娃娃": "doll",
+    "摆件": "ornament", "雕像": "statue", "塑像": "statue", "桌面摆件": "ornament",
+    "展示盒": "display case", "防尘罩": "display case",
 }
 
 

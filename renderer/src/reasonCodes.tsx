@@ -47,7 +47,10 @@ const ERROR_TITLES: Record<string, string> = {
   AGENT_COMMAND_DENIED: '此操作不在助手权限范围内，需要你本人确认',
   MEDIA_JOB_MISMATCH: '媒体任务解析结果与请求不一致',
   CREDENTIAL_BUSY: '接口凭据正在保存或删除，请稍后重试',
-  SECRET_FIELD_DENIED: '凭据请用 API Key 专用输入保存'
+  SECRET_FIELD_DENIED: '凭据请用 API Key 专用输入保存',
+  // 本机开放词汇的两个类别名问题：只拿到原因码时也要能直接看出下一步。
+  vocabulary_term_needs_english: '类别名是中文，开放词汇的文本编码器只认英文：请改成英文名（例如「手办」→ figurine）',
+  vocabulary_encoder_missing: '这个英文类别名不在内置词表里，需要先在模型库下载「CLIP 文本编码器 ViT-B/32」'
 };
 
 const BRACKET_CODE = /^\[([A-Za-z0-9_]+)\]\s*([\s\S]*)$/;

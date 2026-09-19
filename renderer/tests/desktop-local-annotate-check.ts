@@ -219,17 +219,29 @@ export async function checkDesktopLocalAnnotate(window: BrowserWindow, output: s
     checks.push({ check: 'candidate-boxes-visible', ...canvas });
     await writeFile(output.replace(/\.json$/, '.png'), (await window.webContents.capturePage()).toPNG());
 
-    // ===== 5c. 反例：内置词表没覆盖的类别名，在没有编码器时必须明确失败，绝不偷偷联网 =====
+    // ===== 5c. 反例一：内置词表没覆盖的【中文】类别名必须明确拒绝 =====
+    // CLIP 只认英文：把中文名编码出来的是无意义的向量，以前会静默返回近乎空的框；
+    // 现在必须报 vocabulary_term_needs_english，而且不能建议「下载编码器」（下载了也没用）。
     const novel = deriveClassMap(['行人', '消防车'], project.classes);
     const novelRun = await api<RunRow>('local.run.create',
       { projectId: project.id, assetIds: [freshId], modelId: registered.id, modelVersion: registered.version, device: 'cpu',
         textClasses: ['行人', '消防车'], classMap: novel.classMap, confidence: 0.2, timeoutMs: 300000, forceRerun: true });
     await wait(`window.autoLabel.request('run.get',{runId:${json(novelRun.id)}}).then(item=>['completed','completed_with_errors','failed','needs_attention','cancelled'].includes(item.status))`, 180000);
     const novelFinished = await api<RunRow>('run.get', { runId: novelRun.id });
-    const rejected = novelFinished.samples.find(sample => sample.errorCode === 'vocabulary_encoder_missing');
-    assert.ok(rejected, `未命中内置词表且没有编码器时必须报 vocabulary_encoder_missing，实际：${json(novelFinished.samples)}`);
+    const rejected = novelFinished.samples.find(sample => sample.errorCode === 'vocabulary_term_needs_english');
+    assert.ok(rejected, `未命中内置词表的中文类别名必须报 vocabulary_term_needs_english，实际：${json(novelFinished.samples)}`);
     assert.equal(novelFinished.statistics.requestsUsed, 0, '失败的本机推理也不应产生 API 请求');
-    checks.push({ check: 'novel-term-needs-encoder', code: rejected.errorCode, message: rejected.message });
+    checks.push({ check: 'novel-term-needs-english', code: rejected.errorCode, message: rejected.message });
+
+    // ===== 5c-2. 反例二：英文新词在没有编码器时才轮得到 vocabulary_encoder_missing =====
+    const englishNovel = await api<RunRow>('local.run.create',
+      { projectId: project.id, assetIds: [freshId], modelId: registered.id, modelVersion: registered.version, device: 'cpu',
+        textClasses: ['spaceship'], classMap: { 0: null }, confidence: 0.2, timeoutMs: 300000, forceRerun: true });
+    await wait(`window.autoLabel.request('run.get',{runId:${json(englishNovel.id)}}).then(item=>['completed','completed_with_errors','failed','needs_attention','cancelled'].includes(item.status))`, 180000);
+    const englishFinished = await api<RunRow>('run.get', { runId: englishNovel.id });
+    const needsEncoder = englishFinished.samples.find(sample => sample.errorCode === 'vocabulary_encoder_missing');
+    assert.ok(needsEncoder, `英文新词在没有编码器时应报 vocabulary_encoder_missing，实际：${json(englishFinished.samples)}`);
+    checks.push({ check: 'novel-term-needs-encoder', code: needsEncoder.errorCode, message: needsEncoder.message });
 
     // ===== 5d. 省钱对比：本机运行与云端运行进同一张指标表，本地行必须显示 ¥0 =====
     // 用示例项目自带的那张图 + 5a 的本机运行：它已经被既有质量验收证明与评测链路兼容。

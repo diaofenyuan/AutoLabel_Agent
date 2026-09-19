@@ -11,10 +11,13 @@ const localErrorActions: Record<string, string> = {
   device_unavailable: '所选设备不可用。请明确选择 CPU 后重新加载模型。',
   local_model_load_required: '模型尚未加载。请先加载所选模型并读取类别，再执行本地预标注。',
   class_map_incomplete: '类别映射尚未完整。请为每个模型类别选择项目类别，或明确选择忽略后再执行。',
+  // 开放词汇的类别名：中文名不会被编码成有意义的向量，所以下载编码器也不是出路，必须改填英文名。
+  vocabulary_term_needs_english: '类别名是中文，而开放词汇的文本编码器只认英文。请改成英文名（例如「手办」→ figurine、「公仔」→ plush toy），或换成内置词表里已有的名字。',
+  vocabulary_encoder_missing: '英文类别名不在内置词表里，需要 CLIP 文本编码器：到「模型库」下载「CLIP 文本编码器 ViT-B/32」后再试；中文名即使下载了也不会生效。',
 };
 
 export function LocalError({ error, code }: { error: string; code?: string }) {
-  const errorCode = code ?? error.match(/\b(model_task_unverified|model_task_mismatch|device_unavailable|local_model_load_required|class_map_incomplete)\b/)?.[0];
+  const errorCode = code ?? error.match(/\b(model_task_unverified|model_task_mismatch|device_unavailable|local_model_load_required|class_map_incomplete|vocabulary_term_needs_english|vocabulary_encoder_missing)\b/)?.[0];
   const action = errorCode ? localErrorActions[errorCode] : undefined;
   return error ? <div className="local-error"><p>{action ?? '本地推理操作未完成。请展开诊断详情，确认原因后重试。'}</p><details><summary>诊断详情</summary><p>{code ? `[${code}] ${error}` : error}</p></details></div> : null;
 }

@@ -302,7 +302,11 @@ if (flagIs('--local-annotate')) {
   assert.ok(['builtin', 'cache'].includes(String(annotated?.vocabularySource)), `词表来源不该是编码器：${annotated?.vocabularySource}`);
   // 已有人工标注的素材：候选只落版本，当前状态与版本都不动。
   assert.equal(byCheck.get('protected-human-not-overwritten')?.historySources?.includes('local'), true, '候选应作为本地版本留在历史里');
-  // 未命中内置词表且没有编码器：必须明确失败，绝不联网。
+  // 未命中内置词表的【中文】名：必须明确报「需要英文名」，且不能把「下载编码器」当出路。
+  assert.equal(byCheck.get('novel-term-needs-english')?.code, 'vocabulary_term_needs_english');
+  assert.ok(String(byCheck.get('novel-term-needs-english')?.message ?? '').includes('英文名'), '中文名的失败原因要指出改填英文名');
+  assert.ok(!String(byCheck.get('novel-term-needs-english')?.message ?? '').includes('下载「CLIP'), '中文名不该被建议去下载编码器');
+  // 英文新词在没有编码器时才是 vocabulary_encoder_missing。
   assert.equal(byCheck.get('novel-term-needs-encoder')?.code, 'vocabulary_encoder_missing');
   assert.ok(byCheck.get('candidate-boxes-visible')?.objects > 0, '画布上没有出现候选框');
   // 省钱对比：本机候选能进评测表，并且成本一栏写 ¥0（而不是「币种未定」）。
