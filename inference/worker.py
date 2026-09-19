@@ -57,6 +57,152 @@ def aligned_rows(*rows) -> None:
         raise InferenceError("result_invalid", "模型返回的几何、类别或置信度数量不一致")
 
 
+# ---------------------------------------------------------------------------
+# 开放词汇（YOLO-World）：类别名由本次请求给出，文本向量按「缓存 → 内置词表 → CLIP」三级解析。
+# 任何一级都不会联网：本地没有编码器时直接报 vocabulary_encoder_missing，由界面提示一次性下载。
+# ---------------------------------------------------------------------------
+VOCABULARY_CACHE_ENV = "AUTOLABEL_VOCAB_CACHE"
+TEXT_ENCODER_ENV = "AUTOLABEL_TEXT_ENCODER"
+CLIP_ENCODER_FILE = "ViT-B-32.pt"
+VOCABULARY_MAX_CLASSES = 200
+VOCABULARY_MAX_NAME = 100
+BUILTIN_VOCABULARY_DIR = Path(__file__).resolve().parent / "vocab"
+
+
+def environment_directory(name: str) -> Path | None:
+    """引擎下发的目录；未配置或不是绝对路径时按未配置处理，不猜位置。"""
+    value = os.environ.get(name, "")
+    if not value:
+        return None
+    path = Path(value)
+    return path if path.is_absolute() else None
+
+
+def text_classes(value) -> list[str]:
+    """校验并归一化文本类别：1～200 条，去重，单条不超过 100 字符。"""
+    if not isinstance(value, list) or not value or len(value) > VOCABULARY_MAX_CLASSES:
+        raise InferenceError("vocabulary_invalid", f"文本类别必须是 1～{VOCABULARY_MAX_CLASSES} 条的数组")
+    names, seen = [], set()
+    for item in value:
+        if not isinstance(item, str):
+            raise InferenceError("vocabulary_invalid", "文本类别只能是字符串")
+        name = item.strip()
+        if not name or len(name) > VOCABULARY_MAX_NAME:
+            raise InferenceError("vocabulary_invalid", f"类别名不能为空且不超过 {VOCABULARY_MAX_NAME} 个字符")
+        if name not in seen:
+            seen.add(name)
+            names.append(name)
+    if not names:
+        raise InferenceError("vocabulary_invalid", "文本类别去重后为空")
+    return names
+
+
+def vocabulary_key(names: list[str]) -> str:
+    """词表标识：同一份类别名（含顺序）永远得到同一个键，缓存才有意义。"""
+    payload = json.dumps(names, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def read_vocabulary(path: Path) -> tuple[list[str], object] | None:
+    """读一份词表缓存；内容损坏、结构不符一律按未命中处理，不让缓存问题变成推理失败。"""
+    import numpy
+    try:
+        with numpy.load(path, allow_pickle=False) as data:
+            names = [str(item) for item in data["names"].tolist()]
+            embeddings = numpy.asarray(data["embeddings"], dtype="float32")
+    except Exception:
+        return None
+    if not names or embeddings.ndim != 3 or embeddings.shape[1] != len(names) or embeddings.shape[0] != 1:
+        return None
+    return names, embeddings
+
+
+def builtin_vocabulary(names: list[str]):
+    """内置词表：构建期用同一套 CLIP 编码好的规范名向量，命中即零下载、零编码。
+
+    中文别名先映射到英文规范名再取向量。CLIP 的文本编码器只认英文，直接编码中文
+    会得到没有意义的向量（实测「人」一个目标都查不到，「person」能查到 5 个）。
+    """
+    import numpy
+    for path in sorted(BUILTIN_VOCABULARY_DIR.glob("*.npz")):
+        try:
+            with numpy.load(path, allow_pickle=False) as data:
+                table = {str(name): row for name, row in zip(data["names"].tolist(), data["embeddings"])}
+                aliases = {str(alias): str(target) for alias, target in zip(data["alias_names"].tolist(), data["alias_targets"].tolist())} \
+                    if "alias_names" in data else {}
+        except Exception:
+            continue
+        rows = []
+        for name in names:
+            row = table.get(name)
+            if row is None:
+                target = aliases.get(name)
+                row = None if target is None else table.get(target)
+            if row is None:
+                rows = []
+                break
+            rows.append(row)
+        if rows:
+            return numpy.stack(rows).reshape(1, len(names), -1).astype("float32")
+    return None
+
+
+def encode_vocabulary(model, names: list[str], encoder_directory: Path | None):
+    """用本机 CLIP 编码类别名。显式接管下载目录，只认已经下载好的编码器，绝不联网。"""
+    import numpy
+    encoder = (encoder_directory or Path()) / CLIP_ENCODER_FILE
+    if not encoder.is_file():
+        raise InferenceError("vocabulary_encoder_missing",
+                             f"类别名不在内置词表里，需要 CLIP 文本编码器；请在模型库中下载「CLIP 文本编码器 ViT-B/32」后重试")
+    try:
+        import clip
+    except ImportError:
+        raise InferenceError("vocabulary_encoder_missing", "当前 Python 缺少 CLIP 依赖，请重新执行一键准备本地推理环境") from None
+    original = clip.load
+
+    def load_local(name, device="cpu", jit=False, download_root=None):
+        # ultralytics 默认会按自己的缓存目录取权重；这里强制指向本机已下载的那一份。
+        return original(name, device=device, jit=jit, download_root=str(encoder_directory))
+
+    clip.load = load_local
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            model.set_classes(names)
+            features = model.model.txt_feats.detach().cpu().numpy()
+    except InferenceError:
+        raise
+    except Exception as error:
+        raise InferenceError("vocabulary_encoder_missing", f"文本编码器无法加载：{error}") from None
+    finally:
+        clip.load = original
+    return numpy.ascontiguousarray(features, dtype="float32")
+
+
+def apply_vocabulary(model, names: list[str], embeddings) -> None:
+    """把已解析好的文本向量写回模型，等价于 set_classes 但不再碰 CLIP。"""
+    import numpy
+    import torch
+    with contextlib.redirect_stdout(sys.stderr):
+        world = model.model
+        device = next(world.model.parameters()).device
+        world.txt_feats = torch.from_numpy(numpy.ascontiguousarray(embeddings, dtype="float32")).to(device)
+        world.model[-1].nc = len(names)
+        # 外层 YOLOWorld.names 是只读属性（转发到内层），只写内层 WorldModel 的类别表。
+        world.names = {index: name for index, name in enumerate(names)}
+
+
+def save_vocabulary(directory: Path, key: str, names: list[str], embeddings) -> None:
+    import numpy
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{key}.npz"
+    temporary = path.with_suffix(".part")
+    # 传文件对象而不是路径：numpy 会给「不以 .npz 结尾的路径」自动补扩展名，临时文件就改名不成功了。
+    # 先写临时文件再改名：半份缓存在下次读取时会被判定为未命中，但绝不冒充完整。
+    with open(temporary, "wb") as handle:
+        numpy.savez_compressed(handle, names=numpy.asarray(names), embeddings=numpy.ascontiguousarray(embeddings, dtype="float32"))
+    temporary.replace(path)
+
+
 def result_number(value, label: str) -> float:
     if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value):
         raise InferenceError("result_invalid", f"模型返回了无效的{label}")
@@ -347,9 +493,32 @@ class Worker:
         except ImportError:
             return {"available": False, "code": "inference_environment_missing", "message": "当前 Python 缺少兼容的 Ultralytics 或 PyTorch"}
 
+    def set_vocabulary(self, names: list[str]) -> str:
+        """按「缓存 → 内置词表 → CLIP」解析本次类别名的文本向量，并把它写回模型。
+
+        返回来源（cache / builtin / encoded）供调用方与核对流程使用；三级都不会联网。
+        """
+        cache = environment_directory(VOCABULARY_CACHE_ENV)
+        key = vocabulary_key(names)
+        if cache is not None:
+            cached = read_vocabulary(cache / f"{key}.npz")
+            if cached is not None and cached[0] == names:
+                apply_vocabulary(self.model, names, cached[1])
+                return "cache"
+        builtin = builtin_vocabulary(names)
+        embeddings, source = (builtin, "builtin") if builtin is not None else (
+            encode_vocabulary(self.model, names, environment_directory(TEXT_ENCODER_ENV)), "encoded")
+        apply_vocabulary(self.model, names, embeddings)
+        if cache is not None:
+            try:
+                save_vocabulary(cache, key, names, embeddings)
+            except OSError:
+                pass  # 缓存写不进去不影响本次推理结果。
+        return source
+
     def load(self, payload: dict) -> dict:
         # 加载失败后不沿用上一模型，防止下一条请求误用旧任务或旧权重。
-        self.model, self.model_hash, self.model_path, self.task = None, None, None, None
+        self.model, self.model_hash, self.model_path, self.task, self.open_vocabulary = None, None, None, None, False
         path = local_file(payload.get("modelPath"), {".pt", ".onnx"})
         model_hash = file_hash(path, payload.get("expectedModelHash"))
         task = payload.get("taskType")
@@ -358,12 +527,18 @@ class Worker:
         device = str(payload.get("device", "cpu"))
         if device != "cpu" and not device.isdecimal():
             raise InferenceError("device_invalid", "设备应为 cpu 或单个 GPU 编号")
+        # 开放词汇只对 YOLO-World 这类权重成立：ONNX 导出已把类别写死，非检测任务没有文本类别一说。
+        open_vocabulary = payload.get("openVocabulary", False)
+        if not isinstance(open_vocabulary, bool):
+            raise InferenceError("parameter_invalid", "openVocabulary 必须为布尔值")
+        if open_vocabulary and (path.suffix.lower() != ".pt" or task != "detect"):
+            raise InferenceError("open_vocabulary_unsupported", "开放词汇只支持检测任务的 .pt 权重")
         with contextlib.redirect_stdout(sys.stderr):
             import torch
-            from ultralytics import YOLO
+            from ultralytics import YOLO, YOLOWorld
             if device != "cpu" and (not torch.cuda.is_available() or int(device) >= torch.cuda.device_count()):
                 raise InferenceError("device_unavailable", "所选 GPU 不可用，可切换到 CPU")
-            model = YOLO(str(path), task=task)
+            model = YOLOWorld(str(path)) if open_vocabulary else YOLO(str(path), task=task)
         if model.task != task:
             raise InferenceError("model_task_mismatch", "模型实际任务类型与项目不一致")
         with contextlib.redirect_stdout(sys.stderr):
@@ -388,10 +563,13 @@ class Worker:
             else:
                 names = model.names
         file_hash(path, model_hash)
-        self.model, self.model_hash, self.model_path, self.task, self.device = model, model_hash, path, task, device
-        return {"loaded": True, "taskType": task, "device": device, "modelHash": self.model_hash,
-                "requestedDevice": device, "observedBackend": self.observed_backend(),
-                "classes": [{"id": str(key), "name": value} for key, value in names.items()]}
+        self.model, self.model_hash, self.model_path, self.task, self.device, self.open_vocabulary = model, model_hash, path, task, device, open_vocabulary
+        result = {"loaded": True, "taskType": task, "device": device, "modelHash": self.model_hash,
+                  "requestedDevice": device, "observedBackend": self.observed_backend(),
+                  "classes": [{"id": str(key), "name": value} for key, value in names.items()]}
+        if open_vocabulary:
+            result["openVocabulary"] = True
+        return result
 
     def observed_backend(self):
         backend = getattr(getattr(self.model, "predictor", None), "model", None)
@@ -432,6 +610,15 @@ class Worker:
         if self.task == "pose" and (not isinstance(keypoint_names, list) or not keypoint_names or
                                    not all(isinstance(name, str) and name for name in keypoint_names)):
             raise InferenceError("keypoints_required", "关键点任务需要提供项目点名和顺序")
+        # 开放词汇：类别名由本次请求给出，模型输出下标即 textClasses 的下标，classMap 语义不变。
+        requested = payload.get("textClasses")
+        if self.open_vocabulary and requested is None:
+            raise InferenceError("vocabulary_required", "开放词汇模型必须在本次请求中给出要识别的类别名")
+        if not self.open_vocabulary and requested is not None:
+            raise InferenceError("vocabulary_unsupported", "该模型自带固定类别表，不能临时改类别名")
+        vocabulary_source = None
+        if requested is not None:
+            vocabulary_source = self.set_vocabulary(text_classes(requested))
         emit({"type": "event", "id": request_id, "assetId": asset_id, "stage": "local_inference"})
         started = time.perf_counter()
         with contextlib.redirect_stdout(sys.stderr):
@@ -590,7 +777,9 @@ class Worker:
                 "inputHash": input_hash, "requestedDevice": self.device, "observedBackend": observed,
                 "elapsedMs": elapsed, "excludedByClassMap": excluded,
                 "geometryIssues": geometry_issues, "geometryDiagnostics": geometry_diagnostics,
-                "requiresGeometryReview": bool(geometry_issues)}
+                "requiresGeometryReview": bool(geometry_issues),
+                "vocabularySource": vocabulary_source,
+                "vocabularyHash": None if vocabulary_source is None else vocabulary_key(text_classes(requested))}
 
     def track_sequence(self, payload: dict, request_id: str) -> dict:
         if self.model is None:
