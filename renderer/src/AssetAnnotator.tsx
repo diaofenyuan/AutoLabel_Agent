@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Eye, PencilLine } from 'lucide-react';
-import type { Asset, Annotation, LabelClass, TaskType } from './types';
+import type { Asset, Annotation, LabelClass, Project, TaskType } from './types';
 import { errorMessage, request } from './bridge';
 import { useApp } from './context';
 import { Button, Loading, Notice } from './ui';
 import QualityCanvas from './QualityCanvas';
 import ResultViewer from './ResultViewer';
+import { readRegion, type AnnotationRegion } from './DirectRun';
 import { annotationAttributeIssues } from './templateAttributes';
 
 /**
@@ -22,8 +23,11 @@ export default function AssetAnnotator({ asset, classes, taskType, templateSetti
   asset: Asset; classes: LabelClass[]; taskType: TaskType; templateSettings?: Record<string, unknown>;
   connectionTemplate?: unknown; maxHeight?: string; initialAnnotations?: Annotation[]; onClose: () => void; onSaved: (asset: Asset) => void;
 }) {
-  const { notify, syncWindowDirtySource } = useApp();
+  const { notify, syncWindowDirtySource, project, setProject } = useApp();
   const [mode, setMode] = useState<'view' | 'edit'>(initialAnnotations ? 'edit' : 'view');
+  // 只标注区域存在项目设置里：它属于「这个项目要标哪一块」，不是某一张素材的属性。
+  const [region, setRegion] = useState<AnnotationRegion | null>(() => readRegion(project?.settings?.annotationRegion));
+  const [regionBusy, setRegionBusy] = useState(false);
   const [current, setCurrent] = useState(asset);
   const [annotations, setAnnotations] = useState<Annotation[]>(() => structuredClone(initialAnnotations ?? asset.draft ?? asset.annotations));
   const [busy, setBusy] = useState(false);
@@ -74,6 +78,21 @@ export default function AssetAnnotator({ asset, classes, taskType, templateSetti
     } finally { setBusy(false); }
   }
 
+  /**
+   * 保存「只标注区域」：写进项目设置，下一次云端标注会带着它发送（引擎按比例裁剪并把坐标换算回整图）。
+   * 区域改动不影响任何已保存的标注，也不会动别人正在跑的运行。
+   */
+  async function saveRegion(next: AnnotationRegion | null) {
+    if (!project || regionBusy) return;
+    setRegionBusy(true); setError('');
+    try {
+      const settings = { ...project.settings, annotationRegion: next ?? null };
+      const updated = await request<Project>('project.update', { projectId: project.id, settings });
+      setProject(updated); setRegion(next);
+      notify(next ? '已设为「只标注这块区域」，之后的云端标注会按它裁剪后发送。' : '已清除标注区域，恢复整图标注。');
+    } catch (e) { setError(errorMessage(e)); } finally { setRegionBusy(false); }
+  }
+
   function close() {
     if (busy) return;
     if (unsaved && !window.confirm('还有未保存的标注改动，确定放弃并关闭？')) return;
@@ -100,6 +119,7 @@ export default function AssetAnnotator({ asset, classes, taskType, templateSetti
       classes={classes} taskType={taskType} purpose="asset" keypointNames={templateSettings?.keypointNames as string[] | undefined}
       keypointConnections={templateSettings?.keypointConnections} templateSettings={templateSettings}
       title="人工标注" disabled={busy} imageAlt={`${current.name} 的人工标注画布`}
+      region={region} onRegionChange={project ? next => void saveRegion(next) : undefined}
       onPendingChange={setPending} onChange={change} />
     <Notice>保存会把这批结果写成这张素材的正式标注并计入「已标注」；保存不等于确认，核对完再点「保存并确认」。</Notice>
     {error && <p role="alert" className="inline-error">{error}</p>}

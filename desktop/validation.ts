@@ -465,6 +465,10 @@ const schemas: Record<string, z.ZodType> = {
     budgetScopeId: id.optional(),
     concurrency: count.min(1).max(128).optional(), maxRequests: count.min(1).optional(),
     taskType: taskType.optional(), referenceIds: z.array(id).max(100).optional(), parameters: record.optional(),
+    // 发送副本：长边缩放（JPEG）与「只标注这块区域」（相对比例）。越界与退化区域由引擎在创建时就拒绝。
+    payload: z.strictObject({ maxEdge: count.min(64).max(8192).nullable().optional(), quality: count.min(40).max(100).optional(),
+      region: z.strictObject({ left: z.number().min(0).max(1), top: z.number().min(0).max(1), right: z.number().min(0).max(1), bottom: z.number().min(0).max(1) })
+        .refine(value => value.right > value.left && value.bottom > value.top, '标注区域必须是一个正向矩形').optional() }).optional(),
     ...reuseFields, ...referenceFields,
   }).refine(referenceCapacity, '项目和资源库参考合计最多 63 张'),
   'run.list': z.strictObject({ projectId: id.optional() }),

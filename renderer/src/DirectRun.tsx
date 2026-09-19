@@ -17,6 +17,18 @@ export function buildDirectPrompt(classes: Project['classes'], rules: string): s
   return `把图片里属于这些类别的目标都用矩形框标出来：${names}。没有目标的图片返回空数组。${rules ? `补充要求：${rules}` : ''}`;
 }
 
+export interface AnnotationRegion { left: number; top: number; right: number; bottom: number }
+
+/** 读项目设置里的标注区域：比例不在 0～1 或退化就当没设，绝不把可疑值直接发给引擎。 */
+export function readRegion(value: unknown): AnnotationRegion | null {
+  if (!value || typeof value !== 'object') return null;
+  const item = value as Record<string, unknown>;
+  const pick = (key: string) => typeof item[key] === 'number' ? item[key] as number : Number.NaN;
+  const region = { left: pick('left'), top: pick('top'), right: pick('right'), bottom: pick('bottom') };
+  const values = [region.left, region.top, region.right, region.bottom];
+  return values.every(value => Number.isFinite(value) && value >= 0 && value <= 1) && region.right > region.left && region.bottom > region.top ? region : null;
+}
+
 /**
  * 直达标注：选好模型、范围、类别就能直接建任务，不必先让助手理解一遍。
  *
@@ -36,15 +48,23 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
   const [target, setTarget] = useState<'cloud' | 'local'>('cloud');
   const [localId, setLocalId] = useState('');
   const [scope, setScope] = useState<'all' | 'selected'>('all');
+  // 发送副本：默认长边 1920 的 JPEG。实测 4K 帧按原图发（3.4 MB）时某些接口会跑到超时，
+  // 缩到 0.16 MB 后同样的模型 20 多秒返回；区域裁剪进一步把小目标放大，框也更贴。
+  const [sendMode, setSendMode] = useState<'original' | 'edge1920' | 'edge1152'>('edge1920');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const root = useRef<HTMLDivElement>(null);
 
   const classes = project.classes;
   const rules = typeof project.settings?.rules === 'string' ? project.settings.rules : '';
+  // 标注区域由素材页在画布上框定，存在项目设置里；这里只读它，避免在两处各存一份口径。
+  const region = readRegion(project.settings?.annotationRegion);
   const cloudReady = Boolean(annotationConfig.providerId && annotationConfig.model);
   const picked = locals.find(item => item.entry.id === localId);
   const assetIds = scope === 'selected' ? selectedAssetIds : undefined;
+  const payload = target === 'cloud' && (sendMode !== 'original' || region)
+    ? { ...(sendMode === 'original' ? {} : { maxEdge: sendMode === 'edge1920' ? 1920 : 1152, quality: 92 }), ...(region ? { region } : {}) }
+    : null;
 
   useEffect(() => {
     if (!open) return;
@@ -110,7 +130,7 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
         ? (picked ? await createLocalRun(picked) : (() => { throw new Error('请先选择一个内置模型。'); })())
         : await request<{ id: string }>('run.create', {
             projectId: project.id, ...(assetIds ? { assetIds } : {}), providerId: annotationConfig.providerId, model: annotationConfig.model,
-            prompt: buildDirectPrompt(classes, rules), concurrency: annotationConfig.concurrency,
+            prompt: buildDirectPrompt(classes, rules), concurrency: annotationConfig.concurrency, ...(payload ? { payload } : {}),
           });
       setOpen(false);
       notify('已创建标注任务，进度在任务中心；结果会写成候选，不会覆盖你已确认的内容。');
@@ -158,6 +178,17 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
             已勾选<small>{selectedAssetIds.length ? `${selectedAssetIds.length} 张` : '先在项目概览里勾选'}</small>
           </button>
         </div>
+        {target === 'cloud' && <>
+          <p className="muted tiny">发送给模型</p>
+          <div className="direct-run-options">
+            {([['edge1920', '长边 1920（推荐）', '4K 帧约 3 MB → 约 0.3 MB'], ['edge1152', '长边 1152', '更省流量，小目标更依赖裁剪'],
+              ['original', '原图', '无损，但大图更容易超时']] as const).map(([value, label, note]) =>
+              <button key={value} type="button" className={sendMode === value ? 'selected' : ''} aria-pressed={sendMode === value} onClick={() => setSendMode(value)}>
+                {label}<small>{note}</small>
+              </button>)}
+          </div>
+          <span className="muted tiny">只标注区域：{region ? `左 ${Math.round(region.left * 100)}% 上 ${Math.round(region.top * 100)}% 右 ${Math.round(region.right * 100)}% 下 ${Math.round(region.bottom * 100)}%（在素材页的画布上框定，坐标会自动换算回整图）` : '整图（在素材页的画布上可以框一块只标它）'}</span>
+        </>}
         <p className="muted tiny">类别：{classes.length ? classes.map(item => item.name).join('、') : '（还没有类别）'}{rules ? ` · 已写区分口径` : ''}</p>
         {rules && <p className="muted tiny direct-run-rules">{rules}</p>}
         {blocked && <Notice>{blocked.text}{blocked.go && <button type="button" className="text-button" onClick={blocked.go}>去配置</button>}</Notice>}

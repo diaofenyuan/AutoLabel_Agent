@@ -63,7 +63,9 @@ final class Runs implements AutoCloseable {
         JsonObject run=Json.obj("id",id,"projectId",project.get("id"),"name",Json.str(p,"name","自动标注 · "+model),"status","running","createdAt",Json.now(),"updatedAt",Json.now(),"providerId",provider.get("id"),"model",model,"prompt",prompt,
             "concurrency",concurrency,"maxRetries",retries,"total",selected.size(),"requestsUsed",0,"retries",0,"reused",0,"plannedRequests",selected.size(),"estimatedMaxRequests",(long)selected.size()*(retries+1),
             "snapshot",Json.obj("project",project.deepCopy(),"provider",provider.deepCopy(),"references",references.deepCopy(),"parserVersion","annotations-v1","validatorVersion",TaskTemplates.VALIDATOR_VERSION,"requestContractVersion",TaskTemplates.REQUEST_CONTRACT_VERSION,"credentialBindingVersion",providers.credentialBindingVersion(Json.required(provider,"id")),"normalizationVersion",Media.NORMALIZATION_VERSION),"failurePolicy",policy,"budgetScopeId",Budgets.scope(p,id));
-        run.addProperty("reuseEnabled",Json.bool(p,"reuseEnabled",true));run.addProperty("forceRerun",Json.bool(p,"forceRerun",false));run.addProperty("force",Json.bool(p,"forceRerun",false));if(p.has("reuseMaxAgeSeconds"))run.add("reuseMaxAgeSeconds",p.get("reuseMaxAgeSeconds"));if(max!=Long.MAX_VALUE)run.addProperty("maxRequests",max);JsonArray samples=new JsonArray();
+        run.addProperty("reuseEnabled",Json.bool(p,"reuseEnabled",true));run.addProperty("forceRerun",Json.bool(p,"forceRerun",false));run.addProperty("force",Json.bool(p,"forceRerun",false));if(p.has("reuseMaxAgeSeconds"))run.add("reuseMaxAgeSeconds",p.get("reuseMaxAgeSeconds"));if(max!=Long.MAX_VALUE)run.addProperty("maxRequests",max);
+        // 发送副本的配方在这里就校验并冻结：越界区域现在报错，之后每次请求都按同一份配方发。
+        if(p.has("payload")&&!p.get("payload").isJsonNull())run.add("payload",PayloadImages.freeze(Json.object(p,"payload")));JsonArray samples=new JsonArray();
         for(JsonObject row:selected){JsonObject asset=Json.parse(row.get("data").getAsString());samples.add(Json.obj("id",Json.id(),"assetId",asset.get("id"),"asset",asset,"inputPath",row.get("path"),"baseVersion",asset.get("version")));}
         return new Prepared(run,samples);
     }
@@ -151,7 +153,9 @@ final class Runs implements AutoCloseable {
     }
     void releasePreparation(String runId,String sampleId,String attempt,long delay){store.tx(c->{String status=Json.required(Store.document(c,"runs",runId),"status").equals("cancelled")?"cancelled":"queued";Store.update(c,"UPDATE samples SET status=?,active_attempt=NULL,next_at=? WHERE id=? AND active_attempt=?",status,delay==0?0:System.currentTimeMillis()+delay,sampleId,attempt);return null;});}
     void pauseBudget(String id,String reason){store.tx(c->{JsonObject run=Store.document(c,"runs",id);if(!Json.str(run,"status","").equals("running"))return null;run.addProperty("status","paused");run.addProperty("pauseReason",reason);Store.update(c,"UPDATE runs SET status='paused',data=? WHERE id=?",run,id);Store.event(c,"run.paused",id,null,null,Json.obj("reason",reason,"requestsUsed",run.get("requestsUsed")));return null;});}
-    JsonArray messages(JsonObject run,JsonObject sample)throws Exception{
+    /** 请求体与它实际用到的那张副本：坐标逆映射要靠同一份，不能在两处各算一次。 */
+    record Outgoing(JsonArray messages,PayloadImages.Payload payload){}
+    Outgoing messages(JsonObject run,JsonObject sample)throws Exception{
         JsonObject snapshot=Json.object(run,"snapshot"),project=Json.object(snapshot,"project"),asset=Json.object(sample,"asset");JsonArray content=new JsonArray();
         String schema="Return JSON only: {\"assetId\":\"TARGET_ID\",\"annotations\":[{\"id\":\"unique-id\",\"type\":\""+Json.required(project,"taskType")+"\",\"classId\":\"stable-class-id\",\"bbox\":{\"x\":0,\"y\":0,\"width\":10,\"height\":10},\"keypoints\":[],\"points\":[]}]}. Use baseline pixel coordinates. Omit fields not needed by the task. Empty annotations means no target found. Pose names/order must match template; visibility 0 unknown, 1 occluded but located, 2 visible. OBB bbox rotation is in degrees, or four true rectangle corners. Never return perspective quadrilaterals as OBB.";
         if(Json.bool(run,"inputResults",false))schema=schema.replace("Use baseline pixel coordinates.","Use pixel coordinates of the attached target input image. Do not map to its parent image.");JsonObject instruction=Json.obj("instructions",Json.required(run,"prompt"),"outputContract",schema);
@@ -161,15 +165,22 @@ final class Runs implements AutoCloseable {
         long totalBytes=0;
         for(JsonElement e:Json.array(snapshot,"references")){JsonObject ref=e.getAsJsonObject();Path path=ref.has("resourceId")?new ResourceLibrary(store,projects).referencePath(ref):projects.path(Json.required(ref,"id"));totalBytes+=Files.size(path);if(totalBytes>32L*1024*1024)throw new ApiError(413,"model_images_too_large","本次图片合计超过 32 MiB，请减少参考或图片尺寸。");
             if(!ref.has("resourceId")&&!Media.hash(path).equals(Json.required(ref,"contentHash")))throw new ApiError(409,"reference_changed","参考图片内容已变化，请创建新运行。");content.add(Json.obj("type","text","text",Json.obj("role","reference","assetId",ref.get("id"),"width",ref.get("width"),"height",ref.get("height"),"annotations",ref.get("annotations"),"note",Json.str(ref,"note",""),"resourceId",ref.get("resourceId"),"resourceVersion",ref.get("resourceVersion")).toString()));content.add(image(path));}
-        Path target=Path.of(Json.required(sample,"inputPath"));totalBytes+=Files.size(target);if(totalBytes>32L*1024*1024)throw new ApiError(413,"model_images_too_large","本次图片合计超过 32 MiB。");
-        if(!Media.hash(target).equals(Json.required(asset,"contentHash")))throw new ApiError(409,"media_content_changed","基准图片内容已变化，请重新导入。");content.add(Json.obj("type","text","text",Json.obj("role","target","assetId",asset.get("id"),"width",asset.get("width"),"height",asset.get("height")).toString()));content.add(image(target));
-        return Json.arr(Json.obj("role","user","content",content));
+        Path target=Path.of(Json.required(sample,"inputPath"));
+        // 发送副本：按运行冻结的配方裁剪/缩放。原图直发时 path 就是基准图本身，行为与以前一致。
+        PayloadImages.Payload payload=PayloadImages.prepare(target,PayloadImages.recipe(run),store.root.resolve("media").resolve("payload"));
+        totalBytes+=payload.bytes();if(totalBytes>32L*1024*1024)throw new ApiError(413,"model_images_too_large","本次图片合计超过 32 MiB，请减少参考或调低发送尺寸。");
+        if(!Media.hash(target).equals(Json.required(asset,"contentHash")))throw new ApiError(409,"media_content_changed","基准图片内容已变化，请重新导入。");
+        // 声明的是**副本自己的**像素尺寸：模型按它返回坐标，引擎再逆映射回基准图（口径不一致会直接写出越界坐标）。
+        content.add(Json.obj("type","text","text",Json.obj("role","target","assetId",asset.get("id"),"width",payload.width(),"height",payload.height()).toString()));content.add(image(payload.path()));
+        return new Outgoing(Json.arr(Json.obj("role","user","content",content)),payload);
     }
-    static JsonObject image(Path path)throws Exception{return Json.obj("type","image_url","image_url",Json.obj("url","data:image/png;base64,"+Base64.getEncoder().encodeToString(Files.readAllBytes(path))));}
+    static JsonObject image(Path path)throws Exception{String name=path.getFileName().toString().toLowerCase(Locale.ROOT);
+        String type=name.endsWith(".jpg")||name.endsWith(".jpeg")?"image/jpeg":"image/png";
+        return Json.obj("type","image_url","image_url",Json.obj("url","data:"+type+";base64,"+Base64.getEncoder().encodeToString(Files.readAllBytes(path))));}
     void execute(JsonObject initialRun,JsonObject row,String attempt){String runId=Json.required(initialRun,"id"),sampleId=Json.required(row,"id"),assetId=Json.required(row,"asset_id");JsonObject sample=Json.parse(row.get("data").getAsString());boolean sent=false;JsonObject parsedInput=null;Providers.Permit acquired=null;InputResultReuse.Prepared inputPrepared=null;
         try{
             // 读图、请求规范化和历史校验在既有有界 worker 中完成，调度锁只负责 claim 与入队。
-            JsonObject provider=Json.object(Json.object(initialRun,"snapshot"),"provider");JsonObject body=providers.body(provider,Json.required(initialRun,"model"),messages(initialRun,sample),new JsonArray(),true);
+            JsonObject provider=Json.object(Json.object(initialRun,"snapshot"),"provider");Outgoing outgoing=messages(initialRun,sample);JsonObject body=providers.body(provider,Json.required(initialRun,"model"),outgoing.messages(),new JsonArray(),true);
             Providers.Credential credential;try{credential=providers.credentialFor(provider,Json.object(initialRun,"snapshot"));}catch(ApiError error){pauseBudget(runId,error.code);releasePreparation(runId,sampleId,attempt,0);return;}
             inputPrepared=inputReuse==null?null:inputReuse.api(initialRun,row,body,credential);if(inputPrepared!=null&&inputReuse.apply(inputPrepared,attempt))return;InputResultReuse.Prepared fixedInput=inputPrepared;ReuseRequest reuseRequest=prepareReuse(initialRun,row,body,credential);if(reuseRequest!=null&&applyReuse(initialRun,row,attempt,reuseRequest)){releasePreparation(runId,sampleId,attempt,0);return;}
             if(!dispatchAllowed()){releasePreparation(runId,sampleId,attempt,0);return;}
@@ -182,6 +193,10 @@ final class Runs implements AutoCloseable {
                 store.requireSpace(0);Costs.reserve(c,scope,Costs.snapshot(provider,Json.required(initialRun,"model")));Budgets.reserve(c,scope);run.addProperty("requestsUsed",used+1);int count=Json.integer(row,"attempt_count",0);if(count>0)run.addProperty("retries",Json.number(run,"retries",0)+1);
                 Store.update(c,"UPDATE runs SET data=? WHERE id=?",run,runId);JsonObject data=Json.obj("id",attempt,"runId",runId,"sampleId",sampleId,"assetId",assetId,"providerId",provider.get("id"),"model",initialRun.get("model"),"status","sent","sentAt",Json.now(),"usage",JsonNull.INSTANCE,"request",providers.redact(body,credential));
                 if(fixedInput!=null)data.addProperty("inputReuseFingerprint",fixedInput.fingerprint());if(reuseRequest!=null)for(var field:reuseRequest.prepared.attemptFields().entrySet())data.add(field.getKey(),field.getValue());data.addProperty("budgetScopeId",scope);data.add("priceSnapshot",Costs.snapshot(provider,Json.required(initialRun,"model")));Costs.attach(data);
+                // 记下这一张**实际发出去的是什么**：尺寸、体积与是否派生，任务详情据此核对，而不是靠猜。
+                // 注意别覆盖 run.payload——那是冻结的配方，覆盖了同一运行后面的样本会退回原图发送。
+                long sourceBytes=outgoing.payload().derived()?Files.size(Path.of(Json.required(sample,"inputPath"))):outgoing.payload().bytes();
+                JsonObject payloadFacts=PayloadImages.facts(outgoing.payload(),sourceBytes);data.add("payload",payloadFacts);run.add("payloadActual",payloadFacts);Store.update(c,"UPDATE runs SET data=? WHERE id=?",run,runId);
                 Store.update(c,"INSERT INTO attempts(id,run_id,sample_id,group_id,status,data) VALUES(?,?,?,?,?,?)",attempt,runId,sampleId,permit.group(),"sent",data);Store.update(c,"UPDATE samples SET status='waiting',attempt_count=attempt_count+1 WHERE id=? AND active_attempt=?",sampleId,attempt);
                 Store.event(c,"sample.sending",runId,assetId,attempt,Json.obj("stage","sending","requestsUsed",used+1));Store.event(c,"sample.waiting",runId,assetId,attempt,Json.obj("stage","waiting"));return true;});
             if(!sent)return;
@@ -190,6 +205,8 @@ final class Runs implements AutoCloseable {
             try{String content=reply.content().strip();if(content.startsWith("```")){content=content.replaceFirst("^```(?:json)?\\s*","").replaceFirst("\\s*```$","");}result=Json.parse(content);}catch(Exception e){throw new ApiError(422,"model_annotation_json_invalid","模型返回无法解析为标注 JSON。");}
             parsedInput=result;if(!result.has("assetId")||!Json.required(result,"assetId").equals(RunInputs.inputId(sample)))throw new ApiError(422,"model_asset_mismatch","返回素材标识缺失或与本次请求不一致。");
             if(!result.has("annotations")||!result.get("annotations").isJsonArray())throw new ApiError(422,"model_annotations_missing","模型未返回 annotations 数组；不会将缺失结果视为无目标。");
+            // 模型按发送副本的坐标返回；先逆映射回基准图再进校验。越界由既有几何校验明确报错，不静默截断。
+            result.add("annotations",PayloadImages.mapBack(Json.array(result,"annotations"),outgoing.payload()));
             if(Json.bool(initialRun,"inputResults",false)){stage(runId,sampleId,assetId,attempt,"validating");JsonObject fixed=inputResults.result(initialRun,sample,"api",attempt,result,Json.obj("requestId",attempt,"providerId",provider.get("id"),"model",initialRun.get("model"),"responseRecordedInAttempt",true),null);InputResultReuse.attach(fixed,inputPrepared);if(inputResults.save(initialRun,sample,attempt,fixed))inputResults.aggregate(runId,assetId);return;}stage(runId,sampleId,assetId,attempt,"validating");JsonObject frozen=Json.object(Json.object(initialRun,"snapshot"),"project");JsonArray annotations=Annotations.validate(Json.array(result,"annotations"),Json.object(sample,"asset"),frozen);
             stage(runId,sampleId,assetId,attempt,"saving");
             store.tx(c->{JsonObject current=Store.one(c,"SELECT active_attempt,status FROM samples WHERE id=?",sampleId);if(current==null||!attempt.equals(Json.str(current,"active_attempt","")))return null;

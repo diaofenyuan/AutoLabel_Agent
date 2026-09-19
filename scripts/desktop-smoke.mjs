@@ -358,6 +358,12 @@ if (directRunOnly) {
   assert.ok(byCheck.get('direct-run-creates-run-without-chat')?.humanAnnotations >= 2);
   // 没有类别时必须说清原因并禁用开始。
   assert.ok(String(byCheck.get('direct-run-blocks-without-classes')?.reason ?? '').includes('还没有类别'));
+  // 发送副本：默认长边 1920，「原图」真的按原图发。
+  assert.equal(byCheck.get('direct-run-send-copy-settings')?.defaultLongEdge, 1920);
+  assert.equal(byCheck.get('direct-run-send-copy-settings')?.plainDerived, false);
+  // 只标注区域：画布框选写进项目设置，运行按裁剪后的副本发送。
+  assert.ok(byCheck.get('canvas-region-saved')?.region);
+  assert.ok(byCheck.get('direct-run-sends-region-copy')?.croppedWidth > 0 && byCheck.get('direct-run-sends-region-copy')?.croppedWidth < byCheck.get('direct-run-send-copy-settings')?.plainWidth);
   console.log(`直达标注（不依赖对话模型）检查通过：${output}`); process.exit(0);
 }
 if (aiPresetOnly) {

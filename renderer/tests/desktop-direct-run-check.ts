@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { openFirstAssetCanvas, openProjectChat, openSelectedProjectOverview } from './desktop-navigation';
 
 /**
  * 直达标注验收：不依赖对话模型也能开始标注。
@@ -107,7 +108,13 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     await button('开始标注', `document.querySelector('.direct-run .picker-popover')`);
     await waitFor(`!document.querySelector('.direct-run .picker-popover')`);
     // 运行必须有真实请求发生：夹具服务只回合法 JSON，不依赖调度时机。
-    await waitFor(`window.autoLabel.request('run.list',{}).then(list=>list.some(run=>run.model==='fixture-direct'))`, 20000);
+    try {
+      await waitFor(`window.autoLabel.request('run.list',{}).then(list=>list.some(run=>run.model==='fixture-direct'))`, 20000);
+    } catch {
+      const diagnostic = await js<{ popover: string; toast: string; runs: unknown }>(`(async()=>({popover:document.querySelector('.direct-run .picker-popover')?.innerText??'(弹层已关闭)',
+        toast:[...document.querySelectorAll('.toast')].map(node=>node.innerText).join(' | '), runs: await window.autoLabel.request('run.list',{})}))()`);
+      throw new Error(`直达标注没有创建运行：${json(diagnostic)}`);
+    }
     const runs = await api<Array<{ id: string; model: string; status: string }>>('run.list', {});
     const direct = runs.find(item => item.model === 'fixture-direct');
     assert.ok(direct, `应创建使用标注模型的运行，实际：${json(runs.map(item => item.model))}`);
@@ -122,6 +129,62 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     assert.ok((assets.items[0].annotations?.length ?? 0) >= 2, `人工预置标注不应被覆盖，实际：${json(assets.items[0].annotations?.length)}`);
     checks.push({ check: 'direct-run-creates-run-without-chat', runId: direct!.id, model: direct!.model, status: settled.status,
       versionSources: history.map(item => item.source), humanAnnotations: assets.items[0].annotations?.length ?? 0 });
+
+    // ===== 发送副本：默认长边 1920，「原图」能明确关掉；实发尺寸与体积记在运行上 =====
+    const defaultRecipe = (await api<{ payload?: { maxEdge?: number | null } }>('run.get', { runId: direct!.id })).payload?.maxEdge ?? null;
+    assert.equal(defaultRecipe, 1920, `默认应按长边 1920 生成发送副本，实际：${defaultRecipe}`);
+    // 建完任务会落到任务中心；后面的操作都在会话输入卡上，先按项目名回到会话。
+    const projectName = (await api<Array<{ id: string; name: string }>>('project.list', {})).find(item => item.id === projectId)?.name;
+    assert.ok(projectName, '应能读到项目名');
+    const driver = { js, wait: waitFor };
+    await openProjectChat(driver, projectName!);
+    await js(`document.querySelector('.chat-panel .direct-run-trigger').click()`);
+    await waitFor(`!!document.querySelector('.direct-run .picker-popover')`);
+    await js(`([...document.querySelectorAll('.direct-run .picker-popover button')].find(node=>node.innerText.trim().startsWith('原图'))).click()`);
+    await button('开始标注', `document.querySelector('.direct-run .picker-popover')`);
+    await waitFor(`window.autoLabel.request('run.list',{}).then(list=>list.some(run=>run.model==='fixture-direct'&&run.payloadActual&&run.payloadActual.derived===false))`, 20000);
+    const plainRuns = await api<Array<{ id: string; payloadActual?: { derived?: boolean; width?: number; bytes?: number; sourceBytes?: number } }>>('run.list', {});
+    const plain = plainRuns.find(item => item.payloadActual && item.payloadActual.derived === false);
+    assert.ok(plain, `「原图」必须真的按原图发送，实际：${json(plainRuns.map(item => item.payloadActual))}`);
+    const baselineWidth = (await api<{ width?: number }>('asset.get', { assetId: assets.items[0].id })).width ?? 0;
+    assert.equal(plain!.payloadActual?.width, baselineWidth, '原图发送按基准尺寸声明');
+    checks.push({ check: 'direct-run-send-copy-settings', defaultLongEdge: defaultRecipe, plainDerived: plain!.payloadActual?.derived,
+      plainWidth: plain!.payloadActual?.width, plainBytes: plain!.payloadActual?.bytes, sourceBytes: plain!.payloadActual?.sourceBytes });
+
+    // ===== 只标注区域：在素材画布上框一块，写进项目设置，下一次运行会带上它 =====
+    await openSelectedProjectOverview(driver);
+    await openFirstAssetCanvas(driver);
+    await js(`([...document.querySelectorAll('.quality-canvas-tools button')].find(node=>node.getAttribute('aria-label')==='只标注这块区域')).click()`);
+    const dragged = await js<boolean>(`(()=>{const svg=document.querySelector('svg[aria-label="素材标注画布"]');if(!svg)return false;
+      // 每个事件都按当时的矩形算坐标：弹层进场动画会让 rect 变化，沿用首次测量会把点落到元素外。
+      const fire=(type,fx,fy)=>{const box=svg.getBoundingClientRect();
+        svg.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:1,isPrimary:true,button:0,buttons:1,
+          clientX:box.left+box.width*fx,clientY:box.top+box.height*fy}));};
+      fire('pointerdown',0.3,0.3);fire('pointermove',0.7,0.7);fire('pointerup',0.7,0.7);return true;})()`);
+    assert.equal(dragged, true, '素材画布上应有可框选区域的 SVG');
+    await waitFor(`window.autoLabel.request('project.open',{projectId:${json(projectId)}}).then(p=>!!(p.settings&&p.settings.annotationRegion))`, 15000);
+    const withRegion = await api<{ settings?: { annotationRegion?: { left: number; top: number; right: number; bottom: number } } }>('project.open', { projectId });
+    const region = withRegion.settings?.annotationRegion;
+    assert.ok(region, `框选后应把区域写进项目设置，实际：${json(withRegion.settings)}`);
+    assert.ok(Math.abs((region!.left ?? 0) - 0.3) < 0.03 && Math.abs((region!.top ?? 0) - 0.3) < 0.03
+      && Math.abs((region!.right ?? 0) - 0.7) < 0.03 && Math.abs((region!.bottom ?? 0) - 0.7) < 0.03,
+      `区域应落在框选的位置上，实际：${json(region)}`);
+    checks.push({ check: 'canvas-region-saved', region });
+
+    // 画布上的区域要能在直达标注里看到，并且随运行一起发出去。
+    await js(`([...document.querySelectorAll('dialog[open] button')].find(node=>node.innerText.trim()==='关闭')).click()`);
+    await waitFor(`!document.querySelector('.asset-annotator')`);
+    await openProjectChat(driver, projectName!);
+    await js(`document.querySelector('.chat-panel .direct-run-trigger').click()`);
+    await waitFor(`!!document.querySelector('.direct-run .picker-popover')`);
+    const regionPanel = await js<string>(`document.querySelector('.direct-run .picker-popover').innerText.replace(/\\s+/g,' ')`);
+    assert.ok(regionPanel.includes('左 30%') && regionPanel.includes('右 70%'), `直达标注应显示已设的区域，实际：${regionPanel.slice(0, 240)}`);
+    await button('开始标注', `document.querySelector('.direct-run .picker-popover')`);
+    await waitFor(`window.autoLabel.request('run.list',{}).then(list=>list.some(run=>run.payloadActual&&run.payloadActual.width&&run.payloadActual.width<${baselineWidth}))`, 20000);
+    const croppedRuns = await api<Array<{ id: string; payloadActual?: { width?: number; height?: number } }>>('run.list', {});
+    const cropped = croppedRuns.find(item => item.payloadActual && (item.payloadActual.width ?? 0) < baselineWidth);
+    assert.ok(cropped, '带区域的运行必须只发送裁剪后的副本');
+    checks.push({ check: 'direct-run-sends-region-copy', croppedWidth: cropped!.payloadActual?.width, croppedHeight: cropped!.payloadActual?.height });
 
     // ===== 没有类别时必须说清原因并禁用开始 =====
     // 用界面内的「新建项目」建一个空项目：不碰系统文件框，落点更稳。
