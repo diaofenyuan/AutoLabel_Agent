@@ -8,6 +8,8 @@ build/
 .qa/
 # 测试/验收临时内容统一放这里，避免污染 build/ 等正常目录
 tmp/
+# 临时抽帧/预览产物（软件自己的抽帧不在仓库内，这里防的是手工抽帧留下的目录）
+tmp-video/
 **/__pycache__/
 *.pyc
 *.tsbuildinfo
