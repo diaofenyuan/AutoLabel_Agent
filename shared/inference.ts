@@ -35,6 +35,10 @@ export interface LocalModel {
   sizeBytes: number;
   createdAt: string;
   updatedAt: string;
+  /** 来源：user=用户自己找的文件，builtin=随安装包提供，downloaded=模型库按需下载；旧记录没有该字段。 */
+  origin?: 'user' | 'builtin' | 'downloaded';
+  /** 模型库目录标识；界面据此把「已启用」标回模型库里的那一条。 */
+  catalogId?: string;
 }
 
 export interface LocalModelRegistration {

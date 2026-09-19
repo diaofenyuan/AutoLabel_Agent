@@ -87,6 +87,14 @@ export class ModelLibrary {
     onProgress?: (progress: ModelDownloadProgress) => void;
   }) {}
 
+  /** 库内文件只可能来自这两个目录；授权时用它限定可信任范围，避免这条通道被用来授权任意路径。 */
+  roots(): string[] {
+    const roots = [this.options.builtinRoot()];
+    const storage = this.options.storageRoot();
+    if (storage) roots.push(path.join(storage, 'models'));
+    return roots;
+  }
+
   private modelsRootPath(): string {
     const root = this.options.storageRoot();
     if (!root) throw new DesktopError('STORAGE_UNAVAILABLE', '尚未解析存储位置，请到「设置 → 存储位置」确认后重试');
@@ -173,14 +181,17 @@ export class ModelLibrary {
    * 遍历官方地址与备用镜像，任一成功即结束；校验不通过的内容一律删除，绝不留下半个文件冒充可用。
    * 已经就绪的模型直接返回当前状态，不重复下载。
    */
-  async install(catalogId: string, onProgress?: (progress: ModelDownloadProgress) => void): Promise<ModelLibraryState> {
+  async install(catalogId: string, options: { force?: boolean } = {}, onProgress?: (progress: ModelDownloadProgress) => void): Promise<ModelLibraryState> {
     const model = catalogModel(catalogId);
     if (!model) throw new DesktopError('MODEL_LIBRARY_UNKNOWN', '模型库里没有这个模型，请刷新后重试');
     if (this.busy.has(model.id)) throw new DesktopError('MODEL_LIBRARY_BUSY', '这个模型正在下载，请等待当前下载完成');
     this.busy.add(model.id);
     try {
-      const current = await this.describe(model);
-      if (current.state === 'ready') return await this.status();
+      // 不强制时，已就绪的模型直接返回：重复点「启用」不应该再下一次 55 MB。
+      if (!options.force) {
+        const current = await this.describe(model);
+        if (current.state === 'ready') return await this.status();
+      }
       await ensureModelsRoot(this.options.storageRoot()!, this.options.dataDirectory());
       const target = this.storageFile(model);
       await mkdir(path.dirname(target), { recursive: true });

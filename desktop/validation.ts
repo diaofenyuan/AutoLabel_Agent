@@ -441,14 +441,16 @@ const schemas: Record<string, z.ZodType> = {
   'local.runtime.configure': z.strictObject({ pythonPath: z.string().min(1).max(32767).nullable() }),
   // 模型库只接受目录里登记过的标识；下载源、文件名校验与哈希都来自共享目录，界面无法指定任意地址。
   'model.library.status': empty,
-  'model.library.install': z.strictObject({ catalogId: id }),
+  'model.library.install': z.strictObject({ catalogId: id, force: z.boolean().optional() }),
   'model.library.remove': z.strictObject({ catalogId: id }),
   'local.runtime.get': empty,
   'local.runtime.probe': empty,
   'local.model.get': z.strictObject({ modelId: id, modelVersion: localModelVersion.optional() }),
   // classNames 可选：登记后训练预检可离线核对类别一致性，缺省时改由训练启动阶段向 worker 核对。
   'local.model.register': z.strictObject({ id: id.optional(), baseVersion: localModelVersion.optional(), name, taskType,
-    modelPath: z.string().min(1).max(32767), classNames: z.array(trainingName).min(1).max(10000).optional() }),
+    modelPath: z.string().min(1).max(32767), classNames: z.array(trainingName).min(1).max(10000).optional(),
+    // 来源只作记录，执行授权仍按路径与哈希核对；模型库标识用于把「已启用」标回目录里的那一条。
+    origin: z.enum(['user', 'builtin', 'downloaded']).optional(), catalogId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional() }),
   'local.model.list': z.strictObject({ taskType: taskType.optional(), ...evaluationPage }),
   'local.model.load': z.strictObject({ modelId: id, modelVersion: localModelVersion.optional(), device: localDevice.optional(), timeoutMs: localTimeout.optional() }),
   'local.run.create': z.strictObject({ projectId: id, assetIds: flowAssetIds.optional(), ...localFields, failurePolicy: z.enum(['continue', 'pause']).optional() }),

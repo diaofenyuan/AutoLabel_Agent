@@ -57,6 +57,7 @@ const modelLibrary = new ModelLibrary({
   builtinRoot: () => path.join(app.isPackaged ? process.resourcesPath : path.join(root, 'build'), 'models'),
   storageRoot: () => storagePaths?.root,
   dataDirectory: () => dataDir,
+  onProgress: progress => send('autolabel:model-library-progress', progress),
 });
 let vault: CredentialVault;
 let engine: EngineManager;
@@ -317,6 +318,33 @@ async function registerTrainingModel(payload: Record<string, unknown>): Promise<
   if (result.modelHash !== artifact.hash) throw new DesktopError('TRAINING_ARTIFACT_MISMATCH', '登记结果与训练产物哈希不一致，请重新核对产物');
   return result;
 }
+/**
+ * 启用模型库里的一个模型：把权重登记为本地模型，并按当前数据作用域授权执行。
+ *
+ * 权重来自软件自己的目录，但登记与授权都走既有入口——引擎照旧按文件内容核对 sha256，
+ * 「内置」不构成任何执行特权，只是省掉了找文件与选文件两步。
+ * 文本编码器不是任务模型（没有任务类型），只下载不登记。
+ */
+async function enableLibraryModel(engineNow: EngineManager, catalogId: string): Promise<Record<string, unknown> | null> {
+  const ready = await modelLibrary.readyFile(catalogId);
+  if (!ready) throw new DesktopError('MODEL_LIBRARY_NOT_READY', '模型权重尚未就绪，请先下载后再启用');
+  const { model, path: filename } = ready;
+  if (model.taskType === null) return null;
+  // 同一目录标识可能有多个版本：哈希一致才算同一个模型；权重换版时登记新版本，而不是复用旧记录。
+  const listed = await engineNow.request('local.model.list', { limit: 500 }) as { items: Array<Record<string, unknown>> };
+  const sameCatalog = listed.items.filter(item => item.catalogId === model.id);
+  const known = sameCatalog.find(item => item.modelHash === model.sha256);
+  const modelPath = await grants.add(filename, 'model');
+  const registered = known ?? await engineNow.request('local.model.register', {
+    ...(sameCatalog[0] ? { id: sameCatalog[0].id as string, baseVersion: sameCatalog[0].version as number } : {}),
+    name: model.name, taskType: model.taskType, modelPath,
+    origin: model.tier === 'bundled' ? 'builtin' : 'downloaded', catalogId: model.id,
+  }) as Record<string, unknown>;
+  await localExecution.trustModel(preferenceStore.value.credentialScopeId as string, modelPath, modelLibrary.roots(), () => {
+    if (storage?.busy || engine !== engineNow || shutdownStarted) throw new DesktopError('STORAGE_BUSY', '启用模型时数据目录或引擎状态已变化，请重新操作');
+  }, engineNow);
+  return registered;
+}
 /** 对话完成后由主进程落盘；记录失败不改变本次对话结果，只写诊断日志。 */
 async function recordAgentChat(payload: Record<string, unknown>): Promise<unknown> {
   const record: Parameters<ChatStore['record']>[0] = {
@@ -393,8 +421,8 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
   }
   if (validated.command === 'storage.paths.migrate') return storagePathSettings.migrate();
   // 模型库读写都在主进程完成：下载地址与哈希取自共享目录，渲染层只能指定模型标识。
+  // 「安装」要等引擎就绪后再登记，因此放在下面引擎握手之后。
   if (validated.command === 'model.library.status') return modelLibrary.status();
-  if (validated.command === 'model.library.install') return modelLibrary.install(payload.catalogId as string);
   if (validated.command === 'model.library.remove') return modelLibrary.remove(payload.catalogId as string);
   // 训练产物目录与三类业务数据同理：走专用命令，不经过 settings.save 的路径守卫。
   if (validated.command === 'training.root.status') return trainingRootStatus();
@@ -412,6 +440,11 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
   if (installingUpdate) throw new DesktopError('UPDATE_INSTALLING', '正在准备安装更新，暂不接受新的项目操作');
   // 首屏读取等待同一次启动握手；正常启动不能被误报为连接故障。
   if (requestEngine.status.state === 'starting') await requestEngine.start();
+  // 一键启用：先把权重下载/校验到本机，再登记并授权。用户点一次就能用，不必找文件、也不必再点一次启用。
+  if (validated.command === 'model.library.install') {
+    const state = await modelLibrary.install(payload.catalogId as string, { force: payload.force === true });
+    return { ...state, enabled: await enableLibraryModel(requestEngine, payload.catalogId as string) };
+  }
   const authorizeLocal = async (parameters: Record<string, unknown>) => {
     if (localExecution.busy || localExecution.uncertain) throw new DesktopError('LOCAL_CONFIGURATION_BUSY', '本地执行配置尚未就绪');
     const model = await requestEngine.request('local.model.resolve', { modelId: parameters.modelId, ...(parameters.modelVersion !== undefined ? { version: parameters.modelVersion } : {}) }) as Record<string, unknown>;

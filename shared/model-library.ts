@@ -134,6 +134,14 @@ export interface ModelLibraryEntry {
   message?: string;
 }
 
+/** 下载进度：界面据此显示已下载多少，而不是一个不知道还要多久的转圈。 */
+export interface ModelLibraryProgress {
+  catalogId: string;
+  fileName: string;
+  receivedBytes: number;
+  totalBytes: number;
+}
+
 export interface ModelLibraryState {
   /** 内置权重目录：<安装目录>/resources/models。 */
   builtinRoot: string;

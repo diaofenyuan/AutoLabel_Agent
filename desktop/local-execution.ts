@@ -17,6 +17,12 @@ async function regularFile(value: unknown, extensions: string[]): Promise<string
   return resolved;
 }
 
+async function hashFile(file: string): Promise<string> {
+  const digest = createHash('sha256');
+  for await (const chunk of createReadStream(file)) digest.update(chunk);
+  return digest.digest('hex');
+}
+
 // 执行授权只属于这台桌面的当前数据作用域，项目备份中的路径不能恢复此权限。
 export class LocalExecutionSettings {
   private pending: Promise<unknown> = Promise.resolve();
@@ -57,13 +63,32 @@ export class LocalExecutionSettings {
     return this.serial(async () => {
       guard();
       const selected = await regularFile(await this.grants.require(filename, ['model']), ['.pt', '.onnx']);
-      const digest = createHash('sha256');
-      for await (const chunk of createReadStream(selected)) digest.update(chunk);
-      const modelHash = digest.digest('hex');
+      const modelHash = await hashFile(selected);
       const scopes = this.preferences.value.localModelGrants as Record<string, Record<string, string>> | undefined;
       await this.preferences.update({ localModelGrants: { ...scopes, [scope]: { ...scopes?.[scope], [selected.toLowerCase()]: modelHash } } });
       if (engine) await engine.request('local.model.authorize', { path: selected, modelHash });
       return selected;
+    });
+  }
+  /**
+   * 信任软件自己提供的模型文件（模型库里已按目录哈希核对过的权重）。
+   *
+   * 与用户手选文件等价，区别只在来源：路径必须落在模型库目录内，
+   * 因此不需要文件选择器授权；摘要仍按文件实测，执行时照旧核对——安全性没有放宽，只是省掉一次选择。
+   */
+  trustModel(scope: string, filename: string, roots: string[], guard: () => void, engine?: LocalEngine): Promise<{ path: string; modelHash: string }> {
+    return this.serial(async () => {
+      guard();
+      const selected = await regularFile(filename, ['.pt', '.onnx']);
+      const key = path.resolve(selected).toLowerCase();
+      if (!roots.some(root => key === path.resolve(root).toLowerCase() || key.startsWith(path.resolve(root).toLowerCase() + path.sep))) {
+        throw new DesktopError('LOCAL_MODEL_NOT_IN_LIBRARY', '只能授权模型库目录内的文件');
+      }
+      const modelHash = await hashFile(selected);
+      const scopes = this.preferences.value.localModelGrants as Record<string, Record<string, string>> | undefined;
+      await this.preferences.update({ localModelGrants: { ...scopes, [scope]: { ...scopes?.[scope], [key]: modelHash } } });
+      if (engine) await engine.request('local.model.authorize', { path: selected, modelHash });
+      return { path: selected, modelHash };
     });
   }
   async modelAuthorizations(scope: string): Promise<Array<{ path: string; modelHash: string }>> {

@@ -1,4 +1,5 @@
 import type { CandidateReuseProvenance } from './reuse.ts';
+import type { ModelLibraryProgress } from './model-library.ts';
 
 export const PROTOCOL_VERSION = 1 as const;
 
@@ -62,6 +63,11 @@ export interface DesktopBridge {
   onAgentEvent?(listener: (event: AgentEvent) => void): () => void;
   engineStatus(): Promise<EngineStatus>;
   onEngineStatus(listener: (status: EngineStatus) => void): () => void;
+  /**
+   * 模型库下载进度。模型权重最大有几百 MB，只给「正在下载」等于让用户干等；
+   * 这是桌面自己的任务，不混进引擎事件流。
+   */
+  onModelLibraryProgress?(listener: (progress: ModelLibraryProgress) => void): () => void;
   chooseFiles(options: FileSelection): Promise<string[]>;
   /**
    * 列出已授权目录里的可用素材。

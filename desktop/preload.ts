@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { DesktopBridge, EngineEvent, EngineStatus, AgentEvent, FileSelection } from '../shared/protocol';
+import type { ModelLibraryProgress } from '../shared/model-library';
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   const result = await ipcRenderer.invoke(channel, ...args);
@@ -24,6 +25,7 @@ const bridge: DesktopBridge = Object.freeze({
   engineStatus: () => invoke<EngineStatus>('autolabel:engine-status'),
   onEngineStatus: (listener: (status: EngineStatus) => void) => subscribe('autolabel:status', listener),
   onAgentEvent: (listener: (event: AgentEvent) => void) => subscribe('autolabel:agent-event', listener),
+  onModelLibraryProgress: (listener: (progress: ModelLibraryProgress) => void) => subscribe('autolabel:model-library-progress', listener),
   chooseFiles: (options: FileSelection) => invoke<string[]>('autolabel:choose-files', options),
   listDirectory: (options: { path: string; kind: 'images' | 'video' }) => invoke<{ directory: string; files: string[]; unsupported: number; truncated: boolean }>('autolabel:list-directory', options),
   transcodeVideo: (options: { sourcePath: string }) => invoke<{ path: string }>('autolabel:transcode-video', options),

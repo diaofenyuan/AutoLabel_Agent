@@ -244,7 +244,15 @@ if (flagIs('--model-library')) {
   // 内容不对的文件必须当场显示成「需要修复」，验证完必须清干净。
   assert.equal(byCheck.get('broken-file-reported')?.badge, '需要修复');
   assert.equal(byCheck.get('broken-file-cleaned')?.model, byCheck.get('broken-file-reported')?.model);
-  console.log(`模型库列表、状态与损坏识别检查通过：${output}`); process.exit(0);
+  // 一键启用必须真的把模型登记进引擎（带来源与目录标识），并且能加载读出类别。
+  const enabled = byCheck.get('enable-registers-and-authorizes');
+  assert.ok(enabled?.modelId, `启用后引擎里没有登记记录：${JSON.stringify(enabled)}`);
+  assert.equal(enabled?.origin, 'builtin', '随安装包提供的模型来源应记作 builtin');
+  assert.ok(byCheck.get('load-library-model')?.classes > 0, `启用出的模型没有读出类别：${JSON.stringify(byCheck.get('load-library-model'))}`);
+  // 权重被改动后必须明确拒绝，改回后恢复可用——不允许静默沿用旧哈希。
+  assert.ok(String(byCheck.get('changed-weights-rejected')?.message ?? '').includes('local_model_changed'));
+  assert.equal(byCheck.get('restored-weights-load')?.restored, true);
+  console.log(`模型库列表、一键启用、加载与哈希反例检查通过：${output}`); process.exit(0);
 }
 if (composerOnly) {
   assert.equal(result.passed, true);
