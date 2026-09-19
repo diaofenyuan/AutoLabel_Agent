@@ -91,6 +91,9 @@ const localDevice = z.string().regex(/^(cpu|0|[1-9][0-9]{0,2})$/);
 const localTimeout = z.number().int().min(1000).max(600000);
 const localFields = { modelId: id, modelVersion: localModelVersion.optional(), device: localDevice.optional(), ...reuseFields,
   classMap: z.record(z.string().regex(/^(0|[1-9][0-9]*)$/).max(32), id.nullable()),
+  // 开放词汇的类别名：1～200 条，去重，单条 ≤100 字符；能不能用取决于模型是否为开放词汇。
+  textClasses: z.array(z.string().trim().min(1).max(100)).min(1).max(200)
+    .refine(values => new Set(values).size === values.length, '文本类别不能重复').optional(),
   confidence: finite.min(0).max(1).optional(), iou: finite.min(0).max(1).optional(),
   imageSize: z.number().int().min(32).max(4096).optional(), maxDetections: z.number().int().min(1).max(10000).optional(), timeoutMs: localTimeout.optional() };
 const flowLocal = z.strictObject(localFields);
@@ -452,7 +455,8 @@ const schemas: Record<string, z.ZodType> = {
   'local.model.register': z.strictObject({ id: id.optional(), baseVersion: localModelVersion.optional(), name, taskType,
     modelPath: z.string().min(1).max(32767), classNames: z.array(trainingName).min(1).max(10000).optional(),
     // 来源只作记录，执行授权仍按路径与哈希核对；模型库标识用于把「已启用」标回目录里的那一条。
-    origin: z.enum(['user', 'builtin', 'downloaded']).optional(), catalogId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional() }),
+    origin: z.enum(['user', 'builtin', 'downloaded']).optional(), catalogId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional(),
+    openVocabulary: z.boolean().optional() }),
   'local.model.list': z.strictObject({ taskType: taskType.optional(), ...evaluationPage }),
   'local.model.load': z.strictObject({ modelId: id, modelVersion: localModelVersion.optional(), device: localDevice.optional(), timeoutMs: localTimeout.optional() }),
   'local.run.create': z.strictObject({ projectId: id, assetIds: flowAssetIds.optional(), ...localFields, failurePolicy: z.enum(['continue', 'pause']).optional() }),

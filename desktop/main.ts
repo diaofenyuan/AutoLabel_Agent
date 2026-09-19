@@ -168,6 +168,9 @@ function createBackend(location: StorageLocation): ActiveStorage {
     trainingRoot: () => savedTrainingRoot() ?? undefined,
     localPythonPath: () => localExecution.pythonPath(),
     localModelAuthorizations: () => localExecution.modelAuthorizations(location.credentialScopeId),
+    // 开放词汇的两个目录都在存储根下：词表缓存与 CLIP 编码器（下载的权重就放在 text-encoder）。
+    localVocabularyCacheDir: () => storagePaths ? path.join(storagePaths.root, 'models', 'vocab') : undefined,
+    localTextEncoderDir: () => storagePaths ? path.join(storagePaths.root, 'models', 'text-encoder') : undefined,
     mediaToolPaths: () => mediaExecution.paths(),
     requireExistingData: !(preferenceStore.value.dataDir === location.dataDir && preferenceStore.value.dataEstablished === false) });
   instance.on('status', value => {
@@ -372,6 +375,8 @@ async function enableLibraryModel(engineNow: EngineManager, catalogId: string): 
     ...(sameCatalog[0] ? { id: sameCatalog[0].id as string, baseVersion: sameCatalog[0].version as number } : {}),
     name: model.name, taskType: model.taskType, modelPath,
     origin: model.tier === 'bundled' ? 'builtin' : 'downloaded', catalogId: model.id,
+    // 开放词汇标记决定引擎按 YOLO-World 载入、并在运行时接受 textClasses。
+    ...(model.openVocabulary ? { openVocabulary: true } : {}),
   }) as Record<string, unknown>;
   await localExecution.trustModel(preferenceStore.value.credentialScopeId as string, modelPath, modelLibrary.roots(), () => {
     if (storage?.busy || engine !== engineNow || shutdownStarted) throw new DesktopError('STORAGE_BUSY', '启用模型时数据目录或引擎状态已变化，请重新操作');

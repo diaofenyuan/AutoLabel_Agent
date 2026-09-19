@@ -39,6 +39,8 @@ export interface LocalModel {
   origin?: 'user' | 'builtin' | 'downloaded';
   /** 模型库目录标识；界面据此把「已启用」标回模型库里的那一条。 */
   catalogId?: string;
+  /** 开放词汇模型：类别由本次请求的文本类别决定，而不是模型自带的固定类别表。 */
+  openVocabulary?: boolean;
 }
 
 export interface LocalModelRegistration {
@@ -68,6 +70,8 @@ export interface LocalParameters extends ReusePolicy {
   modelVersion?: number;
   device?: string;
   classMap: Record<string, string | null>;
+  /** 开放词汇模型的文本类别；下标即 classMap 的键。非开放词汇模型不得携带。 */
+  textClasses?: string[];
   confidence?: number;
   iou?: number;
   imageSize?: number;

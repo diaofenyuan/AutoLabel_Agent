@@ -51,6 +51,9 @@ export interface EngineOptions {
   /** 训练产物目录；缺省时引擎沿用 <数据目录>/training。 */
   trainingRoot?: () => string | undefined;
   localModelAuthorizations?: () => Promise<Array<{ path: string; modelHash: string }>>;
+  /** 开放词汇的词表缓存与文本编码器目录；缺省时 worker 按未配置处理（缓存不写、编码器按没有）。 */
+  localVocabularyCacheDir?: () => string | undefined;
+  localTextEncoderDir?: () => string | undefined;
   mediaToolPaths?: () => Promise<{ ffmpegPath?: string; ffprobePath?: string }>;
 }
 
@@ -158,6 +161,8 @@ export class EngineManager extends EventEmitter {
       const materialsRoot = this.options.materialsRoot?.();
       const trainingRoot = this.options.trainingRoot?.();
       const mediaTools = await this.options.mediaToolPaths?.() ?? {};
+      const localVocabularyCacheDir = this.options.localVocabularyCacheDir?.();
+      const localTextEncoderDir = this.options.localTextEncoderDir?.();
       let localModelAuthorizations = await this.options.localModelAuthorizations?.() ?? [];
       if (localModelAuthorizations.length > 500 || Buffer.byteLength(JSON.stringify(localModelAuthorizations)) > 7 * 1024 * 1024) {
         localModelAuthorizations = []; this.log('本地模型授权列表超过启动限额，本次未加载模型授权；普通图片与 API 功能仍可使用，请重新选择需要的模型');
@@ -217,6 +222,8 @@ export class EngineManager extends EventEmitter {
         child.stdin.write(JSON.stringify({ token: this.token, dataDir: this.options.dataDir, protocolVersion: PROTOCOL_VERSION, localWorkerPath, trainingWorkerPath, localModelAuthorizations,
           ...(materialsRoot ? { materialsRoot } : {}),
           ...(trainingRoot ? { trainingRoot } : {}),
+          ...(localVocabularyCacheDir ? { localVocabularyCacheDir } : {}),
+          ...(localTextEncoderDir ? { localTextEncoderDir } : {}),
           ...(localPythonPath ? { localPythonPath } : {}), ...(mediaTools.ffmpegPath ? { mediaFfmpegPath: mediaTools.ffmpegPath } : {}),
           ...(mediaTools.ffprobePath ? { mediaFfprobePath: mediaTools.ffprobePath } : {}) }) + '\n');
       });

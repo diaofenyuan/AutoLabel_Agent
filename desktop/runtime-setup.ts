@@ -119,7 +119,7 @@ export class RuntimeSetup {
 
   /** 依赖装完后的实测：版本对不上就当作没装好，不含糊过去。 */
   private async verify(environment: string): Promise<void> {
-    const script = 'import json,importlib.metadata as m;print(json.dumps({n:m.version(n) for n in ["torch","torchvision","ultralytics"]}))';
+    const script = 'import json,importlib.metadata as m;print(json.dumps({n:m.version(n) for n in ["torch","torchvision","ultralytics","clip"]}))';
     const result = await run(path.join(environment, 'Scripts', 'python.exe'), ['-c', script], { timeoutMs: VERIFY_TIMEOUT_MS, env: { PYTHONIOENCODING: 'utf-8' } });
     const line = result.stdout.split('\n').map(item => item.trim()).find(item => item.startsWith('{'));
     if (result.code !== 0 || !line) throw new DesktopError('RUNTIME_SETUP_VERIFY_FAILED', '依赖装完后无法导入，环境不完整。请重试；若反复失败，请展开下方输出了解细节。');

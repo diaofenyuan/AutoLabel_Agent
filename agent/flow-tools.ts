@@ -28,6 +28,9 @@ const stepParameters = {
   local: { modelId: nullableString, modelVersion: number(1, 2147483647), device: { type: ['string', 'null'], pattern: '^(cpu|0|[1-9][0-9]{0,2})$' },
     classMap: { type: ['array', 'null'], maxItems: 10000, description: '逐一列出模型全部类别；忽略类别也须明确设 projectClassId 为 null。',
       items: schema({ modelClassId: { type: 'string', pattern: '^(0|[1-9][0-9]*)$', maxLength: 32 }, projectClassId: nullableString }) },
+    // 开放词汇模型的类别就是这份文本列表，classMap 的键是它的下标（0 起）。
+    textClasses: { type: ['array', 'null'], minItems: 1, maxItems: 200, uniqueItems: true, description: '开放词汇模型的文本类别名，顺序即类别号（0 起）；仅开放词汇模型可用。',
+      items: { type: 'string', minLength: 1, maxLength: 100 } },
     confidence: { type: ['number', 'null'], minimum: 0, maximum: 1 }, iou: { type: ['number', 'null'], minimum: 0, maximum: 1 },
     imageSize: number(32, 4096), maxDetections: number(1, 10000), timeoutMs: number(1000, 600000),
     reuseEnabled: { ...nullableBoolean, description: '是否复用匹配的历史本地输入结果；null 使用引擎默认 true。' },
@@ -154,8 +157,15 @@ async function localParameters(value: Record<string, unknown>, env: ToolEnvironm
       return [classId, to === null ? null : id(to, '项目类别')];
     }));
   }
-  if (requireReady && (!result.modelId || !result.modelVersion || result.classMap == null))
-    throw new AgentError('LOCAL_MODEL_REQUIRED', '请先选择已登记模型的固定版本并填写完整类别映射');
+  if (value.textClasses != null) {
+    if (!Array.isArray(value.textClasses) || !value.textClasses.length || value.textClasses.length > 200) throw new AgentError('INVALID_ARGUMENT', '文本类别必须为 1 至 200 条的列表');
+    const names = value.textClasses.map(raw => String(raw).trim());
+    if (names.some(name => !name || name.length > 100)) throw new AgentError('INVALID_ARGUMENT', '文本类别不能为空或超过 100 字符');
+    if (new Set(names).size !== names.length) throw new AgentError('INVALID_ARGUMENT', '文本类别不能重复');
+    result.textClasses = names;
+  }
+  if (requireReady && (!result.modelId || !result.modelVersion || !result.classMap))
+    throw new AgentError('LOCAL_MODEL_REQUIRED', '请先选择已登记模型的固定版本并填写完整类别映射（开放词汇模型请同时给出 textClasses）');
   if (historical && result.modelId && result.modelVersion == null)
     throw new AgentError('LOCAL_MODEL_VERSION_REQUIRED', '历史流程缺少固定本地模型版本，请在流程编辑器处理');
   const project = result.modelId || result.classMap != null ? await currentProject(env) : undefined;
@@ -176,7 +186,11 @@ async function localParameters(value: Record<string, unknown>, env: ToolEnvironm
         throw new AgentError('LOCAL_MODEL_NOT_LOADED', '请在设置 · 软件 AI 配置里加载所选固定版本并读取完整类别');
       if (slot?.classes && result.classMap != null) {
         const mapping = object(result.classMap);
-        if (slot.classes.length !== Object.keys(mapping).length || slot.classes.some(entry => !Object.hasOwn(mapping, entry.id)))
+        // 开放词汇的类别由 textClasses 决定（下标即类别号），固定类别表模型才比对载入时的类别表。
+        const expected = registered.openVocabulary
+          ? Object.keys((result.textClasses as string[] | undefined) ?? [])
+          : (slot.classes as Array<{ id: string }>).map(entry => entry.id);
+        if (expected.length !== Object.keys(mapping).length || !expected.every(key => Object.hasOwn(mapping, key)))
           throw new AgentError('CLASS_MAP_INCOMPLETE', '模型每个类别都须明确映射，忽略类别请设置 null');
       }
     }

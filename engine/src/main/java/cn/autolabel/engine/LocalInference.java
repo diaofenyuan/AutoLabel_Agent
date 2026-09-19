@@ -18,6 +18,8 @@ import java.util.function.BooleanSupplier;
 final class LocalInference implements AutoCloseable {
     private static final int PROTOCOL=1,REQUEST_LIMIT=1024*1024,RESPONSE_LIMIT=32*1024*1024,LOG_LIMIT=256*1024;
     private final Path python,script;
+    /** 开放词汇的两个目录：词表缓存与 CLIP 编码器。为空表示未配置，worker 侧按「没有缓存/没有编码器」处理。 */
+    private final String vocabularyCache,textEncoder;
     private final BooleanSupplier cancelledByOwner;
     private final Object gate=new Object();
     private final byte[] logs=new byte[LOG_LIMIT];
@@ -44,8 +46,9 @@ final class LocalInference implements AutoCloseable {
         Session(Process process,long generation,String workerHash){this.process=process;this.generation=generation;this.workerHash=workerHash;}
     }
 
-    LocalInference(Path pythonExe,Path workerScript){this(pythonExe,workerScript,()->false);}
-    LocalInference(Path pythonExe,Path workerScript,BooleanSupplier cancelled){python=pythonExe.toAbsolutePath().normalize();script=workerScript.toAbsolutePath().normalize();cancelledByOwner=cancelled;}
+    LocalInference(Path pythonExe,Path workerScript){this(pythonExe,workerScript,()->false,null,null);}
+    LocalInference(Path pythonExe,Path workerScript,BooleanSupplier cancelled){this(pythonExe,workerScript,cancelled,null,null);}
+    LocalInference(Path pythonExe,Path workerScript,BooleanSupplier cancelled,String vocabularyCache,String textEncoder){python=pythonExe.toAbsolutePath().normalize();script=workerScript.toAbsolutePath().normalize();cancelledByOwner=cancelled;this.vocabularyCache=vocabularyCache;this.textEncoder=textEncoder;}
 
     JsonObject probe(long timeoutMs){
         Operation operation=begin(Json.id(),timeoutMs);
@@ -62,8 +65,12 @@ final class LocalInference implements AutoCloseable {
             String task=Json.required(parameters,"taskType"),device=Json.str(parameters,"device","cpu");
             if(!Annotations.TYPES.contains(task))throw error(400,"task_invalid","不支持该本地标注任务。");
             if(!device.matches("cpu|[0-9]{1,3}"))throw error(400,"device_invalid","设备应为 cpu 或单个 GPU 编号。");
-            JsonObject result=call(operation,"load",Json.obj("modelPath",path.toString(),"expectedModelHash",expected,"taskType",task,"device",device),null);
+            boolean openVocabulary=Json.bool(parameters,"openVocabulary",false);
+            JsonObject loadPayload=Json.obj("modelPath",path.toString(),"expectedModelHash",expected,"taskType",task,"device",device);
+            if(openVocabulary)loadPayload.addProperty("openVocabulary",true);
+            JsonObject result=call(operation,"load",loadPayload,null);
             if(!strictBoolean(result,"loaded")||!task.equals(Json.str(result,"taskType",""))||!expected.equals(Json.str(result,"modelHash",""))||!device.equals(requestedDevice(result)))throw error(502,"local_result_invalid","模型载入响应与固定配置不一致。");
+            if(openVocabulary&&!strictBoolean(result,"openVocabulary"))throw error(502,"local_result_invalid","开放词汇模型载入响应缺少标记。");
             verifyModel(path,expected);classes(result);check(operation);
             JsonObject snapshot=result.deepCopy();snapshot.remove("device");snapshot.addProperty("requestedDevice",device);snapshot.add("observedBackend",observed(result));snapshot.addProperty("modelPath",path.toString());snapshot.addProperty("protocolVersion",PROTOCOL);
             synchronized(gate){check(operation);snapshot.addProperty("workerHash",session.workerHash);loaded=snapshot.deepCopy();return snapshot;}
@@ -83,8 +90,10 @@ final class LocalInference implements AutoCloseable {
             if(request.has("expectedInputHash")&&!inputHash.equals(hashField(request,"expectedInputHash")))throw error(409,"local_input_changed","输入图片与运行快照不一致。");
             if(request.has("expectedModelHash")&&!modelHash.equals(hashField(request,"expectedModelHash")))throw error(409,"local_model_changed","已载入模型与运行快照不一致。");
             Path modelPath=Path.of(Json.required(model,"modelPath")),imagePath=file(request,"imagePath",Set.of("png","jpg","jpeg"));verifyModel(modelPath,modelHash);verifyImage(imagePath,inputHash,frozenAsset);
-            JsonObject mapping=mapping(request,model,frozenProject),payload=Json.obj("assetId",assetId,"imagePath",imagePath.toString(),"expectedInputHash",inputHash,"classMap",mapping,
+            JsonArray textClasses=request.has("textClasses")?Json.array(request,"textClasses").deepCopy():null;
+            JsonObject mapping=mapping(request,model,frozenProject,textClasses),payload=Json.obj("assetId",assetId,"imagePath",imagePath.toString(),"expectedInputHash",inputHash,"classMap",mapping,
                 "confidence",number(request,"confidence",0.25,0,1,false),"iou",number(request,"iou",0.7,0,1,false),"imageSize",number(request,"imageSize",640,32,4096,true),"maxDetections",number(request,"maxDetections",300,1,10000,true));
+            if(textClasses!=null)payload.add("textClasses",textClasses);
             JsonArray pointNames=Json.array(Json.object(frozenProject,"settings"),"keypointNames");
             if(task.equals("pose")){
                 Set<String> names=new HashSet<>();for(JsonElement name:pointNames)if(!name.isJsonPrimitive()||!name.getAsJsonPrimitive().isString()||name.getAsString().isBlank()||!names.add(name.getAsString()))throw error(400,"keypoints_required","关键点名称必须非空且不重复。");
@@ -154,6 +163,9 @@ final class LocalInference implements AutoCloseable {
                 Set<String> allowed=Set.of("SYSTEMROOT","WINDIR","PATH","PATHEXT","TEMP","TMP","USERPROFILE","USERNAME","USER","LOGNAME","LOCALAPPDATA","APPDATA","PROGRAMDATA","PROGRAMFILES","PROGRAMFILES(X86)","COMMONPROGRAMFILES","COMSPEC","NUMBER_OF_PROCESSORS","PROCESSOR_ARCHITECTURE","CUDA_PATH","CUDA_VISIBLE_DEVICES");
                 builder.environment().keySet().removeIf(key->!allowed.contains(key.toUpperCase(Locale.ROOT))&&!key.toUpperCase(Locale.ROOT).startsWith("CUDA_PATH_V"));
                 builder.environment().put("AUTOLABEL_PARENT_PID",Long.toString(ProcessHandle.current().pid()));builder.environment().put("YOLO_AUTOINSTALL","false");builder.environment().put("YOLO_VERBOSE","false");builder.environment().put("PYTHONUTF8","1");
+                // 开放词汇只读这两个目录：缓存命中就零下载，编码器不在就直接报错，绝不让 worker 自己找地方下。
+                if(vocabularyCache!=null)builder.environment().put("AUTOLABEL_VOCAB_CACHE",vocabularyCache);
+                if(textEncoder!=null)builder.environment().put("AUTOLABEL_TEXT_ENCODER",textEncoder);
                 String workerHash=Media.hash(script);current=new Session(builder.start(),++generation,workerHash);session=current;operation.generation=current.generation;loaded=null;runtime=null;
             }catch(Exception failure){throw error(503,"inference_environment_missing","Python 无法启动，请检查所选解释器与可选依赖环境。");}
         }
@@ -245,8 +257,17 @@ final class LocalInference implements AutoCloseable {
     private static Set<String> classes(JsonObject model){
         if(!model.has("classes")||!model.get("classes").isJsonArray())throw error(502,"local_result_invalid","模型未返回类别表。");Set<String> ids=new HashSet<>();for(JsonElement element:Json.array(model,"classes")){JsonObject item=element.getAsJsonObject();String id=Json.required(item,"id");if(!id.matches("[0-9]{1,9}")||!ids.add(id))throw error(502,"local_result_invalid","模型类别编号无效或重复。");Json.required(item,"name");}if(ids.isEmpty())throw error(502,"local_result_invalid","模型类别表为空。");return ids;
     }
-    private static JsonObject mapping(JsonObject request,JsonObject model,JsonObject project){
-        if(!request.has("classMap")||!request.get("classMap").isJsonObject())throw error(400,"class_map_required","请明确配置模型类别到项目类别的完整映射。");JsonObject mapping=request.getAsJsonObject("classMap");Set<String> modelClasses=classes(model),targets=new HashSet<>();for(JsonElement element:Json.array(project,"classes"))targets.add(Json.required(element.getAsJsonObject(),"id"));
+    private static JsonObject mapping(JsonObject request,JsonObject model,JsonObject project,JsonArray textClasses){
+        if(!request.has("classMap")||!request.get("classMap").isJsonObject())throw error(400,"class_map_required","请明确配置模型类别到项目类别的完整映射。");JsonObject mapping=request.getAsJsonObject("classMap");Set<String> modelClasses,targets=new HashSet<>();
+        if(Json.bool(model,"openVocabulary",false)){
+            // 开放词汇：类别就是本次请求的 textClasses，下标即类别号，不依赖载入时的自带类别表。
+            if(textClasses==null||textClasses.isEmpty())throw error(400,"vocabulary_required","开放词汇模型必须在本次请求中给出类别名。");
+            modelClasses=new HashSet<>();for(int index=0;index<textClasses.size();index++)modelClasses.add(Integer.toString(index));
+        }else{
+            if(textClasses!=null)throw error(400,"vocabulary_unsupported","该模型自带固定类别表，不能临时改类别名。");
+            modelClasses=classes(model);
+        }
+        for(JsonElement element:Json.array(project,"classes"))targets.add(Json.required(element.getAsJsonObject(),"id"));
         if(!mapping.keySet().equals(modelClasses))throw error(400,"class_map_incomplete","模型每个类别都必须映射，忽略类别请明确设为 null。");
         for(JsonElement target:mapping.asMap().values())if(!target.isJsonNull()&&(!target.isJsonPrimitive()||!target.getAsJsonPrimitive().isString()||!targets.contains(target.getAsString())))throw error(400,"class_map_invalid","类别映射引用了不存在的项目类别。");return mapping.deepCopy();
     }

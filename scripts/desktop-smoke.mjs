@@ -267,7 +267,7 @@ if (flagIs('--runtime-setup')) {
   // 真实装完一轮后必须检测到依赖版本，且记录里的版本与固定版本一致。
   const prepared = byCheck.get('prepare-installs-usable-environment');
   assert.ok(prepared?.ultralyticsVersion && prepared?.torchVersion, `一键准备后没有检测到依赖版本：${JSON.stringify(prepared)}`);
-  assert.deepEqual(prepared?.dependencies?.map(item => item.name), ['torch', 'torchvision', 'ultralytics']);
+  assert.deepEqual(prepared?.dependencies?.map(item => item.name), ['torch', 'torchvision', 'ultralytics', 'clip']);
   console.log(`一键准备本地推理环境检查通过：${output}`); process.exit(0);
 }
 if (flagIs('--runtime-setup-offline')) {
