@@ -1,5 +1,5 @@
 import type { Annotation, Project, TaskType } from './protocol.ts';
-import type { BudgetCost, RequestBudget } from './budget.ts';
+import type { RequestBudget, SchemeCost } from './budget.ts';
 
 export type EvaluationSource = 'existing_run_snapshot' | 'fresh_run_snapshot';
 
@@ -33,9 +33,13 @@ export interface QualityMetrics {
 }
 export interface EvaluationScheme {
   id: string; runId: string; name: string; model: string; providerId: string;
+  /** 这次方案是本机模型还是云端接口跑出来的；本机行不产生调用费，成本按 0 计。 */
+  runKind?: 'api' | 'local';
   source: EvaluationSource; sourceRunStatus: string; sourceRunCreatedAt: string;
   requestsUsed: number; usageScope: 'whole_source_run'; capturedAt: string; metrics: QualityMetrics;
-  cost?: BudgetCost;
+  /** 本机推理的实测单张平均耗时（毫秒）；云端方案没有这个字段。 */
+  averageImageMs?: number; timedSamples?: number; device?: string;
+  cost?: SchemeCost;
 }
 export interface Evaluation {
   id: string; projectId: string; setVersionId: string; status: 'completed';
@@ -56,6 +60,10 @@ export interface FreshComparison {
 export interface EvaluationResult {
   id: string; evaluationId: string; schemeId: string; runId: string; assetId: string; name: string;
   truthVersion: number; candidateVersion: number | null;
+  /** 候选版本来自哪条链路：api=云端接口，local=本机模型。 */
+  candidateSource?: 'api' | 'local';
+  /** 本机推理这张图的实测耗时（毫秒）。 */
+  imageElapsedMs?: number;
   status: 'scorable' | 'failed' | 'unknown' | 'pending' | 'missing' | 'invalid';
   mediaUrl: string; truthAnnotations: Annotation[]; predictionAnnotations: Annotation[] | null;
   errorCode?: string | null; metrics?: QualityMetrics;

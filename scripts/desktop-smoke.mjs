@@ -302,6 +302,14 @@ if (flagIs('--local-annotate')) {
   // 未命中内置词表且没有编码器：必须明确失败，绝不联网。
   assert.equal(byCheck.get('novel-term-needs-encoder')?.code, 'vocabulary_encoder_missing');
   assert.ok(byCheck.get('candidate-boxes-visible')?.objects > 0, '画布上没有出现候选框');
+  // 省钱对比：本机候选能进评测表，并且成本一栏写 ¥0（而不是「币种未定」）。
+  const compared = byCheck.get('local-run-enters-comparison');
+  assert.ok(compared?.scorable >= 1, `本机候选没有进入评测：${JSON.stringify(compared)}`);
+  assert.equal(compared?.cost?.basis, 'local_machine');
+  assert.ok(compared?.averageImageMs > 0, '本机方案缺少实测单张耗时');
+  assert.equal(compared?.candidateSource, 'local');
+  const costRow = byCheck.get('cost-row-shows-free');
+  assert.equal(costRow?.hasZero, true, `成本行没有显示 ¥0：${JSON.stringify(costRow)}`);
   console.log(`对话内选择内置模型并一键标注（零 API Key）检查通过：${output}`); process.exit(0);
 }
 if (composerOnly) {

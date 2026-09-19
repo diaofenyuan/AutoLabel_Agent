@@ -14,7 +14,7 @@ export const toolNames: Record<string, string> = {
   preflight_comparison: '预检评测比较', compare_results: '建立评测比较', inspect_comparison: '查询比较进度', finish_comparison: '固定比较指标',
   inspect_budget: '读取请求预算', estimate_cost: '估算费用', list_review_items: '读取待复核问题',
   list_model_configurations: '读取接口与模型', preflight_evaluation_rerun: '预检评测重跑', run_evaluation: '提交评测重跑',
-  list_local_models: '读取本地模型', get_local_runtime: '读取本地运行环境',
+  list_local_models: '读取本地模型', get_local_runtime: '读取本地运行环境', list_builtin_models: '读取内置模型库',
   create_video_job: '提交抽帧任务', get_media_job: '查看媒体任务', get_video_frames: '读取视频帧',
   preview_image_screening: '预览筛选', get_screening_result: '查看筛选结果',
   list_media_jobs: '读取媒体任务',

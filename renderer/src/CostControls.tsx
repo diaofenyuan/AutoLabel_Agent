@@ -2,13 +2,16 @@ import { useEffect, useState } from 'react';
 import { request, errorMessage } from './bridge';
 import { Button, Field } from './ui';
 
-import type { ModelPricing, BudgetCost, RequestBudget } from '../../shared/budget';
+import type { ModelPricing, BudgetCost, RequestBudget, SchemeCost } from '../../shared/budget';
+import { isLocalCost } from '../../shared/budget';
 export type Pricing = ModelPricing;
 export type CostSummary = BudgetCost;
 export type BudgetState = RequestBudget;
 export const costReasons:Record<string,string>={pricing_model_mismatch:'单价对应的模型不一致',pricing_incomplete:'单价未完整配置',usage_missing:'接口未返回用量',cached_usage_missing:'未提供缓存输入用量',usage_invalid_or_incomplete:'用量缺失或无效',usage_category_unpriced:'存在未定价的用量类别'};
 export function money(value:number,currency:string|null){return `${currency??'币种未定'} ${value.toLocaleString('zh-CN',{maximumFractionDigits:9})}`;}
-export function CostView({cost}:{cost?:CostSummary}){
+export function CostView({cost}:{cost?:SchemeCost}){
+  // 本机运行没有调用费：直接说「不产生调用费」，不要说成「金额未知」——那是两件事。
+  if(isLocalCost(cost))return <div className="cost-summary local-cost"><strong>本机运行 · ¥0</strong><p>不经过任何接口，没有调用费；耗时见指标表的「成本 / 单张耗时」一行。</p></div>;
   return <div className="cost-summary">{cost?<><strong>已知金额 {money(cost.knownCost,cost.currency)}</strong><p>已计价 {cost.knownCalls} 次 · 金额未知 {cost.unknownCalls} 次 · 仍在途 {cost.inFlightCalls} 次</p><small>{cost.limit===null?'未设费用停止阈值':`已知金额停止阈值 ${money(cost.limit,cost.currency)}`}。金额依据接口报告用量与手动单价计算，服务商账单未核验。未知用量不按免费处理；在途请求可能使最终费用超过阈值。</small></>:<p className="muted">费用未记录，金额未知。</p>}</div>;
 }
 export function BudgetView({budget}:{budget:BudgetState}){return <><p>共享请求：已发送 {budget.requestsUsed} / {budget.maxRequests??'未设上限'} · 剩余 {budget.remaining??'未设上限'}</p><CostView cost={budget.cost}/></>;}

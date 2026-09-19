@@ -13,6 +13,7 @@ interface ProjectRow { id: string; name: string; classes: Array<{ id: string; na
 interface AssetRow { id: string; version: number; status: string; annotations: Array<{ id: string; classId: string; type: string }> }
 interface RunRow { id: string; status: string; kind: string; statistics: Record<string, number>; samples: Array<{ resultId: string; assetId: string; status: string; errorCode?: string; message?: string }> }
 interface ResultRow { source: string; status: string; annotations: Array<{ classId: string; type: string }>; rawResult: Record<string, unknown> | null; provenance: Record<string, unknown> }
+interface EvaluationSchemeRow { id: string; runKind?: string; averageImageMs?: number; cost?: { basis?: string }; metrics: { scorableSamples?: number } }
 
 /**
  * 对话内一键标注（零配置路径）验收。
@@ -23,7 +24,8 @@ interface ResultRow { source: string; status: string; annotations: Array<{ class
  * 3. 未命中项目类别的类别名在预览里明确显示为「忽略」，不静默丢弃（deriveClassMap 的硬要求）；
  * 4. 用启用出来的内置 YOLO-World 走完真实标注：候选框出现、素材状态为 candidate、零 API 请求；
  * 5. 已有人工标注的素材被 protectedHuman 保护：候选只落版本，当前状态与版本都不动；
- * 6. 反例：类别名不在内置词表且本机没有 CLIP 编码器时，必须报 vocabulary_encoder_missing，绝不联网。
+ * 6. 反例：类别名不在内置词表且本机没有 CLIP 编码器时，必须报 vocabulary_encoder_missing，绝不联网；
+ * 7. 省钱对比：本机跑出的候选能进同一张指标对比表，成本一栏写 ¥0，并带实测单张耗时。
  *
  * 前置：本机 Python 3.10–3.12 且已装 ultralytics（AUTOLABEL_TEST_PYTHON 可指定），
  * 以及 `.qa/models/bus.jpg` 夹具（不入库，缺了会在导入那一步明确失败）。
@@ -228,6 +230,66 @@ export async function checkDesktopLocalAnnotate(window: BrowserWindow, output: s
     assert.ok(rejected, `未命中内置词表且没有编码器时必须报 vocabulary_encoder_missing，实际：${json(novelFinished.samples)}`);
     assert.equal(novelFinished.statistics.requestsUsed, 0, '失败的本机推理也不应产生 API 请求');
     checks.push({ check: 'novel-term-needs-encoder', code: rejected.errorCode, message: rejected.message });
+
+    // ===== 5d. 省钱对比：本机运行与云端运行进同一张指标表，本地行必须显示 ¥0 =====
+    // 用示例项目自带的那张图 + 5a 的本机运行：它已经被既有质量验收证明与评测链路兼容。
+    const setName = `本机对比-${Date.now()}`;
+    const set = await api<{ id: string; revision: number }>('evaluationSet.create', { projectId: project.id, name: setName, assetIds: [assetId] });
+    const truth = await api<{ truthVersion: number }>('evaluationSet.saveTruth', { setId: set.id, assetId, baseTruthVersion: 0, source: 'manual',
+      annotations: [
+        // 示例图是 1586×992，两个真值框都在图内：一个与预置标注位置一致，另一个刻意错开。
+        { id: 'truth-car-1', classId: 'vehicle', type: 'detect', bbox: { x: 221, y: 483, width: 537, height: 350 } },
+        { id: 'truth-car-2', classId: 'vehicle', type: 'detect', bbox: { x: 60, y: 60, width: 120, height: 120 } },
+      ] });
+    assert.ok(truth.truthVersion >= 1, '独立答案应已保存');
+    // 保存真值会推进评测集 revision：发布必须用当前这一份，不能用创建时那份。
+    const current = await api<{ revision: number }>('evaluationSet.get', { setId: set.id });
+    // 发布返回的就是新版本对象本身（它的 id 即 setVersionId），不是「带 publishedVersions 的评测集」。
+    const published = await api<{ id: string; version: number; truthObjectCount: number }>('evaluationSet.publish', { setId: set.id, baseSetRevision: current.revision });
+    assert.equal(published.truthObjectCount, 2, '发布版本应冻结两条独立真值');
+    const setVersionId = published.id;
+
+    const parameters = { setVersionId, schemes: [{ runId: guardedRun.id, name: '内置模型方案' }], match: { iouThreshold: 0.5, poseNormalization: 'image_diagonal' as const } };
+    // 先预检：本机方案的输入一致性（项目、模板、素材内容）必须过，否则评测只会给一个笼统的 mismatch。
+    const preflight = await api<{ canEvaluate: boolean; issues: Array<{ code: string; message: string; assetId?: string | null }>; pairedComparableSamples: number }>('evaluation.preflight', parameters);
+    if (!preflight.canEvaluate) {
+      // 只报「不一致」没法定位：把两侧真正参与比对的原始字段摊出来。
+      const frozen = await api<{ assets: Array<Record<string, unknown>> }>('evaluationSet.get', { setId: set.id, versionId: setVersionId });
+      const live = await api<{ metadata?: Record<string, unknown>; contentHash?: string }>('asset.get', { assetId });
+      assert.equal(preflight.canEvaluate, true, `本机方案预检未通过：${json(preflight.issues)}\n冻结素材：${json(frozen.assets[0])}\n当前素材元数据：${json(live.metadata)}\n当前素材哈希：${live.contentHash}`);
+    }
+    const evaluation = await api<{ id: string; schemes: EvaluationSchemeRow[]; pairedComparableSamples: number }>('evaluation.create', parameters);
+    const scheme = evaluation.schemes[0];
+    // 关键断言：本机跑出来的候选能被评测读到（这正是「只取 source='api'」卡住的地方）。
+    assert.ok(scheme.metrics.scorableSamples >= 1, `本机候选应能参与评测，实际可计算 ${scheme.metrics.scorableSamples} 张`);
+    assert.equal(scheme.runKind, 'local', `方案应标明本机运行，实际：${scheme.runKind}`);
+    assert.equal(scheme.cost?.basis, 'local_machine', `本机方案的成本口径应是本机推理，实际：${json(scheme.cost)}`);
+    assert.ok(scheme.averageImageMs && scheme.averageImageMs > 0, `本机方案应带实测单张耗时，实际：${scheme.averageImageMs}`);
+    const results = await api<{ items: Array<{ candidateSource?: string; imageElapsedMs?: number }> }>('evaluation.results', { evaluationId: evaluation.id, limit: 10 });
+    assert.equal(results.items[0].candidateSource, 'local', '逐图结果应标明候选来自本机');
+    checks.push({ check: 'local-run-enters-comparison', evaluationId: evaluation.id, scorable: scheme.metrics.scorableSamples,
+      paired: evaluation.pairedComparableSamples, cost: scheme.cost, averageImageMs: scheme.averageImageMs, candidateSource: results.items[0].candidateSource });
+
+    // 表里那一行：本机方案必须写 ¥0，而不是「币种未定 0」。
+    await js(`[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='任务').click()`);
+    await wait(`!!document.querySelector('.task-kind-tabs')`, 30000);
+    await button('评测与复核');
+    await wait(`!!document.querySelector('.quality-body')`);
+    await button('已有运行对比', "document.querySelector('.quality-body')");
+    // 「已保存评测」是评测面板内部那一组标签里的按钮，用全局限定按文字找，别去猜是第几个 .tabs。
+    await button('已保存评测');
+    // 等那一份评测真的出现在下拉里（列表是异步读回来的），再选中它——不按元素顺序猜。
+    await wait(`[...document.querySelectorAll('.quality-body select')].some(node=>[...node.options].some(option=>option.value===${json(evaluation.id)}))`, 30000);
+    await js(`(()=>{const select=[...document.querySelectorAll('.quality-body select')].find(node=>[...node.options].some(option=>option.value===${json(evaluation.id)}));` +
+      `select.value=${json(evaluation.id)};select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await wait(`!!document.querySelector('.quality-table')`, 30000);
+    const tableText = await js<string>(`document.querySelector('.quality-table').innerText`);
+    assert.ok(tableText.includes('成本 / 单张耗时'), `指标表应有成本与耗时行：${tableText.slice(0, 200)}`);
+    assert.ok(tableText.includes('¥0'), `本机方案的这一格必须写 ¥0：${tableText.slice(0, 400)}`);
+    assert.ok(!tableText.includes('币种未定'), '本机方案不能被显示成「币种未定」的未知金额');
+    checks.push({ check: 'cost-row-shows-free', header: tableText.split('\n').slice(0, 3).join(' / '), hasZero: tableText.includes('¥0'),
+      costRow: tableText.split('\n').find(line => line.includes('ms/张')) ?? '' });
+    await writeFile(output.replace(/\.json$/, '-cost.png'), (await window.webContents.capturePage()).toPNG());
     await writeFile(output, json({ checks, passed: true, mode: 'local-annotate-ui', newApiRequests: 0 }));
   } catch (error) {
     await writeFile(output.replace(/\.json$/, '-failure.png'), (await window.webContents.capturePage()).toPNG());

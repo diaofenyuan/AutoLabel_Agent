@@ -14,10 +14,19 @@ final class Evaluations {
             for(JsonElement entry:inputs){JsonObject input=entry.getAsJsonObject();String rid=Json.required(input,"runId");if(!seen.add(rid))throw new ApiError(400,"evaluation_schemes_invalid","同一运行不能重复作为比较方案。");JsonObject run=Store.document(c,"runs",rid),snapshot=Json.object(run,"snapshot"),template=Json.object(snapshot,"project");
                 if(!Json.required(run,"projectId").equals(Json.required(version,"projectId"))||!compatible(template,Json.object(version,"template")))issues.add(issue("evaluation_input_mismatch",rid,null,"运行与评测集的项目、类别或点位模板不一致。"));
                 for(JsonElement ref:Json.array(snapshot,"references")){JsonObject reference=EvaluationSets.input(ref.getAsJsonObject());for(JsonElement item:Json.array(version,"assets"))if(overlap(reference,item.getAsJsonObject())){issues.add(issue("evaluation_reference_overlap",rid,Json.required(item.getAsJsonObject(),"assetId"),"运行参考与评测素材存在相同内容或已知同源关系。"));break;}}
-                JsonObject scheme=Json.obj("id",rid,"runId",rid,"name",Json.str(input,"name",Json.str(run,"name",rid)),"model",run.get("model"),"providerId",run.get("providerId"),"source","existing_run_snapshot","sourceRunStatus",run.get("status"),"sourceRunCreatedAt",run.get("createdAt"),"prompt",run.get("prompt"),"configurationSnapshot",snapshot,"requestsUsed",run.get("requestsUsed"),"usageScope","whole_source_run","capturedAt",Json.now(),"cost",Costs.runView(c,rid));schemes.add(scheme);Set<String> scorable=new HashSet<>();
+                // 候选版本既可能是云端 API 跑出来的，也可能是本机模型跑出来的：两者用同一套指标口径比较，
+                // 来源随结果透出，避免把「本机 0 元跑出的候选」误读成云端结果。
+                JsonObject scheme=Json.obj("id",rid,"runId",rid,"name",Json.str(input,"name",Json.str(run,"name",rid)),"model",run.get("model"),"providerId",run.get("providerId"),
+                    "runKind",Json.str(run,"kind","api"),"source","existing_run_snapshot","sourceRunStatus",run.get("status"),"sourceRunCreatedAt",run.get("createdAt"),
+                    "prompt",run.get("prompt"),"configurationSnapshot",snapshot,"requestsUsed",run.get("requestsUsed"),"usageScope","whole_source_run","capturedAt",Json.now(),"cost",Costs.runView(c,rid));
+                if(Json.str(run,"kind","api").equals("local")){
+                    // 本机推理不产生调用费：明确写成 free，而不是留一个 currency 为空的「未知」让人以为没配价格。
+                    scheme.add("cost",Json.obj("status","free","currency",null,"amount",0,"basis","local_machine","knownCalls",0,"unknownCalls",0,"inFlightCalls",0));
+                    scheme.addProperty("device",Json.str(run,"device","cpu"));
+                }schemes.add(scheme);Set<String> scorable=new HashSet<>();List<Double> imageMillis=new ArrayList<>();
                 for(JsonElement item:Json.array(version,"assets")){JsonObject asset=item.getAsJsonObject();String aid=Json.required(asset,"assetId");JsonObject row=Store.one(c,"SELECT * FROM samples WHERE run_id=? AND asset_id=?",rid,aid);JsonObject result=Json.obj("id",Json.id(),"schemeId",rid,"runId",rid,"assetId",aid,"name",asset.get("name"),"truthVersion",Json.object(asset,"truth").get("truthVersion"),"candidateVersion",null,"status","missing","mediaUrl","autolabel-media://evaluation/"+Json.required(version,"id")+"/"+aid,"truthAnnotations",Json.object(asset,"truth").get("annotations"),"predictionAnnotations",null);
                     if(row!=null){JsonObject data=Json.parse(row.get("data").getAsString()),actual=Json.object(data,"asset");if(!sameInput(asset,EvaluationSets.input(actual)))issues.add(issue("evaluation_input_mismatch",rid,aid,"运行素材内容或规范化版本与固定评测集不一致。"));String status=Json.required(row,"status");result.addProperty("status",status.equals("failed")?"failed":status.equals("unknown")?"unknown":status.equals("cancelled")?"missing":status.equals("succeeded")?"invalid":"pending");result.add("errorCode",data.get("errorCode"));
-                        if(status.equals("succeeded")){int candidate=Json.integer(data,"candidateVersion",-1);JsonObject saved=Store.one(c,"SELECT data FROM versions WHERE asset_id=? AND version=? AND source='api'",aid,candidate);if(saved!=null){JsonObject value=Json.parse(saved.get("data").getAsString());result.addProperty("candidateVersion",candidate);if(!rid.equals(Json.str(value,"runId",""))||!sameInput(asset,EvaluationSets.input(value)))issues.add(issue("evaluation_input_mismatch",rid,aid,"候选版本与运行标识或固定素材内容不一致。"));else{
+                        if(status.equals("succeeded")){int candidate=Json.integer(data,"candidateVersion",-1);JsonObject saved=Store.one(c,"SELECT data,source FROM versions WHERE asset_id=? AND version=? AND source IN ('api','local')",aid,candidate);if(saved!=null){JsonObject value=Json.parse(saved.get("data").getAsString());result.addProperty("candidateVersion",candidate);result.addProperty("candidateSource",Json.required(saved,"source"));if(!rid.equals(Json.str(value,"runId",""))||!sameInput(asset,EvaluationSets.input(value)))issues.add(issue("evaluation_input_mismatch",rid,aid,"候选版本与运行标识或固定素材内容不一致。"));else{
                                     try{
                                         // 缺失字段不能使用空数组默认值，否则损坏的候选会被误计为成功无目标。
                                         if(!value.has("annotations")||!value.get("annotations").isJsonArray())throw new ApiError(422,"candidate_annotations_missing","候选版本缺少有效的 annotations 数组。");
@@ -25,8 +34,19 @@ final class Evaluations {
                                     }catch(ApiError failure){result.addProperty("status","invalid");result.addProperty("errorCode",failure.code);}}}
                             else result.addProperty("errorCode","candidate_version_missing");}
                         JsonArray attempts=new JsonArray();for(JsonObject a:Store.rows(c,"SELECT id,status,json_extract(data,'$.usage') AS usage,json_extract(data,'$.sentAt') AS sentAt,json_extract(data,'$.completedAt') AS completedAt FROM attempts WHERE run_id=? AND sample_id=? ORDER BY rowid",rid,Json.required(row,"id"))){String usage=Json.str(a,"usage",null);a.add("usage",usage==null?JsonNull.INSTANCE:JsonParser.parseString(usage));attempts.add(a);}result.add("attempts",attempts);
+                        // 本机推理没有 attempts，耗时在 worker 返回的 provenance 里；取出来才能在对比表里和云端并排比。
+                        if(Json.str(run,"kind","api").equals("local")&&data.has("resultId")){
+                            JsonObject timed=Store.one(c,"SELECT json_extract(data,'$.provenance.elapsedMs') AS elapsedMs FROM input_results WHERE id=?",Json.required(data,"resultId"));
+                            if(timed!=null&&timed.get("elapsedMs")!=null&&!timed.get("elapsedMs").isJsonNull()){
+                                double elapsed=Json.number(timed,"elapsedMs",-1);
+                                if(elapsed>=0){result.addProperty("imageElapsedMs",elapsed);imageMillis.add(elapsed);}
+                            }
+                        }
                     }samples.add(result);
-                }if(paired==null)paired=new HashSet<>(scorable);else paired.retainAll(scorable);
+                }
+                // 单张耗时取本机实测的平均值；没有可计时的样本时不写这个字段，界面据此显示「未记录」而不是 0 ms。
+                if(!imageMillis.isEmpty()){double total=0;for(double value:imageMillis)total+=value;scheme.addProperty("averageImageMs",Math.round(total/imageMillis.size()*100)/100.0);scheme.addProperty("timedSamples",imageMillis.size());}
+                if(paired==null)paired=new HashSet<>(scorable);else paired.retainAll(scorable);
             }return new Prepared(version,match,schemes,samples,issues,paired==null?0:paired.size());});
     }
     static JsonObject issue(String code,String run,String asset,String message){return Json.obj("severity","error","code",code,"runId",run,"assetId",asset,"message",message);}
