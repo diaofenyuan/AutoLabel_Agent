@@ -37,6 +37,38 @@ export default function ProjectOverview() {
   const [actions, setActions] = useState<Asset | null>(null);
   /** 「将选中版本载入草稿」的落点：载入后直接打开这张图的画布，历史版本才有实际去处。 */
   const [loadInto, setLoadInto] = useState<{ assetId: string; annotations: Annotation[] } | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  /**
+   * 接受候选并确认：勾选多张，一次把当前结果写成正式标注并确认。
+   *
+   * 逐张点开「编辑标注 → 保存并确认」在视频帧这种批量场景里不成立（23 帧就是 46 次点击），
+   * 但确认的语义不能放宽：已经人工确认过的素材跳过，版本冲突或草稿在身的由引擎拒绝并计入跳过，
+   * 不做任何静默覆盖；「无目标」的帧会明说，确认后记成已确认无目标。
+   */
+  async function confirmSelectedCandidates() {
+    const targets = assets.filter(asset => selectedAssetIds.includes(asset.id)).filter(asset => asset.status !== 'confirmed');
+    if (!targets.length) { notify('选中的素材要么已经确认过，要么没有可确认的结果。', true); return; }
+    const empty = targets.filter(asset => !asset.annotations.length).length;
+    const warning = `将把选中的 ${targets.length} 张当前结果写成正式标注并确认${empty ? `，其中 ${empty} 张是「模型没有找到目标」，确认后记为已确认无目标` : ''}。`
+      + '人工确认过的素材不会被改动；有未保存草稿或版本已变化的会跳过并单独报出。';
+    if (!window.confirm(warning)) return;
+    setConfirming(true);
+    let confirmed = 0;
+    const skipped: string[] = [];
+    try {
+      for (const asset of targets) {
+        try {
+          const saved = await request<Asset>('annotation.save', { assetId: asset.id, baseVersion: asset.version, annotations: asset.annotations, confirm: true });
+          setAssets(list => list.map(item => item.id === saved.id ? saved : item));
+          confirmed++;
+        } catch (e) { skipped.push(`${asset.name}：${errorMessage(e)}`); }
+      }
+      notify(confirmed
+        ? `已确认 ${confirmed} 张${skipped.length ? `；${skipped.length} 张跳过（${skipped.slice(0, 2).join('；')}${skipped.length > 2 ? ' 等' : ''}）` : ''}。`
+        : `没有确认任何素材：${skipped.slice(0, 2).join('；')}`, !confirmed);
+    } finally { setConfirming(false); }
+  }
 
   const loadAssets = useCallback(async (offset: number) => {
     if (!project) return;
@@ -139,6 +171,8 @@ export default function ProjectOverview() {
             <div className="actions">
               <Button disabled={!loading && !assets.length} onClick={selectLoaded}>全选已加载</Button>
               <Button disabled={!selectedCount} onClick={() => setSelectedAssetIds([])}>清空选择</Button>
+              {/* 批量确认：视频帧这类批量场景不用再逐张点开确认；语义与单张「保存并确认」一致。 */}
+              <Button busy={confirming} disabled={!selectedCount || confirming} onClick={() => void confirmSelectedCandidates()}>接受候选并确认</Button>
               {/* 勾完之后下一步就是到对话里说要标什么，直接把人送到那里，并在提示里说明范围该怎么选。 */}
               <Button className="primary" disabled={!selectedCount} onClick={() => void openProject(project)
                 .then(() => notify('已进入对话：把助手处理范围改成「已勾选（跨页）」，再说明要标注的目标。'))

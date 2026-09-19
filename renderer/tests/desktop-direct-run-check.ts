@@ -186,6 +186,25 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     assert.ok(cropped, '带区域的运行必须只发送裁剪后的副本');
     checks.push({ check: 'direct-run-sends-region-copy', croppedWidth: cropped!.payloadActual?.width, croppedHeight: cropped!.payloadActual?.height });
 
+    // ===== 批量确认：勾选多张一次确认，已确认的跳过、人工内容不被改写 =====
+    await openSelectedProjectOverview(driver);
+    await js(`(()=>{window.confirm=()=>true;return true;})()`);
+    await js(`([...document.querySelectorAll('.asset-selection button')].find(node=>node.innerText.trim()==='全选已加载')).click()`);
+    await waitFor(`[...document.querySelectorAll('.asset-selection button')].some(node=>node.innerText.trim()==='接受候选并确认'&&!node.disabled)`);
+    await js(`([...document.querySelectorAll('.asset-selection button')].find(node=>node.innerText.trim()==='接受候选并确认')).click()`);
+    await waitFor(`window.autoLabel.request('asset.list',{projectId:${json(projectId)},limit:100}).then(list=>list.items.every(item=>item.status==='confirmed'))`, 25000);
+    const confirmedAssets = await api<{ items: Array<{ status: string; annotations?: unknown[]; version: number }> }>('asset.list', { projectId, limit: 100 });
+    const beforeConfirm = assets.items[0].annotations?.length ?? 0;
+    assert.ok(confirmedAssets.items.every(item => item.status === 'confirmed'), `批量确认后应全部为已确认，实际：${json(confirmedAssets.items.map(item => item.status))}`);
+    assert.equal(confirmedAssets.items[0].annotations?.length ?? 0, beforeConfirm, '确认不应改动人工框的数量');
+    // 再点一次：已确认的素材要跳过，而不是重复写一遍版本。
+    const versionBefore = confirmedAssets.items[0].version;
+    await js(`([...document.querySelectorAll('.asset-selection button')].find(node=>node.innerText.trim()==='接受候选并确认')).click()`);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    const afterRepeat = await api<{ items: Array<{ version: number }> }>('asset.list', { projectId, limit: 100 });
+    assert.equal(afterRepeat.items[0].version, versionBefore, '已经确认过的素材不应再写新版本');
+    checks.push({ check: 'bulk-confirm-candidates', statuses: confirmedAssets.items.map(item => item.status), objects: beforeConfirm, repeatVersion: afterRepeat.items[0].version });
+
     // ===== 没有类别时必须说清原因并禁用开始 =====
     // 用界面内的「新建项目」建一个空项目：不碰系统文件框，落点更稳。
     await js(`[...document.querySelectorAll('.sidebar-scroll .nav-item')].find(b=>b.innerText.trim()==='新对话').click()`);
