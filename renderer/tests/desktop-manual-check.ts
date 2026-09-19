@@ -27,6 +27,7 @@ import { checkDesktopSidebar } from './desktop-sidebar-check';
 import { checkDesktopModelLibrary } from './desktop-model-library-check';
 import { checkDesktopRuntimeSetup } from './desktop-runtime-setup-check';
 import { checkDesktopLocalAnnotate } from './desktop-local-annotate-check';
+import { checkDesktopBuiltinFive } from './desktop-builtin-five-check';
 import { gotoNav, openExampleCanvas } from './desktop-navigation';
 
 /**
@@ -42,6 +43,7 @@ const DISPATCH: Array<[string, (window: BrowserWindow, output: string) => Promis
   ['AUTOLABEL_MODEL_LIBRARY_UI_CHECK', checkDesktopModelLibrary],
   ['AUTOLABEL_RUNTIME_SETUP_UI_CHECK', checkDesktopRuntimeSetup],
   ['AUTOLABEL_LOCAL_ANNOTATE_UI_CHECK', checkDesktopLocalAnnotate],
+  ['AUTOLABEL_BUILTIN_FIVE_UI_CHECK', checkDesktopBuiltinFive],
   ['AUTOLABEL_ERROR_ACTION_UI_CHECK', checkDesktopErrorAction],
   ['AUTOLABEL_SIDEBAR_UI_CHECK', checkDesktopSidebar],
   ['AUTOLABEL_DIRECTORY_IMPORT_UI_CHECK', checkDesktopDirectoryImport],

@@ -13,6 +13,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/engine-build.ps1 -Te
 
 当前实现：项目与 JPEG/PNG 导入、EXIF 1～8、sRGB/PNG ICC/透明背景、正式标注及独立草稿、乐观版本校验、五类固定副本导出、接口配置和能力测试、Chat Completions/Responses、Java 有界标注队列、共享并发与频率、请求预算、有限重试、事务事件与 SSE、暂停取消及未知状态恢复。默认街景是合成图片及不完整的预置人工示范框。
 
+## 内置模型与本机推理（已实现）
+
+本机模型走的是同一条标注链路，只是把「云端接口」换成「本机 Python worker」：
+
+- **登记**：`local.model.register` 接受可选 `origin`(user/builtin/downloaded)、`catalogId` 与 `openVocabulary`，
+  来源只作记录，执行授权仍按文件路径与 sha256 核对；`publicModel` 不下发路径。
+- **授权**：`local.model.authorize` 与服务启动参数 `localModelAuthorizations` 都只认「路径 + 摘要」，
+  换数据作用域不继承授权；文件在执行前后各核对一次，改动即 `local_model_changed`。
+- **开放词汇**：`openVocabulary` 的模型按 YOLO-World 载入；`local.run.create` 的 `textClasses` 决定类别，
+  classMap 的键就是 textClasses 的下标（0 起），固定类别表模型带 `textClasses` 会被拒（`vocabulary_unsupported`）。
+  worker 只读引擎下发的两个目录：`localVocabularyCacheDir` 与 `localTextEncoderDir`——
+  命中缓存或内置词表零下载，都没有就报 `vocabulary_encoder_missing`，不会自己联网。
+- **省钱对比**：评测取候选版本时同时接受 `source='api'` 与 `source='local'`，结果带 `candidateSource`；
+  本机方案的成本写成 `{status:'free', basis:'local_machine', amount:0}`，并附实测 `averageImageMs`。
+  本机运行不进入请求预算，也不产生 attempts。
+
 补充接口：
 
 - `annotation.history {assetId}` 返回最近 100 个版本；`annotation.draft.discard {assetId}` 丢弃独立草稿。

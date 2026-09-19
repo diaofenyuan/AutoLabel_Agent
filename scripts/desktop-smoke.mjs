@@ -43,6 +43,7 @@ const MANUAL_CHECKS = [
   // 断网场景：镜像指向不可达主机，验证「装不上时明确失败且不动原有配置」。
   { flag: '--runtime-setup-offline', label: 'runtime-setup-offline-check', env: 'AUTOLABEL_RUNTIME_SETUP_UI_CHECK', extraEnv: { AUTOLABEL_RUNTIME_SETUP_OFFLINE: '1', AUTOLABEL_RUNTIME_INDEX_URL: 'https://127.0.0.1:9/simple' } },
   { flag: '--local-annotate', label: 'local-annotate-check', env: 'AUTOLABEL_LOCAL_ANNOTATE_UI_CHECK' },
+  { flag: '--builtin-five', label: 'builtin-five-check', env: 'AUTOLABEL_BUILTIN_FIVE_UI_CHECK' },
   { flag: '--error-action', label: 'error-action-check', env: 'AUTOLABEL_ERROR_ACTION_UI_CHECK' },
   { flag: '--sidebar-ui', label: 'sidebar-check', env: 'AUTOLABEL_SIDEBAR_UI_CHECK' },
   { flag: '--provider-delete', label: 'provider-delete-check', env: 'AUTOLABEL_PROVIDER_DELETE_UI_CHECK' },
@@ -126,7 +127,7 @@ return new Promise((resolve, reject) => {
   // 一键准备要真实下载并安装 PyTorch（几百 MB），它的两个场景自带更长的上限，否则会被误杀。
   // 真实推理与真实下载都要更长的上限，否则会被默认 60 秒误杀。
   const slowSetup = manual?.flag === '--runtime-setup' || manual?.flag === '--runtime-setup-offline';
-  const slowInference = manual?.flag === '--local-annotate' || manual?.flag === '--five';
+  const slowInference = manual?.flag === '--local-annotate' || manual?.flag === '--five' || manual?.flag === '--builtin-five';
   const timeoutMs = Number(process.env.AUTOLABEL_SMOKE_TIMEOUT ?? (slowSetup ? 1800000 : slowInference ? 900000 : 60000));
   const timeout = setTimeout(() => { child.kill(); reject(new Error('桌面验收超时')); }, timeoutMs);
   child.once('error', error => { clearTimeout(timeout); reject(error); });
@@ -311,6 +312,19 @@ if (flagIs('--local-annotate')) {
   const costRow = byCheck.get('cost-row-shows-free');
   assert.equal(costRow?.hasZero, true, `成本行没有显示 ¥0：${JSON.stringify(costRow)}`);
   console.log(`对话内选择内置模型并一键标注（零 API Key）检查通过：${output}`); process.exit(0);
+}
+if (flagIs('--builtin-five')) {
+  assert.equal(result.passed, true); assert.equal(result.mode, 'builtin-five-ui');
+  assert.equal(result.newApiRequests, 0, '五类内置模型路径不得产生 API 请求');
+  // 五类任务各一条，且每条都真的跑出了对应类型的候选。
+  assert.equal(result.checks.length, 5, `五类任务应各有一条记录：${JSON.stringify(result.checks)}`);
+  for (const entry of result.checks) {
+    assert.equal(entry.assetStatus, 'candidate', `${entry.task} 的候选没有写入素材`);
+    // 图片里确实有目标的类别必须框到；没有的（旋转框/分割的自带类别）允许 0，如实记录即可。
+    if (entry.expectObjects) assert.ok(entry.annotations >= 1, `${entry.task} 没有产出标注`);
+    if (entry.annotations > 0) assert.ok(entry.annotationTypes.includes(entry.task), `${entry.task} 的标注类型不对：${JSON.stringify(entry.annotationTypes)}`);
+  }
+  console.log(`五类任务内置模型标注检查通过：${output}`); process.exit(0);
 }
 if (composerOnly) {
   assert.equal(result.passed, true);
