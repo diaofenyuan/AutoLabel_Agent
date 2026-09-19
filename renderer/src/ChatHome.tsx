@@ -9,6 +9,7 @@ import ModelPicker from './ModelPicker';
 import FlowPicker from './FlowPicker';
 import LocalModelPicker from './LocalModelPicker';
 import ProjectResolveDialog, { type ProjectChoice } from './ProjectResolveDialog';
+import { applyProjectDraft } from './projectSetup';
 import { VideoPickList, useChatFileDrop, importAttachments } from './chatDrop';
 import { VIDEO_EXTENSION_LABEL } from '../../shared/mediaFormats';
 import { directoryName, folderName, sameNameProject } from './projectNaming';
@@ -59,6 +60,8 @@ export default function ChatHome() {
       const existing = sameNameProject(projects, action.name);
       target = existing ?? await request<Project>('project.create', { name: action.name.slice(0, 80), taskType: 'detect' });
       if (existing) notify(`已接入同名项目「${existing.name}」。`);
+      // 同名接入时沿用项目原有模板，只有新建的项目才写入这次填的类别与标注要求。
+      else target = await applyProjectDraft(target.id, action.classes, action.rules) ?? target;
     }
     await refreshProjects();
     await projectPrompt.run(target);

@@ -9,6 +9,7 @@ import { TaskCards } from './TaskCards';
 import ModelPicker from './ModelPicker';
 import FlowPicker from './FlowPicker';
 import LocalModelPicker from './LocalModelPicker';
+import ClassPicker from './ClassPicker';
 import { DropOverlay } from './fileDrop';
 import { VideoPickList, useChatFileDrop, importAttachments } from './chatDrop';
 import { RichText } from './chatText';
@@ -48,7 +49,7 @@ function ChatMessage({ message, previousUser, onEdit, onRetry, onCopy }: { messa
  * 消息落盘由主进程负责，这里只在首次打开某条会话时读回一次，之后以内存状态为准。
  */
 export default function ChatPanel({ compact = false, assetId, sessionId }: { compact?: boolean; assetId?: string; sessionId?: string }) {
-  const { project, prefs, notify, navigate, startProjectChat, chats, setChats, assets, assetTotal, selectedAssetIds, assetsLoading, providers, events, activeSessionId, refreshChatSessions, refreshAssets, setMediaJob, setMediaTaskId, pendingVideoImports, setPendingVideoImports } = useApp();
+  const { project, setProject, prefs, notify, navigate, startProjectChat, chats, setChats, assets, assetTotal, selectedAssetIds, assetsLoading, providers, events, activeSessionId, refreshChatSessions, refreshAssets, setMediaJob, setMediaTaskId, pendingVideoImports, setPendingVideoImports } = useApp();
   const chatConfig=resolveConfiguration('chat',prefs,project?.settings);
   const annotationConfig=resolveConfiguration('annotation',prefs,project?.settings);
   // 拖入文件只在会话页生效；工作台里的紧凑面板由工作台自己管导入。
@@ -255,6 +256,8 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
                 <FlowPicker disabled={session.busy} onPick={prompt => { update({ input: prompt }); document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus(); }} />
                 {/* 本机模型入口：与云端接口并列，选的是当前项目的类别做映射预览。 */}
                 <LocalModelPicker project={project} disabled={session.busy} onPick={prompt => { update({ input: prompt }); document.querySelector<HTMLTextAreaElement>('.chat-panel textarea')?.focus(); }} />
+                {/* 类别放在输入卡这一层：不经过对话模型也能看清、能改「要标什么」。 */}
+                {project && <ClassPicker project={project} disabled={session.busy} onUpdated={setProject} />}
                 <button title={session.exportDir || '授权本次对话的导出目录'} onClick={() => void getBridge().then(b => b.chooseFiles({ kind: 'directory' })).then(paths => { if (paths[0]) update({ exportDir: paths[0] }); }).catch(e => notify(errorMessage(e), true))}><FolderOpen size={12} />{session.exportDir ? '已选目录' : '导出目录'}</button>
                 {project && <ReferencePicker project={project} value={session.referenceResources ?? []} onChange={referenceResources => update({ referenceResources })} disabled={session.busy} />}
               </div>

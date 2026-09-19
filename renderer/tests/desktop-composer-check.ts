@@ -81,6 +81,35 @@ export async function checkDesktopComposer(window: BrowserWindow, output: string
     assert.ok(send.width >= 56, `发送按钮太窄，主操作读不出来：实际 ${send.width}px`);
     checks.push({ check: 'composer-send-button-legible', ...send });
 
+    // ===== 类别在输入卡这一层就能看和改：不必先经过对话模型 =====
+    // 以前类别只能靠助手调 set_project_classes 建，或进项目概览的模板对话框改；
+    // 对话模型不可用时整条链断在这里，所以这里断言的是「输入卡里就能建类别并写清口径」。
+    await js(`document.querySelector('.chat-panel .class-picker .model-picker-trigger').click()`);
+    await waitFor(`!!document.querySelector('.class-picker .picker-popover')`);
+    const classesBefore = await js<{ label: string; chips: string[] }>(`(()=>({label:document.querySelector('.chat-panel .class-picker .truncate')?.innerText.trim() ?? '',
+      chips:[...document.querySelectorAll('.class-picker .class-chip span')].map(node=>node.innerText.trim())}))()`);
+    const setValue = (selector: string, value: string) => js(`(()=>{const e=document.querySelector(${json(selector)});const proto=e instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto,'value').set.call(e,${json(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await setValue('.class-picker-add input', '手办');
+    await js(`([...document.querySelectorAll('.class-picker-add button')].find(node=>node.innerText.trim()==='添加')).click()`);
+    await waitFor(`[...document.querySelectorAll('.class-picker .class-chip span')].some(node=>node.innerText.trim()==='手办')`);
+    const rules = '只要画面中间那个小手办，不要框旁边的大号毛绒公仔。';
+    await setValue('.class-picker textarea', rules);
+    await js(`([...document.querySelectorAll('.class-picker .picker-foot button')].find(node=>node.innerText.trim()==='保存')).click()`);
+    await waitFor(`!document.querySelector('.class-picker .picker-popover')`);
+    const savedLabel = await js<string>(`document.querySelector('.chat-panel .class-picker .truncate')?.innerText.trim() ?? ''`);
+    assert.ok(savedLabel.includes('手办'), `保存后输入卡上的类别应含手办，实际：${savedLabel}`);
+    // 重新打开读回：类别与标注要求都要真的落到项目上，而不是只改了弹层里的副本。
+    await js(`document.querySelector('.chat-panel .class-picker .model-picker-trigger').click()`);
+    await waitFor(`!!document.querySelector('.class-picker .picker-popover')`);
+    const reopened = await js<{ chips: string[]; rules: string }>(`(()=>({chips:[...document.querySelectorAll('.class-picker .class-chip span')].map(node=>node.innerText.trim()),
+      rules:document.querySelector('.class-picker textarea')?.value ?? ''}))()`);
+    assert.ok(reopened.chips.includes('手办'), `重新打开应仍在，实际：${json(reopened.chips)}`);
+    assert.equal(reopened.rules, rules, '标注要求应写回项目的标注规则里');
+    checks.push({ check: 'class-picker-manages-classes', classesBefore, savedLabel, reopened });
+    await js(`document.querySelector('.chat-panel .class-picker .model-picker-trigger').click()`);
+    await waitFor(`!document.querySelector('.class-picker .picker-popover')`);
+
     // 输入卡是本次改动的主战场，等页面稳定后留一张图核对排版。
     await waitFor(`getComputedStyle(document.querySelector('.chat-panel .composer')).opacity==='1'`);
     await writeFile(output.replace(/\.json$/, '.png'), (await window.webContents.capturePage()).toPNG());

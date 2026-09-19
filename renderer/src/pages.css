@@ -51,6 +51,20 @@
 .picker-effort-options button.selected{background:var(--selected);border-color:color-mix(in srgb,var(--accent) 26%,transparent);color:var(--text)}
 .picker-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px 2px;border-top:1px solid var(--border);margin-top:6px;flex-shrink:0}
 .picker-foot .text-button{font-size:10px}
+/* 类别选择器：与模型选择器同一种紧凑触发 + 弹层；列表内部滚动，标题与底栏不动。 */
+.class-picker{position:relative;min-width:0}
+.class-picker-head{display:flex;flex-direction:column;gap:2px;padding:4px 8px 2px;flex-shrink:0}
+.class-picker-head small{font-size:10px}
+.class-picker-list{display:flex;flex-wrap:wrap;gap:5px;padding:7px 8px 2px;max-height:26vh;overflow-y:auto;flex-shrink:0}
+.class-chip{display:flex;align-items:center;gap:2px;max-width:100%;padding:3px 3px 3px 9px;border-radius:999px;background:var(--surface);font-size:11px}
+.class-chip span{min-width:0}
+.class-chip button{display:flex;align-items:center;padding:3px;border:0;border-radius:999px;background:none;color:var(--soft)}
+.class-chip button:hover:not(:disabled){background:var(--hover);color:var(--text)}
+.class-picker-add{display:flex;align-items:center;gap:6px;padding:8px}
+.class-picker-add input{flex:1;min-width:0}
+.class-picker .field{padding:0 8px}
+.class-picker .notice{margin:6px 8px 0}
+.class-picker .picker-foot{padding:6px 8px 2px}
 /* 设置页模型组合框：输入框 + 下拉候选，复用 picker 弹层与列表样式；down/up 决定展开方向。 */
 .combo{position:relative;min-width:0}
 .combo-input{display:flex;align-items:center;border:1px solid var(--border);border-radius:8px;background:var(--bg);transition:border-color .14s,box-shadow .14s}

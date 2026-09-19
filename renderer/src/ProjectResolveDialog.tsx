@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Button, Field, Modal } from './ui';
 import { errorMessage } from './bridge';
+import { MAX_CLASSES, MAX_CLASS_NAME, parseClassNames } from './projectSetup';
 import type { Project } from './types';
 
-export type ProjectChoice = { mode: 'create'; name: string } | { mode: 'existing'; project: Project };
+export type ProjectChoice = { mode: 'create'; name: string; classes: string[]; rules: string } | { mode: 'existing'; project: Project };
 
 /**
  * 项目归属确认框：新建项目必须由用户命名，不再从描述或文件夹名自动取名。
@@ -26,6 +27,9 @@ export default function ProjectResolveDialog({ title, confirmLabel, projects, su
   const preferred = matched ?? remembered;
   const [mode, setMode] = useState<'create' | 'existing'>(allowExisting && preferred ? 'existing' : 'create');
   const [name, setName] = useState(suggestName);
+  // 「要标什么」在新建时就能填：以前只能等对话模型去建类别，模型不可用或没凭证时整条链就断在这里。
+  const [classText, setClassText] = useState('');
+  const [rules, setRules] = useState('');
   const [selectedId, setSelectedId] = useState(preferred?.id ?? projects[0]?.id ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -36,7 +40,11 @@ export default function ProjectResolveDialog({ title, confirmLabel, projects, su
     try {
       if (mode === 'create') {
         if (!name.trim()) throw new Error('请填写项目名称。');
-        await onConfirm({ mode: 'create', name: name.trim() });
+        const classes = parseClassNames(classText);
+        if (classes.length > MAX_CLASSES) throw new Error(`类别最多 ${MAX_CLASSES} 个，请先删掉一些。`);
+        const tooLong = classes.find(item => item.length > MAX_CLASS_NAME);
+        if (tooLong) throw new Error(`类别「${tooLong}」太长，请控制在 ${MAX_CLASS_NAME} 个字以内。`);
+        await onConfirm({ mode: 'create', name: name.trim(), classes, rules: rules.trim() });
       } else {
         const project = projects.find(item => item.id === selectedId);
         if (!project) throw new Error('请选择一个项目。');
@@ -52,8 +60,12 @@ export default function ProjectResolveDialog({ title, confirmLabel, projects, su
         <button type="button" className={mode === 'existing' ? 'selected' : ''} disabled={!projects.length} onClick={() => setMode('existing')}>选择已有项目</button>
       </div>}
       {mode === 'create'
-        ? <Field label="项目名称"><input autoFocus maxLength={80} value={name} onChange={e => setName(e.target.value)} placeholder="给项目起个名字"
+        ? <><Field label="项目名称"><input autoFocus maxLength={80} value={name} onChange={e => setName(e.target.value)} placeholder="给项目起个名字"
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (name.trim()) void confirm(); } }} /></Field>
+          <Field label="要标注的类别（可留空）" hint="用「、」或逗号分隔，最多 20 个；也可以进项目后再改。类别名就是导出时标签里的名字。">
+            <input maxLength={1200} value={classText} onChange={e => setClassText(e.target.value)} placeholder="例如：手办、车辆、行人" /></Field>
+          <Field label="标注要求（可留空）" hint="会随项目的标注规则发给模型。写清区分口径最有效。">
+            <textarea rows={2} maxLength={32000} value={rules} onChange={e => setRules(e.target.value)} placeholder="例如：只要画面中间那个粉色头发的小手办，不要框旁边的大号毛绒公仔。" /></Field></>
         : <Field label="选择项目"><select value={selectedId} onChange={e => setSelectedId(e.target.value)}>
             {projects.map(project => <option key={project.id} value={project.id}>{project.name}（{project.assetCount} 张素材）</option>)}
           </select></Field>}

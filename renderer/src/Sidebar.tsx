@@ -10,6 +10,7 @@ import { useActiveTaskCount } from './activeTasks';
 import { errorMessage, isDemo, request } from './bridge';
 import { Button, Field, IconButton, Modal } from './ui';
 import ProjectResolveDialog from './ProjectResolveDialog';
+import { applyProjectDraft } from './projectSetup';
 
 /**
  * 会话挂在项目下，导航里不再有「新建对话」：新对话由欢迎页按描述建项目后开始。
@@ -204,7 +205,9 @@ export function Sidebar() {
       onClose={() => setCreatingProject(false)}
       onConfirm={async choice => {
         if (choice.mode !== 'create') throw new Error('请填写项目名称。');
-        const created = await request<Project>('project.create', { name: choice.name.slice(0, 80), taskType: 'detect' });
+        let created = await request<Project>('project.create', { name: choice.name.slice(0, 80), taskType: 'detect' });
+        // 新建时就落下的类别与标注要求，与「类别与点位模板」走同一条通路。
+        created = await applyProjectDraft(created.id, choice.classes, choice.rules) ?? created;
         await refreshProjects();
         // 建好直接进入该项目的新对话，不发首条消息，交给用户继续描述。
         await openProject(created);

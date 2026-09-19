@@ -61,6 +61,34 @@ export async function checkDesktopProjectIdentity(window: BrowserWindow, output:
     assert.ok(created, `导入应建立名为 ${batch} 的项目`);
     const first = await api<{ total: number }>('asset.list', { projectId: created!.id, limit: 100 });
     assert.equal(first.total, 2, '首次导入应有 2 张素材');
+
+    // ===== 新建项目时直接填类别与标注要求 =====
+    // 这条链原先要在对话里让助手调 set_project_classes 才能建类别，对话模型不可用时整条断掉；
+    // 现在断言的是「命名 + 类别 + 标注要求」一次落盘，且写进的是项目自己的模板。
+    await js(`document.querySelector('.sidebar-group-more[aria-label="新建项目"]').click()`);
+    await waitFor(`!!${dialog}&&${dialog}.innerText.includes('要标注的类别')`);
+    // 名字不与本次批次同名：后面「侧栏项目行显示素材数」按批次名匹配，不能被这个草稿项目抢先命中。
+    const draftName = `手办草稿-${Date.now()}`;
+    const draftRules = '只要画面中间那个小手办，不要框旁边的大号毛绒公仔。';
+    const setField = (selector: string, value: string) => js(`(()=>{const e=${dialog}.querySelector(${json(selector)});const proto=e instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto,'value').set.call(e,${json(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await setField('input[placeholder="给项目起个名字"]', draftName);
+    await setField('input[placeholder="例如：手办、车辆、行人"]', '手办、公仔');
+    await setField('textarea', draftRules);
+    await button('创建项目', dialog);
+    // 等确认框自己关掉：此时「建项目 → 落类别 → 写标注规则 → 取回项目」这一串才算跑完。
+    // 只等 .chat-panel textarea 会立刻命中上一个项目的会话页，拿到的就是还没写完的数据。
+    await waitFor(`!document.querySelector('dialog[open]')`);
+    await waitFor(`[...document.querySelectorAll('.sidebar-project')].some(g=>g.innerText.includes(${json(draftName)}))`);
+    const drafts = await api<Array<{ id: string; name: string }>>('project.list');
+    const draft = drafts.find(item => item.name === draftName);
+    assert.ok(draft, `新建项目应出现在列表里，实际：${json(drafts.map(item => item.name))}`);
+    const drafted = await api<{ classes: Array<{ name: string }>; settings: Record<string, unknown> }>('project.open', { projectId: draft!.id });
+    assert.deepEqual(drafted.classes.map(item => item.name), ['手办', '公仔'], `确认框里填的类别应落到项目上，实际：${json(drafted.classes)}`);
+    assert.equal(drafted.settings.rules, draftRules, `确认框里填的标注要求应写进项目的标注规则；实际 settings=${json(drafted.settings)}，弹框提示=${await js<string>(`${dialog}?.querySelector('.inline-error')?.innerText ?? '(无)'`)}`);
+    checks.push({ check: 'new-project-takes-classes-and-rules', classes: drafted.classes.map(item => item.name), rules: drafted.settings.rules });
+    await toWelcome();
+    // 项目计数在下面「重复导入不再新建项目」里比较，必须在这批新建动作之后再取。
     const countBefore = await projectCount();
 
     // 侧栏项目行必须带素材数：同名项目靠它区分。
