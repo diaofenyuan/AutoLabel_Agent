@@ -38,6 +38,7 @@ const MANUAL_CHECKS = [
   { flag: '--ai-preset', label: 'ai-preset-check', env: 'AUTOLABEL_AI_PRESET_UI_CHECK' },
   { flag: '--composer-ui', label: 'composer-check', env: 'AUTOLABEL_COMPOSER_UI_CHECK' },
   { flag: '--settings-ui', label: 'settings-check', env: 'AUTOLABEL_SETTINGS_UI_CHECK' },
+  { flag: '--model-library', label: 'model-library-check', env: 'AUTOLABEL_MODEL_LIBRARY_UI_CHECK' },
   { flag: '--error-action', label: 'error-action-check', env: 'AUTOLABEL_ERROR_ACTION_UI_CHECK' },
   { flag: '--sidebar-ui', label: 'sidebar-check', env: 'AUTOLABEL_SIDEBAR_UI_CHECK' },
   { flag: '--provider-delete', label: 'provider-delete-check', env: 'AUTOLABEL_PROVIDER_DELETE_UI_CHECK' },
@@ -226,6 +227,24 @@ if (settingsUiOnly) {
   // 收起时不停在藏起来的区块上。
   assert.ok(['外观', '软件 AI 配置', '存储位置', '本地推理', '快捷键', '应用更新'].includes(String(byCheck.get('settings-layered-tabs')?.afterCollapse)));
   console.log(`设置页分层检查通过：${output}`); process.exit(0);
+}
+if (flagIs('--model-library')) {
+  assert.equal(result.passed, true); assert.equal(result.mode, 'model-library-ui');
+  const byCheck = new Map(result.checks.map(check => [check.check, check]));
+  // 界面列出的模型必须与主进程的目录逐条对上；随安装包提供的必须真的就绪。
+  const catalog = byCheck.get('catalog-matches-desktop');
+  assert.ok(catalog?.models >= 9, `模型库应列出目录里的全部模型，实际 ${catalog?.models}`);
+  const bundled = byCheck.get('bundled-ready-and-reasons-shown');
+  assert.ok(bundled?.bundled >= 6, `内置模型数量不对：${JSON.stringify(bundled)}`);
+  assert.equal(bundled?.bundledReady, bundled?.bundled, `随安装包提供的权重没就绪：${JSON.stringify(bundled)}`);
+  // 未就绪的按需下载模型必须各自给出原因，不能只显示一个灰条目。
+  for (const entry of byCheck.get('not-ready-explain')?.entries ?? []) {
+    assert.ok(String(entry.hint ?? '').trim(), `${entry.id} 未就绪却没有给出原因`);
+  }
+  // 内容不对的文件必须当场显示成「需要修复」，验证完必须清干净。
+  assert.equal(byCheck.get('broken-file-reported')?.badge, '需要修复');
+  assert.equal(byCheck.get('broken-file-cleaned')?.model, byCheck.get('broken-file-reported')?.model);
+  console.log(`模型库列表、状态与损坏识别检查通过：${output}`); process.exit(0);
 }
 if (composerOnly) {
   assert.equal(result.passed, true);

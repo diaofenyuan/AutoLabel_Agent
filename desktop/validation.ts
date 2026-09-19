@@ -439,6 +439,10 @@ const schemas: Record<string, z.ZodType> = {
   'credential.set': z.strictObject({ providerId: id, key: z.string().min(1).max(16384) }),
   'credential.get': z.strictObject({ providerId: id }),
   'local.runtime.configure': z.strictObject({ pythonPath: z.string().min(1).max(32767).nullable() }),
+  // 模型库只接受目录里登记过的标识；下载源、文件名校验与哈希都来自共享目录，界面无法指定任意地址。
+  'model.library.status': empty,
+  'model.library.install': z.strictObject({ catalogId: id }),
+  'model.library.remove': z.strictObject({ catalogId: id }),
   'local.runtime.get': empty,
   'local.runtime.probe': empty,
   'local.model.get': z.strictObject({ modelId: id, modelVersion: localModelVersion.optional() }),

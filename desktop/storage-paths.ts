@@ -183,6 +183,20 @@ export async function validateTrainingRoot(target: unknown, dataDirectory: strin
   return resolved;
 }
 
+export const MODELS_SUBDIRECTORY = 'models';
+
+/**
+ * 模型库落点：`<存储根>/models`，与训练产物目录同一套规则——绝对路径、非磁盘根、可建可写，
+ * 且不得与当前数据目录互相包含。下载的权重会有几百 MB，删错一层就会连带业务数据。
+ */
+export async function ensureModelsRoot(root: string, dataDirectory: string): Promise<string> {
+  const resolved = assertUsablePath(path.join(root, MODELS_SUBDIRECTORY), '模型库目录');
+  const base = path.resolve(dataDirectory).toLowerCase(), candidate = resolved.toLowerCase();
+  if (candidate === base || base.startsWith(candidate + path.sep)) throw new DesktopError('MODEL_ROOT_CONFLICT', '模型库目录不能是当前数据目录，也不能包含数据目录');
+  await ensureWritable(resolved, '模型库目录');
+  return resolved;
+}
+
 export interface StoragePathUpdate {
   storageRoot?: string | null;
   datasetsRoot?: string | null;

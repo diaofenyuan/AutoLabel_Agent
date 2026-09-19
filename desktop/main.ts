@@ -11,6 +11,7 @@ import { checkDesktopUi, checkDesktopConnection, checkPersistedUiEdit, checkPack
 import { DialogFixtures } from './dialog-fixtures';
 import { CredentialVault } from './vault';
 import { LocalExecutionSettings } from './local-execution';
+import { ModelLibrary } from './model-library';
 import { MediaExecutionSettings } from './media-execution';
 import { VideoTranscoder } from './transcode';
 import { DataStorage, DesktopPreferences, initializeStorageLocation, scopedVaultPath, type StorageLocation } from './storage';
@@ -50,6 +51,13 @@ const DROP_FILE_LIMIT = 500;
 const grants = new PathGrants();
 const localExecution = new LocalExecutionSettings(preferenceStore, grants);
 const mediaExecution = new MediaExecutionSettings(preferenceStore, grants, path.join(app.isPackaged ? process.resourcesPath : path.join(root, 'build'), 'media-tools'));
+// 模型库：内置权重随安装包（resources/models），下载的权重落在 <存储根>/models。
+// 两条来源共用同一份目录与 sha256 核对，界面拿到的只有状态，拿不到绝对路径。
+const modelLibrary = new ModelLibrary({
+  builtinRoot: () => path.join(app.isPackaged ? process.resourcesPath : path.join(root, 'build'), 'models'),
+  storageRoot: () => storagePaths?.root,
+  dataDirectory: () => dataDir,
+});
 let vault: CredentialVault;
 let engine: EngineManager;
 // 转码副本只落在系统临时目录：它是「到达抽帧」的一次性中间物，不属于任何项目或数据目录。
@@ -384,6 +392,10 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
     return saved;
   }
   if (validated.command === 'storage.paths.migrate') return storagePathSettings.migrate();
+  // 模型库读写都在主进程完成：下载地址与哈希取自共享目录，渲染层只能指定模型标识。
+  if (validated.command === 'model.library.status') return modelLibrary.status();
+  if (validated.command === 'model.library.install') return modelLibrary.install(payload.catalogId as string);
+  if (validated.command === 'model.library.remove') return modelLibrary.remove(payload.catalogId as string);
   // 训练产物目录与三类业务数据同理：走专用命令，不经过 settings.save 的路径守卫。
   if (validated.command === 'training.root.status') return trainingRootStatus();
   if (validated.command === 'training.root.save') return saveTrainingRoot(payload.path as string | null);

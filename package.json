@@ -40,6 +40,7 @@
     "check:quality-ui": "node scripts/desktop-smoke.mjs --quality",
     "check:local-ui": "node scripts/desktop-smoke.mjs --local",
     "check:storage-ui": "node scripts/desktop-smoke.mjs --storage",
+    "check:model-library-ui": "node scripts/desktop-smoke.mjs --model-library",
     "check:rerun-ui": "node scripts/desktop-smoke.mjs --rerun",
     "check:five-ui": "node scripts/desktop-smoke.mjs --five",
     "check:connection-ui": "node scripts/desktop-smoke.mjs --connection-ui",
@@ -51,8 +52,9 @@
     "test:agent": "npm --prefix agent test",
     "prepare:runtime": "node scripts/desktop-runtime.mjs",
     "prepare:media-tools": "node scripts/desktop-media-tools.mjs",
-    "pack:dir": "npm run build && npm run check:engine-jar && npm run prepare:runtime && npm run prepare:media-tools && electron-builder --win --x64 --dir --config build/electron-builder.cjs",
-    "pack:win": "npm run build && npm run check:engine-jar && npm run prepare:runtime && npm run prepare:media-tools && electron-builder --win nsis --x64 --config build/electron-builder.cjs",
+    "check:models": "node scripts/desktop-models.mjs",
+    "pack:dir": "npm run build && npm run check:engine-jar && npm run prepare:runtime && npm run prepare:media-tools && npm run check:models && electron-builder --win --x64 --dir --config build/electron-builder.cjs",
+    "pack:win": "npm run build && npm run check:engine-jar && npm run prepare:runtime && npm run prepare:media-tools && npm run check:models && electron-builder --win nsis --x64 --config build/electron-builder.cjs",
     "pack:milestone": "npm run build:renderer && npm run build:desktop && npm run prepare:media-tools && node scripts/desktop-pack-milestone.mjs"
   },
   "devDependencies": {
