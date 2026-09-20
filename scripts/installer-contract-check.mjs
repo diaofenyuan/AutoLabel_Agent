@@ -33,6 +33,9 @@ const builderChecks = [
   ['使用多步骤安装器', /oneClick:\s*false/],
   ['创建开始菜单快捷方式', /createStartMenuShortcut:\s*true/],
   ['卸载保留用户数据', /deleteAppDataOnUninstall:\s*false/],
+  // 打包配置本身不在版本库里（build/ 被忽略），所以这条契约必须由检查兜住：
+  // 漏了别名表，安装包里的中文类别名会退化成「需要下载编码器」，而下载了也解决不了。
+  ['内置推理目录带别名表 aliases.json', /to:\s*'inference'[\s\S]{0,200}?vocab\/aliases\.json/],
 ];
 
 for (const [label, pattern] of [...installerChecks, ...builderChecks]) {
