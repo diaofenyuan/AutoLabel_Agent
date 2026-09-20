@@ -370,6 +370,11 @@ if (directRunOnly) {
   assert.ok(byCheck.get('direct-run-sends-region-copy')?.croppedWidth > 0 && byCheck.get('direct-run-sends-region-copy')?.croppedWidth < byCheck.get('direct-run-send-copy-settings')?.plainWidth);
   // 批量确认：勾选多张一次确认；已经确认过的再点一次不会重复写版本。
   assert.ok(Array.isArray(byCheck.get('bulk-confirm-candidates')?.statuses) && byCheck.get('bulk-confirm-candidates')?.statuses.every(status => status === 'confirmed'));
+  // 参考帧：真的作为 role=reference 发出去，且它自己不在本次目标里。
+  const reference = byCheck.get('direct-run-uses-reference-frame');
+  assert.ok(reference?.reference?.assetId, `参考帧没有随请求发出去：${JSON.stringify(reference)}`);
+  assert.equal(reference?.reference?.objects, 1);
+  assert.ok(Array.isArray(reference?.targets) && reference.targets.length === 1 && !reference.targets.includes(reference.reference.assetId));
   console.log(`直达标注（不依赖对话模型）检查通过：${output}`); process.exit(0);
 }
 if (aiPresetOnly) {

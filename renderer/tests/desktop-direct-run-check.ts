@@ -1,9 +1,9 @@
 import type { BrowserWindow } from 'electron';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { openFirstAssetCanvas, openProjectChat, openSelectedProjectOverview } from './desktop-navigation';
+import { gotoWelcome, openFirstAssetCanvas, openProjectChat, openSelectedProjectOverview } from './desktop-navigation';
 
 /**
  * 直达标注验收：不依赖对话模型也能开始标注。
@@ -19,6 +19,8 @@ import { openFirstAssetCanvas, openProjectChat, openSelectedProjectOverview } fr
  */
 export async function checkDesktopDirectRun(window: BrowserWindow, output: string): Promise<void> {
   let calls = 0;
+  // 夹具累计记下每次请求里带的参考帧：参考必须真的作为 role=reference 的示例发出去，而不是被悄悄丢掉。
+  const seenReferences: Array<{ assetId?: string; objects: number }> = [];
   const server = createServer(async (request, response) => {
     let raw = '';
     for await (const part of request) raw += part;
@@ -28,7 +30,11 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     for (const message of body.messages ?? []) {
       for (const part of Array.isArray(message.content) ? message.content : []) {
         if (part?.type !== 'text') continue;
-        try { const parsed = JSON.parse(part.text); if (parsed?.role === 'target') assetId = parsed.assetId; } catch { /* 非 JSON 的文本段忽略 */ }
+        try {
+          const parsed = JSON.parse(part.text);
+          if (parsed?.role === 'target') assetId = parsed.assetId;
+          if (parsed?.role === 'reference') seenReferences.push({ assetId: parsed.assetId, objects: Array.isArray(parsed.annotations) ? parsed.annotations.length : 0 });
+        } catch { /* 非 JSON 的文本段忽略 */ }
       }
     }
     const content = JSON.stringify({ assetId, annotations: [{ id: 'direct-run-fixture', classId: 'vehicle', type: 'detect', bbox: { x: 221, y: 483, width: 537, height: 350 } }] });
@@ -204,6 +210,53 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     const afterRepeat = await api<{ items: Array<{ version: number }> }>('asset.list', { projectId, limit: 100 });
     assert.equal(afterRepeat.items[0].version, versionBefore, '已经确认过的素材不应再写新版本');
     checks.push({ check: 'bulk-confirm-candidates', statuses: confirmedAssets.items.map(item => item.status), objects: beforeConfirm, repeatVersion: afterRepeat.items[0].version });
+
+    // ===== 参考帧：把一张已人工确认的图当示例发出去，而它自己不被标注 =====
+    const extra = path.join(fixtures, 'reference.png');
+    await copyFile(path.resolve('renderer/design/codex-projects.png'), extra);
+    await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind: 'images', paths: [extra] }]));
+    await gotoWelcome(driver);
+    await button('导入图片');
+    await waitFor(`!!document.querySelector('dialog[open]')&&document.querySelector('dialog[open]').innerText.includes('新建项目')`);
+    await button('选择已有项目', "document.querySelector('dialog[open]')");
+    await waitFor(`!!document.querySelector('dialog[open] select')`);
+    await js(`(()=>{const e=document.querySelector('dialog[open] select');e.value=${json(projectId)};e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await button('导入并继续', "document.querySelector('dialog[open]')");
+    await waitFor(`!!document.querySelector('.chat-panel textarea')`);
+    const twoAssets = await api<{ items: Array<{ id: string; status: string }> }>('asset.list', { projectId, limit: 100 });
+    assert.equal(twoAssets.items.length, 2, `示例项目应有两张素材，实际：${json(twoAssets.items.map(item => item.id))}`);
+    const referenceAsset = twoAssets.items.find(item => item.id !== assets.items[0].id)!;
+    // 参考必须是「人工确认过」的素材（引擎的硬要求）：这里手工确认一张。
+    const referenceAssetView = await api<{ version: number }>('asset.get', { assetId: referenceAsset.id });
+    await api('annotation.save', { assetId: referenceAsset.id, baseVersion: referenceAssetView.version, confirm: true,
+      annotations: [{ id: 'reference-box', classId: 'vehicle', type: 'detect', bbox: { x: 40, y: 40, width: 120, height: 90 } }] });
+    const confirmedReference = await api<{ status: string }>('asset.get', { assetId: referenceAsset.id });
+    assert.equal(confirmedReference.status, 'confirmed', '参考素材必须先人工确认');
+
+    await openProjectChat(driver, projectName!);
+    await js(`document.querySelector('.chat-panel .direct-run-trigger').click()`);
+    await waitFor(`!!document.querySelector('.direct-run .picker-popover')`);
+    await waitFor(`!!document.querySelector('.direct-run .picker-popover .field select')`);
+    const referenceOptions = await js<string[]>(`[...document.querySelectorAll('.direct-run .picker-popover .field select option')].map(node=>node.innerText.trim())`);
+    assert.ok(referenceOptions.length >= 2, `参考帧下拉里应列出已确认的素材，实际：${json(referenceOptions)}`);
+    await js(`(()=>{const e=document.querySelector('.direct-run .picker-popover .field select');e.value=${json(referenceAsset.id)};e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await button('开始标注', `document.querySelector('.direct-run .picker-popover')`);
+    // 用运行快照里的 references 精确定位这次运行（按 total 找会撞上之前那次单素材运行）。
+    const hasReferenceRun = `(async()=>{const list=await window.autoLabel.request('run.list',{});for(const run of list){const detail=await window.autoLabel.request('run.get',{runId:run.id});
+      if(detail.snapshot&&detail.snapshot.references&&detail.snapshot.references.some(ref=>ref.id===${json(referenceAsset.id)}))return true;}return false;})()`;
+    await waitFor(hasReferenceRun, 25000);
+    let referenceRunId = '';
+    for (const run of await api<Array<{ id: string }>>('run.list', {})) {
+      const detail = await api<{ snapshot?: { references?: Array<{ id: string }> } }>('run.get', { runId: run.id });
+      if (detail.snapshot?.references?.some(ref => ref.id === referenceAsset.id)) { referenceRunId = run.id; break; }
+    }
+    const referenceDetail = await api<{ samples: Array<{ assetId: string }> }>('run.get', { runId: referenceRunId });
+    assert.equal(referenceDetail.samples.length, 1, '参考帧不应被当成待标注目标');
+    assert.notEqual(referenceDetail.samples[0].assetId, referenceAsset.id, '参考帧不在本次目标里');
+    const wireReference = seenReferences.find(item => item.assetId === referenceAsset.id);
+    assert.ok(wireReference, `请求里必须带 role=reference 的示例帧，实际记录：${json(seenReferences)}`);
+    assert.equal(wireReference!.objects, 1, '参考帧要把它的人工标注一起发给模型');
+    checks.push({ check: 'direct-run-uses-reference-frame', reference: wireReference, targets: referenceDetail.samples.map(sample => sample.assetId) });
 
     // ===== 没有类别时必须说清原因并禁用开始 =====
     // 用界面内的「新建项目」建一个空项目：不碰系统文件框，落点更稳。

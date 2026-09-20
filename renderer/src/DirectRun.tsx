@@ -51,6 +51,9 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
   // 发送副本：默认长边 1920 的 JPEG。实测 4K 帧按原图发（3.4 MB）时某些接口会跑到超时，
   // 缩到 0.16 MB 后同样的模型 20 多秒返回；区域裁剪进一步把小目标放大，框也更贴。
   const [sendMode, setSendMode] = useState<'original' | 'edge1920' | 'edge1152'>('edge1920');
+  // 参考帧：把一张已人工确认的图当作「照这个样子标」的示例（few-shot）。小目标靠它比靠提示词有效得多。
+  const [referenceId, setReferenceId] = useState('');
+  const [references, setReferences] = useState<Array<{ id: string; name: string; objects: number }>>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const root = useRef<HTMLDivElement>(null);
@@ -94,6 +97,15 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
     }).catch(error => setError(errorMessage(error))).finally(() => setLoading(false));
   }, [open, locals.length, cloudReady]);
 
+  useEffect(() => {
+    if (!open || !project) return;
+    // 只有「人工确认过」的素材能当参考（引擎侧同样要求 confirmed/modified）；这里只读已加载的一页，仅用于挑选。
+    void request<{ items: Array<{ id: string; name: string; status: string; annotations: unknown[] }> }>('asset.list', { projectId: project.id, limit: 500 })
+      .then(list => setReferences(list.items.filter(item => item.status === 'confirmed' || item.status === 'modified')
+        .map(item => ({ id: item.id, name: item.name, objects: item.annotations.length }))))
+      .catch(() => setReferences([]));
+  }, [open, project?.id]);
+
   /** 本机路径：先把模型载入（已经载入同一版本就跳过），再按开放词汇/固定类别两条口径生成映射。 */
   async function createLocalRun(choice: LocalChoice) {
     const runtime = await request<{ slots: Array<{ device: string; busy: boolean; modelId?: string; modelVersion?: number; classes?: Array<{ id: string; name: string }> }> }>('local.runtime.get');
@@ -121,16 +133,41 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
       device: 'cpu', classMap: derived.classMap, confidence: 0.2, timeoutMs: 300000, forceRerun: true,
     });
   }
+  /**
+   * 参考帧不能同时是待标注目标（引擎会直接拒绝）。选了参考之后：
+   * 「已勾选」把参考从目标里剔掉；「全部未标注」取全项目素材（分页）再剔掉参考。
+   */
+  async function resolveTargets(): Promise<string[] | undefined> {
+    if (!referenceId) return assetIds;
+    if (scope === 'selected') {
+      const targets = selectedAssetIds.filter(id => id !== referenceId);
+      if (!targets.length) throw new Error('参考帧不能同时当成待标注目标：请另外勾选要标注的素材，或换一张参考。');
+      return targets;
+    }
+    // 引擎的 asset.list 单页上限是 500：分页取全，避免大项目漏掉后面的素材。
+    const ids: string[] = [];
+    for (let offset = 0; ; offset += 500) {
+      const page = await request<{ items: Array<{ id: string }>; total: number }>('asset.list', { projectId: project.id, offset, limit: 500 });
+      ids.push(...page.items.map(item => item.id));
+      if (!page.items.length || ids.length >= page.total) break;
+    }
+    const targets = ids.filter(id => id !== referenceId);
+    if (!targets.length) throw new Error('这个项目里只有这一张已确认的图：它当参考之后就没有可标注的素材了。');
+    return targets;
+  }
+
   async function start() {
     setBusy(true); setError('');
     try {
       if (!classes.length) throw new Error('这个项目还没有类别：请先在输入卡的「类别」里写好要标的东西。');
       if (scope === 'selected' && !selectedAssetIds.length) throw new Error('还没有勾选素材：到项目概览里勾选，或把范围改成「全部未标注」。');
+      const resolved = await resolveTargets();
       const run = target === 'local'
         ? (picked ? await createLocalRun(picked) : (() => { throw new Error('请先选择一个内置模型。'); })())
         : await request<{ id: string }>('run.create', {
-            projectId: project.id, ...(assetIds ? { assetIds } : {}), providerId: annotationConfig.providerId, model: annotationConfig.model,
+            projectId: project.id, ...(resolved ? { assetIds: resolved } : {}), providerId: annotationConfig.providerId, model: annotationConfig.model,
             prompt: buildDirectPrompt(classes, rules), concurrency: annotationConfig.concurrency, ...(payload ? { payload } : {}),
+            ...(referenceId ? { referenceAssetIds: [referenceId] } : {}),
           });
       setOpen(false);
       notify('已创建标注任务，进度在任务中心；结果会写成候选，不会覆盖你已确认的内容。');
@@ -188,6 +225,15 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
               </button>)}
           </div>
           <span className="muted tiny">只标注区域：{region ? `左 ${Math.round(region.left * 100)}% 上 ${Math.round(region.top * 100)}% 右 ${Math.round(region.right * 100)}% 下 ${Math.round(region.bottom * 100)}%（在素材页的画布上框定，坐标会自动换算回整图）` : '整图（在素材页的画布上可以框一块只标它）'}</span>
+          {/* 参考帧：小目标最有效的一招——给模型一张「照这个样子标」的示例。 */}
+          {references.length
+            ? <><Field label="参考帧（可选）" hint="挑一张已经人工确认过的图当示例；它自己不会被标注，会从本次目标里自动排除。">
+                <select value={referenceId} onChange={event => setReferenceId(event.target.value)}>
+                  <option value="">不用参考</option>
+                  {references.map(item => <option key={item.id} value={item.id}>{item.name} · 已人工确认 {item.objects} 个对象</option>)}
+                </select>
+              </Field></>
+            : <span className="muted tiny">还没有可当参考的素材：先手标一张并点「保存并确认」，它就能在这里当示例。</span>}
         </>}
         <p className="muted tiny">类别：{classes.length ? classes.map(item => item.name).join('、') : '（还没有类别）'}{rules ? ` · 已写区分口径` : ''}</p>
         {rules && <p className="muted tiny direct-run-rules">{rules}</p>}
