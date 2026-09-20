@@ -180,6 +180,32 @@ export async function checkDesktopLocalAnnotate(window: BrowserWindow, output: s
     checks.push({ check: 'local-annotate-end-to-end', runId: run.id, annotations: result.annotations.length,
       classes: [...new Set(result.annotations.map(item => item.classId))], assetStatus: after.status, vocabularySource: source });
 
+    // ===== 5b-2. 直达标注的本机分支（不经过对话）：小目标预设要真的传到 worker =====
+    // 小目标（手办/小零件）在 640 下常直接漏检；这里断言界面上选「小目标」后，参数原样进了本次运行。
+    await js(`document.querySelector('.chat-panel .direct-run-trigger').click()`);
+    await wait(`!!document.querySelector('.direct-run .picker-popover')`);
+    await js(`([...document.querySelectorAll('.direct-run .picker-popover button')].find(node=>node.innerText.trim().startsWith('内置模型'))).click()`);
+    await wait(`!!document.querySelector('.direct-run .picker-popover .field select')`);
+    // 下拉的 value 是模型库目录 id（不是登记后的本地模型 id）。
+    await js(`(()=>{const e=document.querySelector('.direct-run .picker-popover .field select');e.value=${json(registered.catalogId)};e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await js(`([...document.querySelectorAll('.direct-run .picker-popover button')].find(node=>node.getAttribute('aria-label')==='小目标模式')).click()`);
+    await js(`([...document.querySelectorAll('.direct-run .picker-popover button')].find(node=>node.innerText.trim()==='开始标注')).click()`);
+    const smallTargetRun = `window.autoLabel.request('run.list',{}).then(list=>list.some(item=>item.kind==='local'&&item.snapshot&&item.snapshot.local&&item.snapshot.local.parameters&&item.snapshot.local.parameters.imageSize===1280))`;
+    try {
+      await wait(smallTargetRun, 90000);
+    } catch {
+      const diagnostic = await js<string>(`document.querySelector('.direct-run .picker-popover')?.innerText ?? '(弹层已关闭)'`);
+      throw new Error(`直达标注的本机分支没有建单：${diagnostic}`);
+    }
+    const directLocal = (await api<Array<{ id: string; kind: string; snapshot?: { local?: { parameters?: { imageSize?: number; confidence?: number } } } }>>('run.list', {}))
+      .find(item => item.kind === 'local' && item.snapshot?.local?.parameters?.imageSize === 1280);
+    assert.ok(directLocal, '直达标注的本机分支应带小目标参数建单');
+    const directLocalDetail = await api<{ snapshot?: { local?: { parameters?: { imageSize?: number; confidence?: number } } } }>('run.get', { runId: directLocal!.id });
+    assert.equal(directLocalDetail.snapshot?.local?.parameters?.confidence, 0.15, `小目标模式的置信度应传到 worker，实际：${json(directLocalDetail.snapshot?.local?.parameters)}`);
+    checks.push({ check: 'direct-run-local-small-target', runId: directLocal!.id, parameters: directLocalDetail.snapshot?.local?.parameters });
+    // 等这次运行收尾，后面的断言才不会与它在同一台 CPU 上抢时间。
+    await wait(`window.autoLabel.request('run.get',{runId:${json(directLocal!.id)}}).then(item=>['completed','completed_with_errors','failed','needs_attention','cancelled'].includes(item.status))`, 180000);
+
     // ===== 5a. 受保护的人工标注不被覆盖：示例项目那张自带预置标注的图也跑一次 =====
     const guardedBefore = await api<AssetRow>('asset.get', { assetId });
     const guardedRun = await api<RunRow>('local.run.create',
@@ -219,28 +245,29 @@ export async function checkDesktopLocalAnnotate(window: BrowserWindow, output: s
     checks.push({ check: 'candidate-boxes-visible', ...canvas });
     await writeFile(output.replace(/\.json$/, '.png'), (await window.webContents.capturePage()).toPNG());
 
-    // ===== 5c. 反例一：内置词表没覆盖的【中文】类别名必须明确拒绝 =====
+    // ===== 5c. 反例一：别名表也翻不出来的【中文】名必须明确拒绝 =====
     // CLIP 只认英文：把中文名编码出来的是无意义的向量，以前会静默返回近乎空的框；
     // 现在必须报 vocabulary_term_needs_english，而且不能建议「下载编码器」（下载了也没用）。
-    const novel = deriveClassMap(['行人', '消防车'], project.classes);
+    const untranslatable = '窗台上的加湿器';
+    const novel = deriveClassMap(['行人', untranslatable], project.classes);
     const novelRun = await api<RunRow>('local.run.create',
       { projectId: project.id, assetIds: [freshId], modelId: registered.id, modelVersion: registered.version, device: 'cpu',
-        textClasses: ['行人', '消防车'], classMap: novel.classMap, confidence: 0.2, timeoutMs: 300000, forceRerun: true });
+        textClasses: ['行人', untranslatable], classMap: novel.classMap, confidence: 0.2, timeoutMs: 300000, forceRerun: true });
     await wait(`window.autoLabel.request('run.get',{runId:${json(novelRun.id)}}).then(item=>['completed','completed_with_errors','failed','needs_attention','cancelled'].includes(item.status))`, 180000);
     const novelFinished = await api<RunRow>('run.get', { runId: novelRun.id });
     const rejected = novelFinished.samples.find(sample => sample.errorCode === 'vocabulary_term_needs_english');
-    assert.ok(rejected, `未命中内置词表的中文类别名必须报 vocabulary_term_needs_english，实际：${json(novelFinished.samples)}`);
+    assert.ok(rejected, `别名表翻不出来的中文类别名必须报 vocabulary_term_needs_english，实际：${json(novelFinished.samples)}`);
     assert.equal(novelFinished.statistics.requestsUsed, 0, '失败的本机推理也不应产生 API 请求');
     checks.push({ check: 'novel-term-needs-english', code: rejected.errorCode, message: rejected.message });
 
-    // ===== 5c-2. 反例二：英文新词在没有编码器时才轮得到 vocabulary_encoder_missing =====
-    const englishNovel = await api<RunRow>('local.run.create',
+    // ===== 5c-2. 别名表能把「车辆/消防车」翻成英文（fire truck）：此时该要编码器，而不是要英文名 =====
+    const translatedOnly = await api<RunRow>('local.run.create',
       { projectId: project.id, assetIds: [freshId], modelId: registered.id, modelVersion: registered.version, device: 'cpu',
-        textClasses: ['spaceship'], classMap: { 0: null }, confidence: 0.2, timeoutMs: 300000, forceRerun: true });
-    await wait(`window.autoLabel.request('run.get',{runId:${json(englishNovel.id)}}).then(item=>['completed','completed_with_errors','failed','needs_attention','cancelled'].includes(item.status))`, 180000);
-    const englishFinished = await api<RunRow>('run.get', { runId: englishNovel.id });
-    const needsEncoder = englishFinished.samples.find(sample => sample.errorCode === 'vocabulary_encoder_missing');
-    assert.ok(needsEncoder, `英文新词在没有编码器时应报 vocabulary_encoder_missing，实际：${json(englishFinished.samples)}`);
+        textClasses: ['消防车'], classMap: { 0: null }, confidence: 0.2, timeoutMs: 300000, forceRerun: true });
+    await wait(`window.autoLabel.request('run.get',{runId:${json(translatedOnly.id)}}).then(item=>['completed','completed_with_errors','failed','needs_attention','cancelled'].includes(item.status))`, 180000);
+    const translatedFinished = await api<RunRow>('run.get', { runId: translatedOnly.id });
+    const needsEncoder = translatedFinished.samples.find(sample => sample.errorCode === 'vocabulary_encoder_missing');
+    assert.ok(needsEncoder, `能翻成英文的类别名应报需要编码器，实际：${json(translatedFinished.samples)}`);
     checks.push({ check: 'novel-term-needs-encoder', code: needsEncoder.errorCode, message: needsEncoder.message });
 
     // ===== 5d. 省钱对比：本机运行与云端运行进同一张指标表，本地行必须显示 ¥0 =====

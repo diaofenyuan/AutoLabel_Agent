@@ -69,6 +69,23 @@ VOCABULARY_MAX_NAME = 100
 BUILTIN_VOCABULARY_DIR = Path(__file__).resolve().parent / "vocab"
 
 
+def load_alias_table() -> dict:
+    """中文别名 → 英文规范名。这张表不依赖 CLIP，可以在构建机上随时重新生成（build_vocab.py --aliases-only）。
+
+    有它，「车辆 → car」这类名字在 npz 还没重建、本机也没有编码器时照样能用；
+    没有它，用户只能看到「下载编码器」这一条并不正确的出路。
+    """
+    try:
+        payload = json.loads((BUILTIN_VOCABULARY_DIR / "aliases.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    aliases = payload.get("aliases")
+    return {str(name): str(target) for name, target in aliases.items()} if isinstance(aliases, dict) else {}
+
+
+ALIAS_TABLE = load_alias_table()
+
+
 def environment_directory(name: str) -> Path | None:
     """引擎下发的目录；未配置或不是绝对路径时按未配置处理，不猜位置。"""
     value = os.environ.get(name, "")
@@ -497,6 +514,8 @@ class Worker:
         """按「缓存 → 内置词表 → CLIP」解析本次类别名的文本向量，并把它写回模型。
 
         返回来源（cache / builtin / encoded）供调用方与核对流程使用；三级都不会联网。
+        中文名一律先按别名表翻成英文规范名再取向量：CLIP 只认英文，直接编码中文会得到没有意义的向量
+        （实测「人」一个目标都查不到，「person」能查到 5 个）。
         """
         cache = environment_directory(VOCABULARY_CACHE_ENV)
         key = vocabulary_key(names)
@@ -505,28 +524,37 @@ class Worker:
             if cached is not None and cached[0] == names:
                 apply_vocabulary(self.model, names, cached[1])
                 return "cache"
-        builtin = builtin_vocabulary(names)
-        if builtin is None:
-            # CLIP 的文本编码器只认英文：直接把中文名编码出来的是没有意义的向量（实测「人」一个目标都查不到，
-            # 「person」能查到 5 个）。以前这里会静默编码、静默返回近乎空的框，用户会以为「模型看不见」；
-            # 现在未命中内置词表的中文名一律明确拒绝，并给出可用的英文名方向。
-            chinese = [name for name in names if any("\u4e00" <= char <= "\u9fff" for char in name)]
-            if chinese:
-                raise InferenceError(
-                    "vocabulary_term_needs_english",
-                    "这些类别名不在内置词表里，而 CLIP 只认英文：" + "、".join(chinese[:10])
-                    + "。请填英文名（例如「手办」→ figurine、「公仔」→ plush toy、「消防车」→ fire truck），"
-                    + "或换成内置词表里已有的名字；下载文本编码器也不会让中文名生效。")
-            embeddings, source = encode_vocabulary(self.model, names, environment_directory(TEXT_ENCODER_ENV)), "encoded"
-        else:
-            embeddings, source = builtin, "builtin"
-        apply_vocabulary(self.model, names, embeddings)
+        resolved, source = self.resolve_vocabulary(names)
+        apply_vocabulary(self.model, resolved, source[1])
         if cache is not None:
             try:
-                save_vocabulary(cache, key, names, embeddings)
+                save_vocabulary(cache, key, names, source[1])
             except OSError:
                 pass  # 缓存写不进去不影响本次推理结果。
-        return source
+        return source[0]
+
+    def resolve_vocabulary(self, names: list[str]):
+        """先查内置词表，再按别名表翻成英文查一次；仍未命中就只剩 CLIP。
+
+        「含中文且别名表也翻不出来」的名字必须明确拒绝：以前这里会静默编码，返回近乎空的框，
+        用户只会以为「模型看不见」。
+        """
+        builtin = builtin_vocabulary(names)
+        if builtin is not None:
+            return names, ("builtin", builtin)
+        translated = [ALIAS_TABLE.get(name, name) for name in names]
+        if translated != names:
+            builtin = builtin_vocabulary(translated)
+            if builtin is not None:
+                return translated, ("builtin", builtin)
+        chinese = [name for name in translated if any("\u4e00" <= char <= "\u9fff" for char in name)]
+        if chinese:
+            raise InferenceError(
+                "vocabulary_term_needs_english",
+                "这些类别名不在内置词表里，而 CLIP 只认英文：" + "、".join(chinese[:10])
+                + "。请填英文名（例如「手办」→ figurine、「公仔」→ plush toy、「消防车」→ fire truck），"
+                + "或换成内置词表里已有的名字；下载文本编码器也不会让中文名生效。")
+        return translated, ("encoded", encode_vocabulary(self.model, translated, environment_directory(TEXT_ENCODER_ENV)))
 
     def load(self, payload: dict) -> dict:
         # 加载失败后不沿用上一模型，防止下一条请求误用旧任务或旧权重。

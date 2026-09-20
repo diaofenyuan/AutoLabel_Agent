@@ -54,6 +54,9 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
   // 参考帧：把一张已人工确认的图当作「照这个样子标」的示例（few-shot）。小目标靠它比靠提示词有效得多。
   const [referenceId, setReferenceId] = useState('');
   const [references, setReferences] = useState<Array<{ id: string; name: string; objects: number }>>([]);
+  // 本机小目标模式：4K 帧里的小物件（手办、小零件）在 640 下常常直接漏检，提高到 1280 并放低置信度更稳。
+  const [localQuality, setLocalQuality] = useState<'standard' | 'small'>('standard');
+  const localParameters = localQuality === 'small' ? { imageSize: 1280, confidence: 0.15 } : { imageSize: 640, confidence: 0.25 };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const root = useRef<HTMLDivElement>(null);
@@ -123,14 +126,14 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
       if (derived.unmatched) throw new Error('有类别名没有对上项目类别，映射会变成「忽略」；请在输入卡的「类别」里核对名称后重试。');
       return request<{ id: string }>('local.run.create', {
         projectId: project.id, ...(assetIds ? { assetIds } : {}), modelId: choice.model.id, modelVersion: choice.model.version,
-        device: 'cpu', textClasses, classMap: derived.classMap, confidence: 0.2, timeoutMs: 300000, forceRerun: true,
+        device: 'cpu', textClasses, classMap: derived.classMap, ...localParameters, timeoutMs: 300000, forceRerun: true,
       });
     }
     // 固定类别表：模型每个类别都要有明确映射（对不上的明确为忽略），否则引擎会拒绝。
     const derived = deriveClassMap(modelClasses.map(item => item.name), classes);
     return request<{ id: string }>('local.run.create', {
       projectId: project.id, ...(assetIds ? { assetIds } : {}), modelId: choice.model.id, modelVersion: choice.model.version,
-      device: 'cpu', classMap: derived.classMap, confidence: 0.2, timeoutMs: 300000, forceRerun: true,
+      device: 'cpu', classMap: derived.classMap, ...localParameters, timeoutMs: 300000, forceRerun: true,
     });
   }
   /**
@@ -215,6 +218,17 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
             已勾选<small>{selectedAssetIds.length ? `${selectedAssetIds.length} 张` : '先在项目概览里勾选'}</small>
           </button>
         </div>
+        {target === 'local' && <>
+          <p className="muted tiny">识别精度</p>
+          <div className="direct-run-options">
+            <button type="button" className={localQuality === 'standard' ? 'selected' : ''} aria-pressed={localQuality === 'standard'} aria-label="标准模式" onClick={() => setLocalQuality('standard')}>
+              标准<small>图像尺寸 640 · 置信度 0.25</small>
+            </button>
+            <button type="button" className={localQuality === 'small' ? 'selected' : ''} aria-pressed={localQuality === 'small'} aria-label="小目标模式" onClick={() => setLocalQuality('small')}>
+              小目标（手办/小零件）<small>图像尺寸 1280 · 置信度 0.15 · 更慢但少漏检</small>
+            </button>
+          </div>
+        </>}
         {target === 'cloud' && <>
           <p className="muted tiny">发送给模型</p>
           <div className="direct-run-options">

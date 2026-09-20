@@ -11,6 +11,7 @@ CLIP 编码器。常见类别名（COCO 80 类及其常用中文说法）在构�
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 # 规范词表（英文）。CLIP 的文本编码器只认英文：直接把中文名喂进去会被切成未知 token，
@@ -30,7 +31,7 @@ CANONICAL_NAMES = [
     # COCO 之外但标注现场常见的目标，用来承接下面的中文别名。
     "traffic sign", "helmet", "safety vest", "container", "dump truck", "tractor", "excavator",
     "crane", "bicycle rack", "street light", "billboard", "trash can", "wire pole", "fence",
-    "stairs", "door", "window", "puddle", "wheelchair", "stroller", "fire truck",
+    "stairs", "door", "window", "puddle", "wheelchair", "stroller", "fire truck", "license plate",
     # 桌面 / 摆件场景：手办、公仔这类目标是零样本标注里最常问的，且 CLIP 认不出中文名。
     "figurine", "action figure", "anime figure", "plush toy", "doll", "statue", "ornament",
     "figurine stand", "display case",
@@ -64,6 +65,12 @@ ALIASES = {
     "围栏": "fence", "护栏": "fence", "楼梯": "stairs", "门": "door", "窗": "window",
     "积水": "puddle", "轮椅": "wheelchair", "婴儿车": "stroller", "车位锁": "bicycle rack",
     "消防车": "fire truck", "救火车": "fire truck",
+    # 界面侧同义词表（shared/vocabulary.ts）里已经有、但这里以前缺的常见叫法：
+    # 缺了它们，本机路径就只剩「下载编码器」一条路，而实际上英文规范名早就在词表里。
+    "车辆": "car", "机动车": "car", "汽车": "car", "越野车": "car",
+    "单车": "bicycle", "列车": "train", "火车车厢": "train", "船舶": "boat", "轮船": "boat",
+    "客机": "airplane", "指示牌": "traffic sign", "座椅": "chair", "犬": "dog", "面部": "person",
+    "号牌": "license plate", "安全背心": "safety vest",
     # 桌面 / 摆件场景：中文名一律先映射到英文规范名，CLIP 不会去编码中文。
     "手办": "figurine", "手办模型": "figurine", "人偶": "figurine", "小人偶": "figurine",
     "可动人偶": "action figure", "黏土人": "figurine", "粘土人": "figurine",
@@ -74,20 +81,47 @@ ALIASES = {
 }
 
 
+def validate_tables() -> list[str]:
+    names = list(dict.fromkeys(CANONICAL_NAMES))
+    unknown = sorted({target for target in ALIASES.values() if target not in names})
+    if unknown:
+        raise SystemExit(f"别名指向了规范词表里没有的名字：{unknown}")
+    return names
+
+
+def write_aliases(output: Path) -> None:
+    """把「中文别名 → 英文规范名」单独落成 JSON。
+
+    worker 会在取向量之前先查这张表：这样「车辆 → car」这类名字不用等 npz 重建、也不用下载编码器就能用，
+    而不在表里的中文名仍然会被明确拒绝（CLIP 编码中文得到的是没有意义的向量）。
+    这张表不依赖 torch / CLIP，构建机上没有权重也能重新生成。
+    """
+    names = validate_tables()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"version": 1, "canonicalNames": names, "aliases": {name: ALIASES[name] for name in sorted(ALIASES)}}
+    output.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    print(f"别名表已生成：{output}（{len(ALIASES)} 条中文别名 → {len(names)} 个英文规范名，不需要 CLIP 权重）")
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="生成内置开放词汇词表（inference/vocab/builtin.npz）")
-    parser.add_argument("--encoder", required=True, help="包含 ViT-B-32.pt 的目录（CLIP 权重所在处）")
+    parser = argparse.ArgumentParser(description="生成内置开放词汇词表（inference/vocab/builtin.npz）与别名表（inference/vocab/aliases.json）")
+    parser.add_argument("--encoder", default="", help="包含 ViT-B-32.pt 的目录（CLIP 权重所在处）")
+    parser.add_argument("--aliases-only", action="store_true", help="只重新生成别名表（不需要 CLIP 权重）")
     parser.add_argument("--output", default=str(Path(__file__).resolve().parent.parent / "vocab" / "builtin.npz"))
     args = parser.parse_args()
+
+    aliases_output = Path(args.output).with_name("aliases.json")
+    write_aliases(aliases_output)
+    if args.aliases_only:
+        return 0
 
     import numpy
     import torch
     import clip
 
-    names = list(dict.fromkeys(CANONICAL_NAMES))
-    unknown = sorted({target for target in ALIASES.values() if target not in names})
-    if unknown:
-        raise SystemExit(f"别名指向了规范词表里没有的名字：{unknown}")
+    names = validate_tables()
+    if not args.encoder:
+        raise SystemExit("重建向量词表需要 --encoder（包含 ViT-B-32.pt 的目录）；只要别名表请加 --aliases-only")
     encoder = Path(args.encoder)
     if not (encoder / "ViT-B-32.pt").is_file():
         raise SystemExit(f"没有找到 CLIP 权重：{encoder / 'ViT-B-32.pt'}")

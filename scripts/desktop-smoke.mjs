@@ -308,6 +308,9 @@ if (flagIs('--local-annotate')) {
   assert.ok(!String(byCheck.get('novel-term-needs-english')?.message ?? '').includes('下载「CLIP'), '中文名不该被建议去下载编码器');
   // 英文新词在没有编码器时才是 vocabulary_encoder_missing。
   assert.equal(byCheck.get('novel-term-needs-encoder')?.code, 'vocabulary_encoder_missing');
+  // 直达标注的本机分支：界面上选「小目标」后参数要原样落到运行上（手办这类小目标靠它少漏检）。
+  assert.equal(byCheck.get('direct-run-local-small-target')?.parameters?.imageSize, 1280);
+  assert.equal(byCheck.get('direct-run-local-small-target')?.parameters?.confidence, 0.15);
   assert.ok(byCheck.get('candidate-boxes-visible')?.objects > 0, '画布上没有出现候选框');
   // 省钱对比：本机候选能进评测表，并且成本一栏写 ¥0（而不是「币种未定」）。
   const compared = byCheck.get('local-run-enters-comparison');
