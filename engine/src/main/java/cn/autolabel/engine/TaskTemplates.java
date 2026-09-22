@@ -5,6 +5,12 @@ import java.util.*;
 
 final class TaskTemplates {
     static final String VALIDATOR_VERSION="annotations-v2";
+    /** 复用口径只绑「任务类型 + 类别表」：属性表、点位连接等模板细节变化不阻断复用（提示词同理只记录不比对）。 */
+    static JsonObject classConvention(JsonObject project){
+        List<String> names=new ArrayList<>();for(JsonElement item:Json.array(project,"classes"))names.add(Json.str(item.getAsJsonObject(),"name",""));
+        Collections.sort(names);JsonArray classes=new JsonArray();for(String name:names)classes.add(name);
+        return Json.obj("taskType",Json.str(project,"taskType","detect"),"classes",classes);
+    }
     static final String REQUEST_CONTRACT_VERSION="annotation-template-v2";
     private TaskTemplates(){}
     static final List<String> SETTINGS=List.of("keypointNames","keypointConnections","attributes","rules","occlusionRules","blurRules");

@@ -3,6 +3,8 @@ import type { ObservedBackend } from './inference.ts';
 export interface ReusePolicy {
   reuseEnabled?: boolean;
   forceRerun?: boolean;
+  /** 匹配口径：hint（提示词与模板提示只记录不比对）/ template（严格）/ none（不复用）。缺省 template。 */
+  reuseScope?: 'hint' | 'template' | 'none' | null;
   reuseMaxAgeSeconds?: number | null;
 }
 

@@ -80,7 +80,7 @@ final class Providers {
         // 接口地址、协议或请求头变了，先前登记的模型清单就属于另一个端点：留着会让选择器列出无效模型名。
         if(!base.equals(Json.str(old,"baseUrl",""))||!protocol.equals(Json.str(old,"protocol",""))
             ||!String.valueOf(value.get("headers")).equals(String.valueOf(old.get("headers")))){value.remove("models");value.remove("modelsFetchedAt");}value.addProperty("concurrency",Json.bounded(value,"concurrency",4,1,32));value.addProperty("requestsPerMinute",Json.bounded(value,"requestsPerMinute",60,1,60000));
-        value.addProperty("timeoutMs",Json.bounded(value,"timeoutMs",120000,1000,600000));value.addProperty("maxRetries",Json.bounded(value,"maxRetries",2,0,6));value.addProperty("maxImages",Json.bounded(value,"maxImages",8,1,64));
+        value.addProperty("timeoutMs",Json.bounded(value,"timeoutMs",120000,1000,600000));value.addProperty("maxRetries",Json.bounded(value,"maxRetries",2,0,6));value.addProperty("maxImages",Json.bounded(value,"maxImages",12,1,64));
         value.addProperty("revision",Json.integer(old,"revision",0)+1);value.add("capabilities",new JsonObject());value.addProperty("updatedAt",Json.now());
         try{HttpRequest.Builder validator=HttpRequest.newBuilder(uri);for(var header:Json.object(value,"headers").entrySet()){if(Set.of("host","content-length","connection","authorization","cookie").contains(header.getKey().toLowerCase()))throw new IllegalArgumentException();validator.header(header.getKey(),header.getValue().getAsString());}}
         catch(IllegalArgumentException e){throw new ApiError(400,"header_invalid","请求头名称或值无效，或尝试覆盖受保护请求头。");}

@@ -146,11 +146,14 @@ final class CandidateReuse {
         for(JsonElement element:Json.array(snapshot,"references")){
             JsonObject ref=element.getAsJsonObject(),value=pick(ref,List.of("id","version","resourceId","resourceVersion","annotations","note","classMap","sourceTemplate"));value.add("image",imageContext(ref));refs.add(value);
         }
-        return Json.obj("fingerprintVersion","candidate-reuse-v1","projectId",run.get("projectId"),"input",imageContext(Json.object(sample,"asset")),
+        JsonObject fingerprint=Json.obj("fingerprintVersion","candidate-reuse-v2","projectId",run.get("projectId"),"input",imageContext(Json.object(sample,"asset")),
             "preprocessing",pick(sample,List.of("inputContract","inputTransform","preprocessing","coordinateTransform","baselineToInput","inputToBaseline")),
             "provider",pick(provider,List.of("id","revision","baseUrl","protocol","headers","extraParameters")),"credentialBindingVersion",binding,
-            "model",run.get("model"),"prompt",run.get("prompt"),"template",TaskTemplates.semantic(Json.object(snapshot,"project")),"references",refs,
+            "model",run.get("model"),"classConvention",TaskTemplates.classConvention(Json.object(snapshot,"project")),"references",refs,
             "normalizationVersion",snapshot.get("normalizationVersion"),"parserVersion",snapshot.get("parserVersion"),"validatorVersion",snapshot.get("validatorVersion"),"requestContractVersion",snapshot.get("requestContractVersion"));
+        // 宽松口径（reuseScope=hint）：提示词与模板提示只留在来源运行快照里（记录可查），不参与指纹与比对。
+        if(!Json.str(run,"reuseScope","template").equals("hint")){fingerprint.add("prompt",run.get("prompt").deepCopy());fingerprint.add("template",TaskTemplates.semantic(Json.object(snapshot,"project")));}
+        return fingerprint;
     }
     private static JsonObject imageContext(JsonObject asset){return Json.obj("contentHash",asset.get("contentHash"),"width",asset.get("width"),"height",asset.get("height"),"normalization",pick(Json.object(asset,"metadata"),List.of("normalizationVersion","inputVersion","sourceWidth","sourceHeight","exifOrientation","sourceToBaseline","colorSpace","alphaBackground","sourceHash","pngIccApplied","preprocessing","inputTransform","baselineToInput","inputToBaseline")));}
     private static JsonObject pick(JsonObject object,List<String> fields){JsonObject value=new JsonObject();for(String field:fields)if(object.has(field))value.add(field,object.get(field).deepCopy());return value;}
@@ -193,7 +196,7 @@ final class CandidateReuse {
                     JsonObject ref=state.expectedImages.get(state.references++).getAsJsonObject();
                     if(!same(structured.get("assetId"),ref.get("id"))||!same(structured.get("width"),ref.get("width"))||!same(structured.get("height"),ref.get("height"))||!same(structured.get("annotations"),ref.get("annotations"))||!Json.str(structured,"note","").equals(Json.str(ref,"note",""))||!same(structured.get("resourceId"),ref.get("resourceId"))||!same(structured.get("resourceVersion"),ref.get("resourceVersion")))throw new ApiError(409,"reuse_request_invalid","请求参考标注或说明与运行快照不一致。");out.add(key,structured);
                 }else if(structured!=null&&structured.has("instructions")&&structured.has("template")){
-                    if(!same(structured.get("template"),TaskTemplates.semantic(Json.object(Json.object(state.run,"snapshot"),"project")))||!Objects.equals(structured.get("instructions"),state.run.get("prompt")))throw new ApiError(409,"reuse_request_invalid","请求提示词或完整模板与运行快照不一致。");state.templates++;out.add(key,structured);
+                    if(!Json.str(state.run,"reuseScope","template").equals("hint")&&(!same(structured.get("template"),TaskTemplates.semantic(Json.object(Json.object(state.run,"snapshot"),"project")))||!Objects.equals(structured.get("instructions"),state.run.get("prompt"))))throw new ApiError(409,"reuse_request_invalid","请求提示词或完整模板与运行快照不一致。");state.templates++;out.add(key,structured);
                 }else out.add(key,child.deepCopy());
             }else out.add(key,normalizeBody(child,state));
         }

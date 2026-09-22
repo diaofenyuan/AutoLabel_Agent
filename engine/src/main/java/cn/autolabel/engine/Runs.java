@@ -52,6 +52,7 @@ final class Runs implements AutoCloseable {
     record Prepared(JsonObject run,JsonArray samples){}
     static void validateReuse(JsonObject p){
         for(String field:List.of("reuseEnabled","forceRerun"))if(p.has(field)&&(!p.get(field).isJsonPrimitive()||!p.getAsJsonPrimitive(field).isBoolean()))throw new ApiError(400,"reuse_policy_invalid",field+" 必须为布尔值。");
+        if(p.has("reuseScope")&&!Set.of("hint","template","none").contains(Json.str(p,"reuseScope","")))throw new ApiError(400,"reuse_policy_invalid","复用口径只能是 hint、template 或 none。");
         if(p.has("force"))throw new ApiError(400,"reuse_policy_invalid","强制重新请求请使用 forceRerun。");
         if(p.has("reuseMaxAgeSeconds")&&!p.get("reuseMaxAgeSeconds").isJsonNull())try{JsonElement value=p.get("reuseMaxAgeSeconds");if(!value.isJsonPrimitive()||!value.getAsJsonPrimitive().isNumber()||value.getAsBigDecimal().longValueExact()<1)throw new ArithmeticException();Math.multiplyExact(value.getAsBigDecimal().longValueExact(),1000L);}catch(ArithmeticException error){throw new ApiError(400,"reuse_age_invalid","结果有效期必须是可支持的正整数秒数。");}
     }
@@ -63,7 +64,7 @@ final class Runs implements AutoCloseable {
         JsonObject run=Json.obj("id",id,"projectId",project.get("id"),"name",Json.str(p,"name","自动标注 · "+model),"status","running","createdAt",Json.now(),"updatedAt",Json.now(),"providerId",provider.get("id"),"model",model,"prompt",prompt,
             "concurrency",concurrency,"maxRetries",retries,"total",selected.size(),"requestsUsed",0,"retries",0,"reused",0,"plannedRequests",selected.size(),"estimatedMaxRequests",(long)selected.size()*(retries+1),
             "snapshot",Json.obj("project",project.deepCopy(),"provider",provider.deepCopy(),"references",references.deepCopy(),"parserVersion","annotations-v1","validatorVersion",TaskTemplates.VALIDATOR_VERSION,"requestContractVersion",TaskTemplates.REQUEST_CONTRACT_VERSION,"credentialBindingVersion",providers.credentialBindingVersion(Json.required(provider,"id")),"normalizationVersion",Media.NORMALIZATION_VERSION),"failurePolicy",policy,"budgetScopeId",Budgets.scope(p,id));
-        run.addProperty("reuseEnabled",Json.bool(p,"reuseEnabled",true));run.addProperty("forceRerun",Json.bool(p,"forceRerun",false));run.addProperty("force",Json.bool(p,"forceRerun",false));if(p.has("reuseMaxAgeSeconds"))run.add("reuseMaxAgeSeconds",p.get("reuseMaxAgeSeconds"));if(max!=Long.MAX_VALUE)run.addProperty("maxRequests",max);
+        String reuseScope=Json.str(p,"reuseScope",Json.bool(p,"reuseEnabled",true)?"template":"none");run.addProperty("reuseScope",reuseScope);run.addProperty("reuseEnabled",!reuseScope.equals("none")&&Json.bool(p,"reuseEnabled",true));run.addProperty("forceRerun",Json.bool(p,"forceRerun",false));run.addProperty("force",Json.bool(p,"forceRerun",false));if(p.has("reuseMaxAgeSeconds"))run.add("reuseMaxAgeSeconds",p.get("reuseMaxAgeSeconds"));if(max!=Long.MAX_VALUE)run.addProperty("maxRequests",max);
         // 发送副本的配方在这里就校验并冻结：越界区域现在报错，之后每次请求都按同一份配方发。
         if(p.has("payload")&&!p.get("payload").isJsonNull())run.add("payload",PayloadImages.freeze(Json.object(p,"payload")));JsonArray samples=new JsonArray();
         for(JsonObject row:selected){JsonObject asset=Json.parse(row.get("data").getAsString());samples.add(Json.obj("id",Json.id(),"assetId",asset.get("id"),"asset",asset,"inputPath",row.get("path"),"baseVersion",asset.get("version")));}
@@ -76,6 +77,7 @@ final class Runs implements AutoCloseable {
         for(JsonElement value:prepared.samples){JsonObject sample=value.getAsJsonObject();Store.update(c,"INSERT INTO samples(id,run_id,asset_id,input_id,status,data) VALUES(?,?,?,?,?,?)",Json.required(sample,"id"),id,Json.required(sample,"assetId"),Json.str(sample,"inputId",Json.required(sample,"assetId")),"queued",sample);}
         Store.event(c,"run.created",id,null,null,Json.obj("total",run.get("total"),"model",run.get("model"),"concurrency",run.get("concurrency"),"requestsUsed",0));
     }
+    JsonObject get(String id){return get(Json.obj("runId",id));}
     /** 样本分页：默认沿用 5000 上限（兼容既有调用方），任务详情传小页签把响应压在 MB 级以内。 */
     JsonObject get(JsonObject p){String id=Json.required(p,"runId");int limit=Json.bounded(p,"sampleLimit",5000,1,5000),offset=Json.bounded(p,"sampleOffset",0,0,Integer.MAX_VALUE);return store.read(c->view(c,id,limit,offset));}
     JsonArray list(String project){return store.read(c->{JsonArray a=new JsonArray();for(JsonObject r:project==null?Store.rows(c,"SELECT id FROM runs ORDER BY rowid DESC LIMIT 100"):Store.rows(c,"SELECT id FROM runs WHERE project_id=? ORDER BY rowid DESC LIMIT 100",project))a.add(view(c,Json.required(r,"id"),0,0));return a;});}

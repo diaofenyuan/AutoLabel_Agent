@@ -37,7 +37,7 @@ final class PayloadImages {
     /** 区域用相对基准图的 0～1 比例表示：与显示尺寸、归一化结果解耦，界面按画布比例给值。 */
     record Region(double left, double top, double right, double bottom) {}
     record Recipe(Integer maxEdge, int quality, Region region) {
-        static Recipe none() { return new Recipe(null, 92, null); }
+        static Recipe none() { return new Recipe(null, 82, null); }
         boolean identity() { return maxEdge == null && region == null; }
         String fingerprint() {
             return (maxEdge == null ? "edge-full" : "edge-" + maxEdge) + "-q" + quality + "-"
@@ -57,7 +57,7 @@ final class PayloadImages {
         if (raw == null || !raw.isJsonObject()) return Recipe.none();
         JsonObject value = raw.getAsJsonObject();
         Integer maxEdge = value.has("maxEdge") && !value.get("maxEdge").isJsonNull() ? Json.integer(value, "maxEdge", 0) : null;
-        int quality = value.has("quality") && !value.get("quality").isJsonNull() ? Json.integer(value, "quality", 92) : 92;
+        int quality = value.has("quality") && !value.get("quality").isJsonNull() ? Json.integer(value, "quality", 82) : 82;
         Region region = null;
         if (value.has("region") && value.get("region").isJsonObject()) {
             JsonObject item = value.getAsJsonObject("region");
@@ -85,7 +85,7 @@ final class PayloadImages {
     /** 校验并规范化创建运行时的配方：只保留白名单字段，越界在提交阶段就报错。 */
     static JsonObject freeze(JsonObject raw) {
         Integer maxEdge = raw.has("maxEdge") && !raw.get("maxEdge").isJsonNull() ? Json.integer(raw, "maxEdge", 0) : null;
-        int quality = raw.has("quality") && !raw.get("quality").isJsonNull() ? Json.integer(raw, "quality", 92) : 92;
+        int quality = raw.has("quality") && !raw.get("quality").isJsonNull() ? Json.integer(raw, "quality", 82) : 82;
         Region region = null;
         if (raw.has("region") && !raw.get("region").isJsonNull()) {
             JsonObject item = Json.object(raw, "region");

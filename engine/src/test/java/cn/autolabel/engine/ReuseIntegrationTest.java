@@ -7,9 +7,22 @@ import java.util.*;
 import static cn.autolabel.engine.FlowIntegrationTest.*;
 
 final class ReuseIntegrationTest {
-    static void run(Path root)throws Exception{sameInput(root);invalidations(root);retryAndLegacy(root);flowAndRestart(root);workerConcurrency(root);bindingCommitRace(root);}
+    static void run(Path root)throws Exception{sameInput(root);hintScope(root);invalidations(root);retryAndLegacy(root);flowAndRestart(root);workerConcurrency(root);bindingCommitRace(root);}
+    /** 复用口径：宽松档只认「输入 + 实发请求 + 变换链 + 类别口径」，提示词与模板提示只记录不比对；类别口径变化必须失配。 */
+    static void hintScope(Path root)throws Exception{
+        try(EngineTest.Mock mock=new EngineTest.Mock();Engine e=new Engine(root.resolve("reuse-hint"))){JsonObject provider=boundProvider(e,mock);String pid=Json.required(EngineTest.project(e,"detect"),"id");JsonArray ids=EngineTest.importSamples(e,pid,1);
+            JsonObject hint=request(provider,pid,ids);hint.addProperty("reuseScope","hint");JsonObject first=finished(e,hint);check(mock.calls.get()==1,"hint scope first run performs a real request");
+            JsonObject changed=hint.deepCopy();changed.addProperty("prompt","locate with different wording");JsonObject hit=finished(e,changed);check(mock.calls.get()==1&&Json.integer(hit,"reused",0)==1,"hint scope ignores prompt wording changes and reuses");
+            JsonObject strict=request(provider,pid,ids);JsonObject strictFirst=finished(e,strict);check(mock.calls.get()==2,"template scope keeps strict binding (cross-scope is a miss)");
+            JsonObject strictChanged=strict.deepCopy();strictChanged.addProperty("prompt","locate with different wording");JsonObject miss=finished(e,strictChanged);check(mock.calls.get()==3&&Json.integer(miss,"reused",-1)==0,"template scope must not reuse across prompt changes");
+            JsonObject none=hint.deepCopy();none.remove("prompt");none.addProperty("reuseScope","none");JsonObject fresh=finished(e,none);check(mock.calls.get()==4&&Json.integer(fresh,"reused",-1)==0,"reuseScope none performs a real request");
+            JsonArray classes=e.projects.get(pid).get("classes").getAsJsonArray().deepCopy();classes.add(Json.obj("id","extra","name","新增口径类别","color","#123456"));cmd(e,"project.update",Json.obj("projectId",pid,"classes",classes));
+            JsonObject afterConvention=hint.deepCopy();afterConvention.remove("prompt");JsonObject missByConvention=finished(e,afterConvention);check(mock.calls.get()==5&&Json.integer(missByConvention,"reused",-1)==0,"class convention change must invalidate reuse even in hint scope");
+            JsonObject invalid=hint.deepCopy();invalid.remove("prompt");invalid.addProperty("reuseScope","bogus");ManualChainTest.rejects("reuse_policy_invalid",()->cmd(e,"run.create",invalid));
+        }
+    }
     static JsonObject boundProvider(Engine e,EngineTest.Mock mock)throws Exception{JsonObject provider=provider(e,mock);cmd(e,"credential.set",Json.obj("providerId",provider.get("id"),"key","reuse-fixture-secret","credentialBindingVersion",Json.id()));return provider;}
-    static JsonObject request(JsonObject provider,String pid,JsonArray ids){return Json.obj("projectId",pid,"providerId",provider.get("id"),"model","fixture","prompt","locate","assetIds",ids,"concurrency",1,"maxRetries",0,"maxRequests",1);}
+    static JsonObject request(JsonObject provider,String pid,JsonArray ids){return Json.obj("projectId",pid,"providerId",provider.get("id"),"model","fixture","prompt","locate","assetIds",ids,"concurrency",1,"maxRetries",0,"maxRequests",2);}
     static JsonObject finished(Engine e,JsonObject request)throws Exception{JsonObject run=cmd(e,"run.create",request);return EngineTest.waitRun(e,Json.required(run,"id"),12000);}
     static JsonObject sample(JsonObject run){return Json.array(run,"samples").get(0).getAsJsonObject();}
     static void sameInput(Path root)throws Exception{

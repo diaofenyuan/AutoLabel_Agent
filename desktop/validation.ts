@@ -41,7 +41,7 @@ const pricing = z.strictObject({ model: name, currency,
 });
 const tokenCount = z.number().int().min(0).max(1e9);
 const resourceVersion = z.number().int().min(0).max(2147483647);
-const reuseFields = { reuseEnabled: z.boolean().optional(), forceRerun: z.boolean().optional(),
+const reuseFields = { reuseEnabled: z.boolean().optional(), forceRerun: z.boolean().optional(), reuseScope: z.enum(['hint', 'template', 'none']).optional(),
   reuseMaxAgeSeconds: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).nullable().optional() };
 const referenceFields = {
   referenceAssetIds: z.array(id).max(63).refine(values => new Set(values).size === values.length, '参考素材不能重复').optional(),

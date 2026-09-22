@@ -287,11 +287,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: schema({
       assetIds: { type: ['array', 'null'], items: { type: 'string' }, maxItems: 1000 },
       prompt: nullableString, concurrency: { type: ['integer', 'null'], minimum: 1, maximum: 32 },
-      reuseEnabled: { type: ['boolean', 'null'] }, forceRerun: { type: ['boolean', 'null'] },
+      reuseEnabled: { type: ['boolean', 'null'] }, forceRerun: { type: ['boolean', 'null'] }, reuseScope: { type: ['string', 'null'] },
       reuseMaxAgeSeconds: { type: ['integer', 'null'], minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
     }), mutation: true,
     async execute(args, env) {
-      fields(args, ['assetIds', 'prompt', 'concurrency', 'reuseEnabled', 'forceRerun', 'reuseMaxAgeSeconds']);
+      fields(args, ['assetIds', 'prompt', 'concurrency', 'reuseEnabled', 'forceRerun', 'reuseMaxAgeSeconds', 'reuseScope']);
+      if (args.reuseScope != null && !['hint', 'template', 'none'].includes(String(args.reuseScope))) throw new AgentError('INVALID_ARGUMENT', '复用口径只能是 hint、template 或 none');
       const reusePolicy: Record<string, unknown> = {};
       for (const key of ['reuseEnabled', 'forceRerun']) if (args[key] != null) {
         if (typeof args[key] !== 'boolean') throw new AgentError('INVALID_ARGUMENT', '复用与强制重标开关必须为布尔值');
