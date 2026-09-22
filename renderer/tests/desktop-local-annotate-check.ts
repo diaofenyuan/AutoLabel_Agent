@@ -260,14 +260,29 @@ export async function checkDesktopLocalAnnotate(window: BrowserWindow, output: s
     assert.equal(novelFinished.statistics.requestsUsed, 0, '失败的本机推理也不应产生 API 请求');
     checks.push({ check: 'novel-term-needs-english', code: rejected.errorCode, message: rejected.message });
 
-    // ===== 5c-2. 别名表能把「车辆/消防车」翻成英文（fire truck）：此时该要编码器，而不是要英文名 =====
-    const translatedOnly = await api<RunRow>('local.run.create',
+    // ===== 5c-2. 词表扩充后的中文名（手办/公仔/消防车/车辆）零下载命中内置词表 =====
+    // 靠「别名表 → 英文规范名 → builtin.npz 向量」三级命中：不需要下载 CLIP 编码器，也不许报错。
+    const expandedTerms = ['手办', '公仔', '消防车', '车辆'];
+    const expanded = deriveClassMap(expandedTerms, project.classes);
+    const expandedRun = await api<RunRow>('local.run.create',
       { projectId: project.id, assetIds: [freshId], modelId: registered.id, modelVersion: registered.version, device: 'cpu',
-        textClasses: ['消防车'], classMap: { 0: null }, confidence: 0.2, timeoutMs: 300000, forceRerun: true });
-    await wait(`window.autoLabel.request('run.get',{runId:${json(translatedOnly.id)}}).then(item=>['completed','completed_with_errors','failed','needs_attention','cancelled'].includes(item.status))`, 180000);
-    const translatedFinished = await api<RunRow>('run.get', { runId: translatedOnly.id });
+        textClasses: expandedTerms, classMap: expanded.classMap, confidence: 0.2, timeoutMs: 300000, forceRerun: true });
+    await wait(`window.autoLabel.request('run.get',{runId:${json(expandedRun.id)}}).then(item=>['completed','completed_with_errors','failed','needs_attention','cancelled'].includes(item.status))`, 180000);
+    const expandedFinished = await api<RunRow>('run.get', { runId: expandedRun.id });
+    assert.ok(!expandedFinished.samples.some(sample => sample.errorCode), `扩充词表后的中文名应直接可用，实际：${json(expandedFinished.samples)}`);
+    const expandedResult = await api<{ rawResult?: { vocabularySource?: string } }>('run.result.get', { resultId: expandedFinished.samples[0].resultId });
+    assert.equal(expandedResult.rawResult?.vocabularySource, 'builtin', `手办/公仔/消防车/车辆 应命中内置词表，实际：${expandedResult.rawResult?.vocabularySource}`);
+    checks.push({ check: 'expanded-vocab-zero-download', vocabularySource: expandedResult.rawResult?.vocabularySource });
+
+    // ===== 5c-3. 反例二：英文名但不在内置词表里 → 该要编码器，而不是要英文名 =====
+    // 「消防车」这类可译名已经在 5c-2 命中 builtin；真正落进「缺编码器」分支的是词表里没有的英文名。
+    const needsEncoderRun = await api<RunRow>('local.run.create',
+      { projectId: project.id, assetIds: [freshId], modelId: registered.id, modelVersion: registered.version, device: 'cpu',
+        textClasses: ['lampshade'], classMap: { 0: null }, confidence: 0.2, timeoutMs: 300000, forceRerun: true });
+    await wait(`window.autoLabel.request('run.get',{runId:${json(needsEncoderRun.id)}}).then(item=>['completed','completed_with_errors','failed','needs_attention','cancelled'].includes(item.status))`, 180000);
+    const translatedFinished = await api<RunRow>('run.get', { runId: needsEncoderRun.id });
     const needsEncoder = translatedFinished.samples.find(sample => sample.errorCode === 'vocabulary_encoder_missing');
-    assert.ok(needsEncoder, `能翻成英文的类别名应报需要编码器，实际：${json(translatedFinished.samples)}`);
+    assert.ok(needsEncoder, `词表里没有的英文名应报需要编码器，实际：${json(translatedFinished.samples)}`);
     checks.push({ check: 'novel-term-needs-encoder', code: needsEncoder.errorCode, message: needsEncoder.message });
 
     // ===== 5d. 省钱对比：本机运行与云端运行进同一张指标表，本地行必须显示 ¥0 =====

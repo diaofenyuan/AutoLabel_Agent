@@ -23,6 +23,8 @@ from pathlib import Path
 
 WORKER = Path(__file__).resolve().parent / "worker.py"
 CLASSES = ["人", "汽车", "交通标志"]
+# 词表扩充后的中文名：靠「别名表 → 英文规范名 → builtin.npz 向量」零下载命中（向量表重建的交付）。
+EXPANDED = ["手办", "公仔", "消防车", "车辆"]
 # 未命中内置词表的中文名：CLIP 只认英文，必须报「需要英文名」——下载编码器也救不了。
 NOVEL_CHINESE = ["街角的邮筒", "蒸汽机车锅炉"]
 # 未命中内置词表的英文名：没有编码器时报 vocabulary_encoder_missing，有编码器时现场编码并写回缓存。
@@ -103,18 +105,28 @@ def main() -> int:
                           for item in data["annotations"])
         assert geometry(second) == geometry(first), "同一张图与同一份类别名必须得到同样的框"
 
+        # 扩充词表后的中文名（手办/公仔/消防车/车辆）：零下载命中 builtin，不允许落到「需要编码器」。
+        expanded = request("predict", {"imagePath": str(image), "assetId": "vocabulary-check", "confidence": 0.25,
+                                       "classMap": {str(index): name for index, name in enumerate(EXPANDED)}, "textClasses": EXPANDED})
+        if expanded.get("__error__"):
+            raise SystemExit(f"扩充词表后的中文名应当直接可用，实际失败：{json.dumps(expanded, ensure_ascii=False)}")
+        assert expanded.get("vocabularySource") == "builtin", f"手办/公仔/消防车/车辆 应命中内置词表：{expanded.get('vocabularySource')}"
+
         # 中文新词：不论有没有编码器都必须明确拒绝，并指出改填英文名。
         blockedChinese = request("predict", {"imagePath": str(image), "assetId": "vocabulary-check", "confidence": 0.25,
                                             "classMap": {str(index): name for index, name in enumerate(NOVEL_CHINESE)}, "textClasses": NOVEL_CHINESE})
         expect_error(blockedChinese, "vocabulary_term_needs_english", "中文新词必须明确报「需要英文名」，不能静默编码成无意义的向量")
-        assert "英文名" in str(blockedChinese.get("error", {}).get("message", "")), "中文新词的失败原因要指出改填英文名"
+        # request() 把错误摊平成 {__error__, message}：原因文本在顶层 message 里。
+        assert "英文名" in str(blockedChinese.get("message", "")), f"中文新词的失败原因要指出改填英文名：{blockedChinese}"
 
         encoded = None
         if not args.encoder:
             blocked = request("predict", {"imagePath": str(image), "assetId": "vocabulary-check", "confidence": 0.25,
                                           "classMap": {str(index): name for index, name in enumerate(NOVEL)}, "textClasses": NOVEL})
             expect_error(blocked, "vocabulary_encoder_missing", "英文新词在本机没有编码器时必须明确报错而不是联网")
-            assert sorted(path.name for path in cache.glob("*.npz")) == [f"{first['vocabularyHash']}.npz"], "失败请求不得留下缓存文件"
+            # 缓存里只允许出现成功请求写回的词表（first 与 expanded 各一份）；失败请求不得留缓存。
+            expectedCache = sorted({f"{first['vocabularyHash']}.npz", f"{expanded['vocabularyHash']}.npz"})
+            assert sorted(path.name for path in cache.glob("*.npz")) == expectedCache, f"失败请求不得留下缓存文件：{sorted(path.name for path in cache.glob('*.npz'))}"
         else:
             encoded = request("predict", {"imagePath": str(image), "assetId": "vocabulary-check", "confidence": 0.25,
                                           "classMap": {str(index): name for index, name in enumerate(NOVEL)}, "textClasses": NOVEL})
@@ -124,7 +136,7 @@ def main() -> int:
             assert cached.get("vocabularySource") == "cache", "现场编码过的词表应写回缓存"
 
         print(json.dumps({"model": model.name, "classes": len(loaded["classes"]), "firstSource": first["vocabularySource"],
-                          "secondSource": second["vocabularySource"], "annotations": len(first["annotations"]),
+                          "secondSource": second["vocabularySource"], "expandedSource": expanded["vocabularySource"], "annotations": len(first["annotations"]),
                           "labels": sorted(labels), "encoderMissingRejected": not args.encoder,
                           "encodedSource": None if encoded is None else encoded["vocabularySource"],
                           "cacheFiles": sorted(path.name for path in cache.glob("*.npz"))}, ensure_ascii=False))
