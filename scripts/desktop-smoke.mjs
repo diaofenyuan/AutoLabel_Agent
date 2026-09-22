@@ -187,7 +187,12 @@ if (releaseOnly) {
 }
 if (updateUiOnly) { assert.equal(result.passed, true); assert.deepEqual(result.states, ['available','ready','install-gate','cancelled','checksum-error']); console.log(`更新界面本地回环检查通过：${output}`); process.exit(0); }
 if (runControlOnly) { assert.equal(result.passed, true); assert.equal(result.paused.cancelled, true); assert.equal(result.failedRetry.retryDispatched, true); assert.ok(result.failedRetry.callsAfter > result.failedRetry.callsBefore); console.log(`任务中心暂停/恢复/取消/失败重试界面检查通过：${output}`); process.exit(0); }
-if (mediaOnly) { assert.equal(result.passed, true); assert.equal(result.timeline?.frameCount, 4); assert.equal(result.timeline?.framesHaveSourcePts, true); assert.equal(result.timeline?.workspaceVisible, true); console.log(`视频抽帧参数、逐帧记录与轨迹工作区检查通过：${output}`); process.exit(0); }
+if (mediaOnly) { assert.equal(result.passed, true); assert.equal(result.timeline?.frameCount, 4); assert.equal(result.timeline?.framesHaveSourcePts, true); assert.equal(result.timeline?.workspaceVisible, true);
+  const scene = result.checks.find(check => check.check === 'scene-extraction');
+  assert.ok(scene && scene.firstKept === true && scene.thresholdOneFrames === 1 && scene.thinnedFrames >= 1 && scene.thinnedFrames <= 3, `场景变化抽帧断言未通过：${JSON.stringify(scene)}`);
+  const dropDefault = result.checks.find(check => check.check === 'video-drop-default-scene');
+  assert.equal(dropDefault?.defaultDensity, 'scene', `拖入应默认给场景变化推荐档：${JSON.stringify(dropDefault)}`);
+  console.log(`视频抽帧参数、场景变化抽帧与轨迹工作区检查通过：${output}`); process.exit(0); }
 if (reasonOnly) {
   assert.equal(result.passed, true);
   const byCheck = new Map(result.checks.map(check => [check.check, check]));

@@ -19,15 +19,20 @@ interface VideoExtractionOptions {
 }
 
 export type VideoExtractionParameters = VideoExtractionOptions & (
-  | { mode: 'interval'; intervalSeconds: number; everyNFrames?: never; targetFps?: never }
-  | { mode: 'every_n'; everyNFrames: number; intervalSeconds?: never; targetFps?: never }
-  | { mode: 'fps'; targetFps: number; intervalSeconds?: never; everyNFrames?: never }
+  | { mode: 'interval'; intervalSeconds: number; everyNFrames?: never; targetFps?: never; sceneThreshold?: never; minIntervalSeconds?: never }
+  | { mode: 'every_n'; everyNFrames: number; intervalSeconds?: never; targetFps?: never; sceneThreshold?: never; minIntervalSeconds?: never }
+  | { mode: 'fps'; targetFps: number; intervalSeconds?: never; everyNFrames?: never; sceneThreshold?: never; minIntervalSeconds?: never }
+  /** 场景变化抽帧：画面明显变化才留帧，相近的帧自动跳过；首帧必留，帧数由内容决定。 */
+  | { mode: 'scene'; sceneThreshold?: number; minIntervalSeconds?: number; intervalSeconds?: never; everyNFrames?: never; targetFps?: never }
 );
 
-/** 采样密度档位：把「三种采样模式 + 自由数值」收敛为首屏的四选一，自定义才展开原有模式。 */
-export type VideoDensity = 'dense' | 'standard' | 'sparse' | 'custom';
-export const VIDEO_DENSITY_SECONDS: Record<Exclude<VideoDensity, 'custom'>, number> = { dense: 0.5, standard: 1, sparse: 2 };
-export const VIDEO_DENSITY_LABELS: Record<VideoDensity, string> = { dense: '每 0.5 秒一帧', standard: '每 1 秒一帧（默认）', sparse: '每 2 秒一帧', custom: '自定义…' };
+/** 采样密度档位：把「采样模式 + 自由数值」收敛为首屏的五选一，自定义才展开原有模式。 */
+export type VideoDensity = 'scene' | 'dense' | 'standard' | 'sparse' | 'custom';
+export const VIDEO_DENSITY_SECONDS: Record<Exclude<VideoDensity, 'custom' | 'scene'>, number> = { dense: 0.5, standard: 1, sparse: 2 };
+export const VIDEO_DENSITY_LABELS: Record<VideoDensity, string> = { scene: '场景变化（推荐）', dense: '每 0.5 秒一帧', standard: '每 1 秒一帧', sparse: '每 2 秒一帧', custom: '自定义…' };
+/** 场景变化档的推荐值：候选帧与上一张保留帧的灰度差异（0～1）达到阈值才留下；minIntervalSeconds 是取样间隔，也保证保留帧的最小间隔（首帧必留）。 */
+export const VIDEO_SCENE_THRESHOLD = 0.15;
+export const VIDEO_SCENE_MIN_INTERVAL_SECONDS = 1;
 
 /**
  * 抽帧配方：固化「同一类素材往往会重复选择」的那部分选项。

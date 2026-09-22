@@ -81,6 +81,8 @@ const videoParameters = z.union([
   z.strictObject({ ...videoOptions, mode: z.literal('interval'), intervalSeconds: finite.min(.001).max(604800) }),
   z.strictObject({ ...videoOptions, mode: z.literal('every_n'), everyNFrames: z.number().int().min(1).max(1000000) }),
   z.strictObject({ ...videoOptions, mode: z.literal('fps'), targetFps: finite.min(.001).max(240) }),
+  // 场景变化抽帧：按取样间隔取候选帧，与上一张保留帧的差异达到阈值才留；两者都可缺省（默认 0.15 / 1 秒，与引擎同源）。
+  z.strictObject({ ...videoOptions, mode: z.literal('scene'), sceneThreshold: finite.min(.05).max(1).optional(), minIntervalSeconds: finite.min(.001).max(600).optional() }),
 ]);
 const screening = z.strictObject({ deduplicate: z.boolean().optional(), nearEnabled: z.boolean().optional(), blurEnabled: z.boolean().optional(),
   nearMaxDistance: z.number().int().min(0).max(64).optional(), aspectRatioTolerance: finite.min(0).max(1).optional(),
@@ -280,7 +282,7 @@ const schemas: Record<string, z.ZodType> = {
   'media.recipe.list': z.strictObject({ kind: z.literal('video_extract').optional() }),
   'media.recipe.save': z.strictObject({
     id: recipeId.optional(), baseVersion: z.number().int().min(0).max(2147483647).optional(), kind: z.literal('video_extract').optional(), name: z.string().min(1).max(40),
-    density: z.enum(['dense', 'standard', 'sparse', 'custom']).optional(), customMode: z.enum(['interval', 'every_n', 'fps']).optional(),
+    density: z.enum(['scene', 'dense', 'standard', 'sparse', 'custom']).optional(), customMode: z.enum(['interval', 'every_n', 'fps']).optional(),
     customValue: z.number().positive().max(1000000).optional(), resize: z.boolean().optional(),
     width: z.number().int().min(1).max(20000).optional(), height: z.number().int().min(1).max(20000).optional(),
     fit: z.enum(['contain', 'stretch']).optional(), format: z.enum(['png', 'jpg']).optional(), quality: z.number().int().min(2).max(31).optional(),

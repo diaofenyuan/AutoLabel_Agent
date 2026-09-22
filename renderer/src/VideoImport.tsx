@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Plus, Trash2 } from 'lucide-react';
-import { VIDEO_DENSITY_LABELS, VIDEO_DENSITY_SECONDS, type MediaJob, type VideoCreateRequest, type VideoDensity, type VideoExtractionParameters, type VideoExtractionRecipe, type VideoInspection, type VideoRecipeDraft, type VideoTimeRange } from '../../shared/media';
+import { VIDEO_DENSITY_LABELS, VIDEO_DENSITY_SECONDS, VIDEO_SCENE_MIN_INTERVAL_SECONDS, VIDEO_SCENE_THRESHOLD, type MediaJob, type VideoCreateRequest, type VideoDensity, type VideoExtractionParameters, type VideoExtractionRecipe, type VideoInspection, type VideoRecipeDraft, type VideoTimeRange } from '../../shared/media';
 import { getBridge, request, errorMessage, isDemo } from './bridge';
 import { useApp } from './context';
 import { Button, Field, IconButton, Modal, Notice } from './ui';
@@ -44,7 +44,7 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
   const [sourcePath, setSourcePath] = useState(initialSourcePath ?? ''), [inspection, setInspection] = useState<VideoInspection | null>(null), [error, setError] = useState('');
   const [inspecting, setInspecting] = useState(false), [busy, setBusy] = useState(false);
   const [transcodePath, setTranscodePath] = useState(''), [transcoding, setTranscoding] = useState(false), [elapsed, setElapsed] = useState(0);
-  const [density, setDensity] = useState<VideoDensity>('standard'), [customMode, setCustomMode] = useState<'interval' | 'every_n' | 'fps'>('interval'), [customValue, setCustomValue] = useState('1');
+  const [density, setDensity] = useState<VideoDensity>('scene'), [customMode, setCustomMode] = useState<'interval' | 'every_n' | 'fps'>('interval'), [customValue, setCustomValue] = useState('1');
   const [recipes, setRecipes] = useState<VideoExtractionRecipe[]>([]), [recipeId, setRecipeId] = useState(''), [recipeNotice, setRecipeNotice] = useState('');
   const [savingRecipe, setSavingRecipe] = useState(false), [recipeName, setRecipeName] = useState(''), [recipeBusy, setRecipeBusy] = useState(false);
   /**
@@ -127,10 +127,11 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
       }
     } catch (e) { setInspection(null); setError(errorMessage(e)); } finally { setInspecting(false); }
   }
-  const mode = density === 'custom' ? customMode : 'interval';
-  const sampling = density === 'custom' ? customValue : String(VIDEO_DENSITY_SECONDS[density]);
+  const mode = density === 'custom' ? customMode : density === 'scene' ? 'scene' : 'interval';
+  const sampling = density === 'custom' ? customValue : density === 'scene' ? '' : String(VIDEO_DENSITY_SECONDS[density as Exclude<VideoDensity, 'custom' | 'scene'>]);
   /** 估算帧数取区间上界，宁可高估也不放过超限。 */
   function estimateFrames(): number | null {
+    if (mode === 'scene') return null;
     if (duration === null) return null;
     const value = Number(sampling);
     if (!Number.isFinite(value) || value <= 0) return null;
@@ -158,11 +159,11 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
     if (!inspection) throw new Error('请先选择并成功检查视频。');
     const selectedRanges = whole && inspection.durationSeconds !== null ? [{ start: 0, end: inspection.durationSeconds }] : ranges;
     if (!selectedRanges.length || selectedRanges.length > 32 || selectedRanges.some((r, i) => !Number.isFinite(r.start) || !Number.isFinite(r.end) || r.start < 0 || r.end > 604800 || r.end <= r.start || (inspection.durationSeconds !== null && r.end > inspection.durationSeconds) || (i > 0 && r.start < selectedRanges[i - 1].end))) throw new Error('时间段需按先后顺序填写：起点非负、终点大于起点、范围互不重叠，且不超过已知视频时长。');
-    const value = Number(sampling); if (!Number.isFinite(value) || (mode === 'every_n' ? !Number.isSafeInteger(value) || value < 1 || value > 1000000 : value < .001 || value > (mode === 'fps' ? 240 : 604800))) throw new Error('间隔范围为 0.001～604800 秒；源帧间隔为 1～1000000 整数；目标帧率为 0.001～240。');
+    const value = Number(sampling); if (mode !== 'scene' && (!Number.isFinite(value) || (mode === 'every_n' ? !Number.isSafeInteger(value) || value < 1 || value > 1000000 : value < .001 || value > (mode === 'fps' ? 240 : 604800)))) throw new Error('间隔范围为 0.001～604800 秒；源帧间隔为 1～1000000 整数；目标帧率为 0.001～240。');
     const size = { width: Number(width), height: Number(height), fit };
     if (resize && (!Number.isSafeInteger(size.width) || !Number.isSafeInteger(size.height) || size.width < 1 || size.height < 1 || size.width > 20000 || size.height > 20000 || size.width * size.height > 40000000)) throw new Error('输出宽高需为 1～20000 的整数，且不超过 4000 万像素。');
     const jpegQuality = Number(quality); if (format === 'jpg' && (!Number.isInteger(jpegQuality) || jpegQuality < 2 || jpegQuality > 31)) throw new Error('JPEG 质量参数需为 2～31 的整数。');
-    return { ranges: selectedRanges, streamIndex: inspection.streamIndex, ...(resize ? { outputSize: size } : {}), format, ...(format === 'jpg' ? { jpegQuality } : {}), ...(mode === 'interval' ? { mode, intervalSeconds: value } : mode === 'every_n' ? { mode, everyNFrames: value } : { mode, targetFps: value }) };
+    return { ranges: selectedRanges, streamIndex: inspection.streamIndex, ...(resize ? { outputSize: size } : {}), format, ...(format === 'jpg' ? { jpegQuality } : {}), ...(mode === 'scene' ? { mode: 'scene' as const, sceneThreshold: VIDEO_SCENE_THRESHOLD, minIntervalSeconds: VIDEO_SCENE_MIN_INTERVAL_SECONDS } : mode === 'interval' ? { mode, intervalSeconds: value } : mode === 'every_n' ? { mode, everyNFrames: value } : { mode, targetFps: value }) };
   }
   async function create() { setBusy(true); setError(''); try { const payload: VideoCreateRequest = { projectId, sourcePath, expectedSourceHash: inspection!.sourceHash, parameters: parameters() }; const job = await request<MediaJob>('media.video.create', { ...payload }); created.current = true; onCreated(job, transcodePath || undefined); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); } }
   /**
@@ -250,7 +251,7 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
       ? <div className="video-start">
         <p className="video-start-lead">选择一段本机视频，抽帧后即可开始标注。</p>
         <Button className="primary" busy={inspecting} disabled={isDemo || transcoding} onClick={() => void choose()}><FolderOpen size={15} />{sourcePath ? '重新选择视频' : '选择视频'}</Button>
-        <p className="muted tiny">默认每 1 秒抽 1 帧，输出 PNG；采样密度与输出尺寸可在选择后调整。</p>
+        <p className="muted tiny">默认按「场景变化」抽帧：每 1 秒取一个候选帧，与上一张保留帧相比画面变化明显才留下，相近的帧自动跳过，输出 PNG；采样密度与输出尺寸可在选择后调整。</p>
         {sourcePath && <p className="muted tiny">已选择：{fileName}（尚未通过检查）</p>}
       </div>
       : <>
@@ -265,7 +266,9 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
           {density === 'custom' && <Field label="采样方式"><select aria-label="视频采样方式" disabled={busy} value={customMode} onChange={e => { setCustomMode(e.target.value as typeof customMode); setCustomValue(e.target.value === 'every_n' ? '10' : '1'); }}><option value="interval">每隔指定秒数</option><option value="every_n">每 N 个源帧</option><option value="fps">按目标帧率</option></select></Field>}
         </div>
         {density === 'custom' && <Field label={customMode === 'interval' ? '间隔（秒）' : customMode === 'every_n' ? '源帧间隔 N' : '目标帧率（帧/秒）'}><input aria-label="视频采样值" type="number" min={customMode === 'every_n' ? 1 : 0.001} step={customMode === 'every_n' ? 1 : 'any'} disabled={busy} value={customValue} onChange={e => setCustomValue(e.target.value)} /></Field>}
-        {estimated !== null && <p className="muted tiny">按当前密度预计抽出约 {estimated} 帧{duration !== null && `，视频时长 ${duration.toFixed(2)} 秒`}。</p>}
+        {mode === 'scene'
+          ? <p className="muted tiny">「场景变化」每 {VIDEO_SCENE_MIN_INTERVAL_SECONDS} 秒取一个候选帧，与上一张保留帧相比灰度差异达到 {VIDEO_SCENE_THRESHOLD} 才留下（首帧必留）；相近的帧自动跳过，实际帧数取决于画面变化（上限 {MAX_FRAMES} 帧）。</p>
+          : estimated !== null && <p className="muted tiny">按当前密度预计抽出约 {estimated} 帧{duration !== null && `，视频时长 ${duration.toFixed(2)} 秒`}。</p>}
         {suggested !== null && <Notice>按当前密度预计 {estimated} 帧，超过引擎单次上限 {MAX_FRAMES} 帧，整单会失败。建议改为每 {suggested} 秒一帧，或只抽其中一段。<div className="notice-actions"><Button onClick={applySuggestion}>改为每 {suggested} 秒一帧</Button></div></Notice>}
         <details className="video-advanced" open={advanced || durationUnknown} onToggle={e => setAdvanced((e.target as HTMLDetailsElement).open)}><summary>高级设置 · 时间范围与输出尺寸</summary>
           <label className="checkbox-row"><input type="checkbox" disabled={busy || duration === null} checked={whole} onChange={e => setWhole(e.target.checked)} />使用整段已知时长</label>

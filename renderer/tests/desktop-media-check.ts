@@ -49,6 +49,11 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     await button('继续');
     await wait(`!!document.querySelector('.video-inspection')`, 60000);
     const inspection = await js<string>(`document.querySelector('.video-inspection').innerText`); assert.ok(inspection.includes('768 × 576')); assert.ok(inspection.includes('79.50 秒'));
+    // 拖入即抽帧：面板直接带出推荐配方，主按钮就是「开始抽帧」，不用先选密度再开始。
+    const defaultDensity = await js<string>(`document.querySelector('[aria-label="视频采样密度"]').value`);
+    assert.equal(defaultDensity, 'scene', `抽帧面板应默认给「场景变化（推荐）」，实际 ${defaultDensity}`);
+    assert.equal(await js<boolean>(`[...document.querySelectorAll('.modal-actions button')].some(b=>b.innerText.trim()==='开始抽帧'&&!b.disabled)`), true, '拖入视频后主按钮应直接可点「开始抽帧」');
+    checks.push({ check: 'video-drop-default-scene', defaultDensity, primaryReady: true });
     // 关掉「抽帧完成后自动导入项目」，才能验证「产物就绪但尚未入库」这一段；它是偏好设置，界面开关在应用层进度条上。
     const settings = await api<Record<string, unknown>>('settings.get'); await api('settings.save', { settings: { ...settings, frameAutoImport: false } });
     await select('[aria-label="视频采样密度"]', 'custom'); await select('[aria-label="视频采样方式"]', 'interval'); await fill('[aria-label="视频采样值"]', '1');
@@ -100,6 +105,27 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     assert.equal(workspaceVisible, true, '轨迹标注页应能选中这条时间轴并进入工作区');
     await capture('-timeline.png', '.video-timeline');
     checks.push({ check: 'timeline-workspace-reachable', timelineId: timeline.id, frames: timelineFrames.total, builtFromRealFrames: true, workspaceVisible });
+    // ===== 场景变化抽帧：场景门控、首帧必留、最小间隔稀疏化（同一段真实视频上的确定性断言）=====
+    async function sceneJob(sceneThreshold: number, minIntervalSeconds: number) {
+      const job = await api<{ id: string }>('media.video.create', { projectId: project.id, sourcePath: videoPath,
+        parameters: { mode: 'scene', sceneThreshold, minIntervalSeconds, ranges: [{ start: 0, end: 6 }], format: 'png' } });
+      await settled(job.id);
+      return await api('media.video.frames', { jobId: job.id, offset: 0, limit: 50 }) as { total: number; items: Array<{ timeSeconds: number }> };
+    }
+    const sceneNormal = await sceneJob(0.15, 0.5);
+    const sceneTimes = sceneNormal.items.map(f => f.timeSeconds);
+    assert.ok(sceneTimes.length >= 1, '场景变化抽帧至少保留首帧');
+    assert.equal(sceneTimes[0], 0, `首帧必留，实际首帧 ${sceneTimes[0]}`);
+    assert.ok(sceneTimes.every((t, i) => i === 0 || t > sceneTimes[i - 1]), `保留帧时间必须严格递增：${json(sceneTimes)}`);
+    // 阈值提到 1.0：与上一张保留帧的灰度差异最大才 1.0，实际画面永远达不到 —— 只剩首帧，证明去重门真的在生效。
+    const sceneGateOnly = await sceneJob(1, 0.5);
+    assert.equal(sceneGateOnly.total, 1, `阈值 1.0 应只剩首帧，实际 ${sceneGateOnly.total} 帧：${json(sceneGateOnly.items.map(f => f.timeSeconds))}`);
+    // 最小间隔稀疏化：间隔 2 秒时 6 秒窗口最多 3 帧，且相邻保留帧间隔 ≥ 2 秒。
+    const sceneThinned = await sceneJob(0.05, 2);
+    const thinnedTimes = sceneThinned.items.map(f => f.timeSeconds);
+    assert.ok(thinnedTimes.length >= 1 && thinnedTimes.length <= 3, `最小间隔 2 秒时 6 秒窗口应为 1～3 帧，实际 ${thinnedTimes.length}`);
+    assert.ok(thinnedTimes.every((t, i) => i === 0 || t - thinnedTimes[i - 1] >= 2 - 1e-6), `相邻保留帧必须间隔 ≥ 2 秒：${json(thinnedTimes)}`);
+    checks.push({ check: 'scene-extraction', firstKept: sceneTimes[0] === 0, thresholdOneFrames: sceneGateOnly.total, normalFrames: sceneNormal.total, thinnedFrames: thinnedTimes.length, thinnedTimes });
     await writeFile(output, json({ passed: true, mode: 'media-ui', projectId: project.id, newModelRuns: 0, timeline: { frameCount: timelineFrames.total, framesHaveSourcePts: true, workspaceVisible }, checks }));
   } catch (e) { await writeFile(output.replace(/\.json$/, '-failure.png'), (await window.webContents.capturePage()).toPNG()); await writeFile(output, json({ passed: false, mode: 'media-ui', checks, error: e instanceof Error ? e.message : String(e), body: await js('document.body.innerText') })); throw e; }
 }

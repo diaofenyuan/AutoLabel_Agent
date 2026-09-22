@@ -19,7 +19,7 @@ import java.util.*;
 final class MediaRecipes {
     static final String KIND = "video_extract";
     static final String BUILTIN_PREFIX = "builtin:";
-    static final Set<String> DENSITIES = Set.of("dense", "standard", "sparse", "custom");
+    static final Set<String> DENSITIES = Set.of("scene", "dense", "standard", "sparse", "custom");
     static final Set<String> MODES = Set.of("interval", "every_n", "fps");
     static final Set<String> FORMATS = Set.of("png", "jpg");
     static final Set<String> FITS = Set.of("contain", "stretch");
