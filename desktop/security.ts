@@ -96,12 +96,14 @@ export async function authorizeCommandPaths(command: string, payload: Record<str
   }
 }
 
-export type MediaTarget = { kind: 'asset'; assetId: string } | { kind: 'evaluation'; setVersionId: string; assetId: string }
+export type MediaTarget = { kind: 'asset'; assetId: string } | { kind: 'thumb'; assetId: string } | { kind: 'evaluation'; setVersionId: string; assetId: string }
   | { kind: 'resource'; resourceId: string; version: number } | { kind: 'input'; inputId: string };
 
 export function mediaTargetFromUrl(value: string): MediaTarget {
   const asset = /^autolabel-media:\/\/asset\/([A-Za-z0-9_-]{1,128})$/.exec(value);
   if (asset && asset[0] === value) return { kind: 'asset', assetId: asset[1] };
+  const thumb = /^autolabel-media:\/\/thumb\/([A-Za-z0-9_-]{1,128})$/.exec(value);
+  if (thumb && thumb[0] === value) return { kind: 'thumb', assetId: thumb[1] };
   const evaluation = /^autolabel-media:\/\/evaluation\/([A-Za-z0-9_-]{1,128})\/([A-Za-z0-9_-]{1,128})$/.exec(value);
   if (evaluation && evaluation[0] === value) return { kind: 'evaluation', setVersionId: evaluation[1], assetId: evaluation[2] };
   const resource = /^autolabel-media:\/\/resource\/([A-Za-z0-9_-]{1,128})\/(0|[1-9][0-9]{0,9})$/.exec(value);

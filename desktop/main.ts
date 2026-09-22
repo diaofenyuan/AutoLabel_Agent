@@ -822,9 +822,10 @@ async function registerProtocols(): Promise<void> {
       const target = mediaTargetFromUrl(req.url);
       const response = await engine.media(target, req.signal);
       const mime = response.headers.get('content-type')?.split(';')[0];
-      const allowedTypes = target.kind === 'asset' ? ['image/jpeg', 'image/png', 'image/webp'] : ['image/png'];
+      const allowedTypes = target.kind === 'asset' ? ['image/jpeg', 'image/png', 'image/webp'] : target.kind === 'thumb' ? ['image/jpeg'] : ['image/png'];
       if (!response.ok || !mime || !allowedTypes.includes(mime)) { await response.body?.cancel(); return new Response(null, { status: response.ok ? 415 : response.status }); }
-      return new Response(response.body, { headers: { 'Content-Type': mime, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Access-Control-Allow-Origin': devOrigin ?? 'autolabel-app://app' } });
+      // 缩略图与原图都可缓存：内容按内容哈希定址，缓存删掉还能重建；以前的 no-store 让网格反复重拉全尺寸图。
+      return new Response(response.body, { headers: { 'Content-Type': mime, 'Cache-Control': target.kind === 'thumb' ? 'private, max-age=31536000, immutable' : 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff', 'Access-Control-Allow-Origin': devOrigin ?? 'autolabel-app://app' } });
     } catch { return new Response(null, { status: 403 }); }
   });
 }

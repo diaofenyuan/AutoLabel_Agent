@@ -250,7 +250,7 @@ export default function ProjectOverview() {
           {visible.length
             ? <div className="result-grid">{visible.map(asset => <div className={`result-thumb-wrap ${selectedAssetIds.includes(asset.id) ? 'selected' : ''}`} key={asset.id}>
             <button className="result-thumb" title={`${asset.name} · ${statusNames[asset.status] ?? asset.status}`} onClick={() => setPreview(asset)}>
-              <img loading="lazy" src={asset.thumbnailUrl || asset.mediaUrl} alt={asset.name} />
+              <img loading="lazy" src={`autolabel-media://thumb/${asset.id}`} alt={asset.name} />
               <span className="truncate">{asset.name}</span>
               <small>{statusNames[asset.status] ?? asset.status} · {asset.annotations.length} 个</small>
             </button>

@@ -57,7 +57,7 @@ final class Projects {
             boolean duplicate=store.read(c->Store.one(c,"SELECT id FROM assets WHERE project_id=? AND json_extract(data,'$.contentHash')=?",projectId,result.hash())!=null);
             if(duplicate){Files.deleteIfExists(result.path());if(mode.equals("copy"))Files.deleteIfExists(Path.of(Json.required(result.metadata(),"sourcePath")));skipped++;continue;}
             JsonObject asset=Json.obj("id",id,"projectId",projectId,"name",source.getFileName().toString(),"width",result.width(),"height",result.height(),
-                "mediaUrl","autolabel-media://asset/"+id,"thumbnailUrl","autolabel-media://asset/"+id,"contentHash",result.hash(),"status","unlabeled","annotations",new JsonArray(),"version",0,"source","import","metadata",result.metadata());
+                "mediaUrl","autolabel-media://asset/"+id,"thumbnailUrl","autolabel-media://thumb/"+id,"contentHash",result.hash(),"status","unlabeled","annotations",new JsonArray(),"version",0,"source","import","metadata",result.metadata());
             store.tx(c->{Store.update(c,"INSERT INTO assets(id,project_id,data,path) VALUES(?,?,?,?)",id,projectId,asset,result.path().toString());Store.event(c,"asset.imported",null,id,null,Json.obj("projectId",projectId));return null;});imported++;ids.add(id);
         }catch(Exception e){if(e instanceof ApiError a&&a.status>=500)throw a;errors.add(Json.obj("name",source.getFileName().toString(),"code",e instanceof ApiError a?a.code:"image_decode_failed","message",e instanceof ApiError a?a.getMessage():"图片解码或保存失败，请检查格式与文件权限。"));}}
         return Json.obj("imported",imported,"skipped",skipped,"errors",errors,"assetIds",ids);

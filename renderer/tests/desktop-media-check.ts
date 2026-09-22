@@ -1,6 +1,7 @@
 import type { BrowserWindow } from 'electron';
+import { net } from 'electron';
 import assert from 'node:assert/strict';
-import { copyFile, mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { keypointEdges } from '../src/keypointEdges';
 import { gotoTasks, openProjectOverview } from './desktop-navigation';
@@ -83,6 +84,24 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     await button('将抽帧导入项目'); await wait(`window.autoLabel.request('media.job.get',{jobId:${json(firstJob.id)}}).then(j=>j.status==='completed'&&j.stage==='done'&&j.assetsCommitted)`, 60000); const importedFrames = await api('media.video.frames', { jobId: firstJob.id, offset: 0, limit: 20 }); assert.ok(importedFrames.items.every((f: any) => f.assetId)); const all = await api('asset.list', { projectId: project.id, limit: 100 }); assert.equal(all.total, 4);
     await openProjectOverview(driver, name);
     await wait(`document.querySelectorAll('.result-thumb').length===4`);
+    // ===== 缩略图：网格拉的是可重建的缩略图（<30KB），不是全尺寸 PNG；缓存删掉自动重建 =====
+    const thumbs = await js<string[]>(`[...document.querySelectorAll('.result-thumb img')].map(img=>img.getAttribute('src'))`);
+    assert.ok(thumbs.length === 4 && thumbs.every(src => src?.startsWith('autolabel-media://thumb/')), `网格应全部使用缩略图地址，实际：${json(thumbs)}`);
+    const thumbResponse = await net.fetch(thumbs[0]);
+    assert.ok(thumbResponse.ok, `缩略图应能直接取到，实际 ${thumbResponse.status}`);
+    const thumbBytes = new Uint8Array(await thumbResponse.arrayBuffer());
+    assert.ok(thumbBytes.length < 30 * 1024, `缩略图应小于 30KB，实际 ${thumbBytes.length} 字节`);
+    const fullBytes = new Uint8Array(await (await net.fetch(thumbs[0].replace('/thumb/', '/asset/'))).arrayBuffer());
+    assert.ok(fullBytes.length > thumbBytes.length, `全尺寸图必须明显大于缩略图（${fullBytes.length} vs ${thumbBytes.length}）`);
+    const candidates = [path.join(userData, 'data', 'thumbnail-cache'), path.join(userData, 'thumbnail-cache')];
+    let thumbnailCache = '';
+    for (const candidate of candidates) if (await stat(candidate).catch(() => null)) thumbnailCache = candidate;
+    assert.ok(thumbnailCache, `找不到缩略图缓存目录，实际试过：${json(candidates)}`);
+    await rm(thumbnailCache, { recursive: true, force: true });
+    assert.ok(!(await stat(thumbnailCache).catch(() => null)), '缩略图缓存应能整目录删除（可重建缓存）');
+    const rebuilt = new Uint8Array(await (await net.fetch(thumbs[0])).arrayBuffer());
+    assert.equal(rebuilt.length, thumbBytes.length, `删掉缓存后应按基准图重建出同样大小的缩略图（${rebuilt.length} vs ${thumbBytes.length}）`);
+    checks.push({ check: 'thumbnail-served-and-rebuildable', thumbBytes: thumbBytes.length, fullBytes: fullBytes.length, rebuiltBytes: rebuilt.length });
     // 标准答案集入口：界面重构移除旧页面后它一直没有新落点，评测因此没法给新项目建真值；这里守一条「概览页能打开它」。
     await js(`([...document.querySelectorAll('.overview-page button')].find(node=>node.innerText.trim()==='标准答案集')).click()`);
     await wait(`!!document.querySelector('dialog[open]')&&document.querySelector('dialog[open]').innerText.includes('独立标准答案集')`);

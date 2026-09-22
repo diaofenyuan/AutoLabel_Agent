@@ -67,7 +67,7 @@ export default function ResultCard({ project }: { project: Project }) {
     {distribution.length > 0 && <div className="result-stats">{distribution.map(item => <span key={item.id}><i style={{ background: item.color }} />{item.name} <strong>{item.count}</strong></span>)}</div>}
     {assets.length
       ? <div className="result-grid">{assets.map(asset => <button key={asset.id} className="result-thumb" title={`${asset.name} · ${statusNames[asset.status] ?? asset.status}`} onClick={() => setPreview(asset)}>
-        <img loading="lazy" src={asset.thumbnailUrl || asset.mediaUrl} alt={asset.name} />
+        <img loading="lazy" src={`autolabel-media://thumb/${asset.id}`} alt={asset.name} />
         <span className="truncate">{asset.name}</span>
         <small>{statusNames[asset.status] ?? asset.status} · {asset.annotations.length} 个</small>
       </button>)}</div>

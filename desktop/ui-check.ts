@@ -64,6 +64,11 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
     await window.webContents.executeJavaScript(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');
       if(!item)throw new Error('缺少设置导航项');item.click();})()`);
     await waitFor(`!!document.querySelector('.settings-tabs')`);
+    // 「示例」在高级设置折叠层里：先进设置时它是收起的，必须先展开再点，和真实用户路径一致。
+    await window.webContents.executeJavaScript(`(()=>{
+      const tabs=[...document.querySelectorAll('.settings-tabs button')];
+      if(!tabs.some(node=>node.innerText.trim()==='示例'))tabs.find(node=>node.innerText.includes('高级设置'))?.click();})()`);
+    await waitFor(`[...document.querySelectorAll('.settings-tabs button')].some(node=>node.innerText.trim()==='示例')`);
     await window.webContents.executeJavaScript(`[...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()==='示例').click()`);
     await waitFor(`!!document.querySelector('[aria-label="载入示例"]')`);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="载入示例"]').click()`);
@@ -149,7 +154,7 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   // 模型与思考深度收起成一行，点开才出现搜索、模型列表与档位。
   const picker = await window.webContents.executeJavaScript(`(async()=>{
     const settle=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-    const trigger=document.querySelector('.chat-model-line .model-picker-trigger');
+    const trigger=document.querySelector('.chat-dock .model-picker-trigger')||document.querySelector('.chat-panel .model-picker-trigger');
     if(!trigger)throw new Error('缺少模型与思考深度入口');
     const collapsed={text:trigger.innerText.trim(),open:!!document.querySelector('.picker-popover')};
     trigger.click(); await settle();
@@ -167,6 +172,10 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   // 任务流程在对话里选：菜单要列出可选流程，选中只填进输入框，不直接执行。
   const flow = await window.webContents.executeJavaScript(`(async()=>{
     const settle=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    // 任务流程收在「范围与执行方式」弹层里（输入卡简化后不再平铺），先展开再点。
+    const summary=document.querySelector('.chat-panel .composer-summary')||document.querySelector('.composer-summary');
+    if(!summary)throw new Error('对话里缺少范围与执行方式入口');
+    summary.click(); await settle();
     const trigger=document.querySelector('.flow-picker>button');
     if(!trigger)throw new Error('对话里缺少任务流程入口');
     trigger.click(); await settle();
@@ -327,6 +336,11 @@ export async function checkPackagedRelease(window: BrowserWindow, output: string
   await window.webContents.executeJavaScript(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');
     if(!item)throw new Error('缺少设置导航项');item.click();})()`);
   await waitFor(`!!document.querySelector('.settings-tabs')`);
+  // 同 loadExample：「示例」页签折叠在高级设置里，先展开再点。
+  await window.webContents.executeJavaScript(`(()=>{
+    const tabs=[...document.querySelectorAll('.settings-tabs button')];
+    if(!tabs.some(node=>node.innerText.trim()==='示例'))tabs.find(node=>node.innerText.includes('高级设置'))?.click();})()`);
+  await waitFor(`[...document.querySelectorAll('.settings-tabs button')].some(node=>node.innerText.trim()==='示例')`);
   await window.webContents.executeJavaScript(`[...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()==='示例').click()`);
   await waitFor(`!!document.querySelector('[aria-label="载入示例"]')`);
   await window.webContents.executeJavaScript(`document.querySelector('[aria-label="载入示例"]').click()`);

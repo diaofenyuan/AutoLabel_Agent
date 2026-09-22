@@ -40,13 +40,17 @@ public final class Main {
                     // 若健康检查也要排队，桌面端会在引擎仍然健康时被 503 判成断连。
                     if(path.equals("/health")&&method.equals("GET")){send(exchange,200,Json.obj("ok",true,"version","0.1.0","protocolVersion",1,"state","ready"));return;}
                     // 图片流同样不占命令许可，否则工作台一次加载缩略图网格就会挤掉后续命令。
-                    if((path.startsWith("/evaluation-media/")||path.startsWith("/media/"))&&method.equals("GET")){
+                    if((path.startsWith("/evaluation-media/")||path.startsWith("/media/")||path.startsWith("/thumb/"))&&method.equals("GET")){
                         if(!media.tryAcquire())throw new ApiError(503,"media_busy","图片请求过于密集，请稍后重试。");
                         try{
                             if(path.startsWith("/evaluation-media/")){
                                 String[] ids=path.substring(18).split("/");if(ids.length!=2||!ids[0].matches("[a-zA-Z0-9-]{1,100}")||!ids[1].matches("[a-zA-Z0-9-]{1,100}"))throw new ApiError(400,"asset_id_invalid","评测素材标识无效。");Path file=new EvaluationSets(engine.store,engine.projects).image(ids[0],ids[1]);exchange.getResponseHeaders().set("Content-Type","image/png");exchange.getResponseHeaders().set("Cache-Control","private, max-age=86400");exchange.getResponseHeaders().set("X-Content-Type-Options","nosniff");exchange.sendResponseHeaders(200,Files.size(file));try(OutputStream out=exchange.getResponseBody()){Files.copy(file,out);}return;
                             }
-                            String id=path.substring(7);if(!id.matches("[a-zA-Z0-9-]{1,100}"))throw new ApiError(400,"asset_id_invalid","素材标识无效。");Path file=engine.projects.path(id);if(!Files.isRegularFile(file))throw new ApiError(404,"media_missing","基准图片不存在。");
+                            String id=path.substring(7);if(!id.matches("[a-zA-Z0-9-]{1,100}"))throw new ApiError(400,"asset_id_invalid","素材标识无效。");
+                            if(path.startsWith("/thumb/")){Path source=engine.projects.path(id);if(!Files.isRegularFile(source))throw new ApiError(404,"media_missing","基准图片不存在。");
+                                Path thumb=Thumbnails.file(engine.store.root,source,Json.required(engine.projects.asset(id),"contentHash"));
+                                exchange.getResponseHeaders().set("Content-Type","image/jpeg");exchange.getResponseHeaders().set("Cache-Control","private, max-age=31536000, immutable");exchange.getResponseHeaders().set("X-Content-Type-Options","nosniff");exchange.sendResponseHeaders(200,Files.size(thumb));try(OutputStream out=exchange.getResponseBody()){Files.copy(thumb,out);}return;}
+                            Path file=engine.projects.path(id);if(!Files.isRegularFile(file))throw new ApiError(404,"media_missing","基准图片不存在。");
                             exchange.getResponseHeaders().set("Content-Type","image/png");exchange.getResponseHeaders().set("Cache-Control","private, max-age=86400");exchange.getResponseHeaders().set("X-Content-Type-Options","nosniff");exchange.sendResponseHeaders(200,Files.size(file));try(OutputStream out=exchange.getResponseBody()){Files.copy(file,out);}return;
                         }finally{media.release();}
                     }

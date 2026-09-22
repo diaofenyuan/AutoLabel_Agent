@@ -361,7 +361,7 @@ export class EngineManager extends EventEmitter {
       const stream = createReadStream(filename, { signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]) });
       return new Response(Readable.toWeb(stream) as ReadableStream<Uint8Array>, { headers: { 'Content-Type': 'image/png' } });
     }
-    const route = target.kind === 'evaluation' ? `/evaluation-media/${target.setVersionId}/${target.assetId}` : `/media/${target.assetId}`;
+    const route = target.kind === 'evaluation' ? `/evaluation-media/${target.setVersionId}/${target.assetId}` : target.kind === 'thumb' ? `/thumb/${target.assetId}` : `/media/${target.assetId}`;
     return fetch(`http://127.0.0.1:${this.port}${route}`, { headers: { Authorization: `Bearer ${this.token}` }, signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]), redirect: 'error' });
   }
   private async events(generation: number): Promise<void> {
