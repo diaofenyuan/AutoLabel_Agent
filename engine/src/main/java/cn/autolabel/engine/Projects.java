@@ -7,7 +7,9 @@ import java.util.*;
 import java.util.stream.Stream;
 
 final class Projects {
-    final Store store;final Media media;
+    /** 超过这个张数转后台导入任务：同步命令在桌面侧的超时是 120 秒，上万张不可能在期限内完成。 */
+    static final int ASYNC_IMPORT_THRESHOLD=500;
+    final Store store;final Media media;MediaJobs mediaJobs;
     Projects(Store store){this.store=store;media=new Media(store);}
     JsonObject create(JsonObject p){
         String name=Json.required(p,"name"),type=Json.str(p,"taskType","detect");if(!Annotations.TYPES.contains(type))throw new ApiError(400,"task_type_invalid","任务类型无效。");
@@ -18,7 +20,7 @@ final class Projects {
     }
     JsonObject project(Connection c,String id)throws Exception{
         JsonObject p=Store.document(c,"projects",id);
-        JsonObject counts=Store.one(c,"SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN json_extract(data,'$.status') IN ('candidate','modified','confirmed') THEN 1 ELSE 0 END),0) AS annotated,COALESCE(SUM(CASE WHEN json_extract(data,'$.status')='confirmed' THEN 1 ELSE 0 END),0) AS confirmed FROM assets WHERE project_id=?",id);
+        JsonObject counts=Store.one(c,"SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN status IN ('candidate','modified','confirmed') THEN 1 ELSE 0 END),0) AS annotated,COALESCE(SUM(CASE WHEN status='confirmed' THEN 1 ELSE 0 END),0) AS confirmed FROM assets WHERE project_id=?",id);
         p.add("assetCount",counts.get("total"));p.add("annotatedCount",counts.get("annotated"));p.add("confirmedCount",counts.get("confirmed"));return p;
     }
     JsonObject get(String id){return store.read(c->project(c,id));}
@@ -40,27 +42,53 @@ final class Projects {
     Path path(String id){return store.read(c->{JsonObject r=Store.one(c,"SELECT path FROM assets WHERE id=?",id);if(r==null)throw new ApiError(404,"asset_not_found","素材不存在。");return Path.of(r.get("path").getAsString());});}
     JsonObject listAssets(JsonObject p){String id=Json.required(p,"projectId");int offset=Json.bounded(p,"offset",0,0,Integer.MAX_VALUE),limit=Json.bounded(p,"limit",100,1,500);
         return store.read(c->{Store.document(c,"projects",id);String condition="project_id=?";List<Object> args=new ArrayList<>(List.of(id));
-            if(p.has("status")){condition+=" AND json_extract(data,'$.status')=?";args.add(Json.required(p,"status"));}
+            if(p.has("status")){condition+=" AND status=?";args.add(Json.required(p,"status"));}
             long total=Store.one(c,"SELECT COUNT(*) AS n FROM assets WHERE "+condition,args.toArray()).get("n").getAsLong();
             args.add(limit);args.add(offset);JsonArray items=new JsonArray();for(JsonObject r:Store.rows(c,"SELECT id FROM assets WHERE "+condition+" ORDER BY rowid LIMIT ? OFFSET ?",args.toArray()))items.add(asset(c,r.get("id").getAsString()));return Json.obj("items",items,"total",total);});
     }
+    /** 逐张归一化的取消与进度口子：同步导入用空实现，后台任务接真实任务状态。 */
+    interface ImportMeter{default void checkpoint(){}default void progress(int done,int total,int skipped,int errors){}}
+    static final class ImportTally{int imported,skipped;final JsonArray errors=new JsonArray();final JsonArray ids=new JsonArray();}
     synchronized JsonObject importAssets(JsonObject p){
-        String projectId=Json.required(p,"projectId");JsonObject project=get(projectId);String mode=Json.str(p,"mode","copy");
-        if(!Set.of("copy","reference").contains(mode))throw new ApiError(400,"import_mode_invalid","导入方式应为 copy 或 reference。");
+        String projectId=Json.required(p,"projectId");JsonObject project=get(projectId);String mode=importMode(p);
+        List<Path> files=expandImportFiles(p);
+        if(files.size()>ASYNC_IMPORT_THRESHOLD&&mediaJobs!=null)return mediaJobs.queueAssetImport(projectId,mode,files);
+        ImportTally tally=new ImportTally();
+        try{importFiles(project,files,mode,tally,null);}catch(Exception e){if(e instanceof ApiError a&&a.status>=500)throw a;/* 同步导入尽力而为，单张失败已进 errors */}
+        return Json.obj("imported",tally.imported,"skipped",tally.skipped,"errors",tally.errors,"assetIds",tally.ids);
+    }
+    static String importMode(JsonObject p){String mode=Json.str(p,"mode","copy");if(!Set.of("copy","reference").contains(mode))throw new ApiError(400,"import_mode_invalid","导入方式应为 copy 或 reference。");return mode;}
+    static List<Path> expandImportFiles(JsonObject p){
         JsonArray paths=Json.array(p,"paths");if(paths.isEmpty())throw new ApiError(400,"paths_required","请选择图片或文件夹。");
         List<Path> files=new ArrayList<>();for(JsonElement e:paths){Path path=Path.of(e.getAsString()).toAbsolutePath().normalize();
             if(Files.isDirectory(path)){try(Stream<Path> stream=Files.walk(path,12)){stream.filter(Files::isRegularFile).filter(f->f.toString().toLowerCase().matches(".*\\.(jpe?g|png)$")).limit(10001-files.size()).forEach(files::add);}catch(Exception ex){throw new ApiError(400,"directory_unavailable","无法访问选定文件夹。");}}
             else files.add(path);if(files.size()>10000)throw new ApiError(413,"import_batch_too_large","单次最多导入 10000 张图片。");}
-        int imported=0,skipped=0;JsonArray errors=new JsonArray();JsonArray ids=new JsonArray();
-        for(Path source:files){String id=Json.id();try{
-            Media.Normalized result=media.normalize(source,id,Json.str(Json.object(project,"settings"),"alphaBackground","#ffffff"),mode.equals("copy"));
-            boolean duplicate=store.read(c->Store.one(c,"SELECT id FROM assets WHERE project_id=? AND json_extract(data,'$.contentHash')=?",projectId,result.hash())!=null);
-            if(duplicate){Files.deleteIfExists(result.path());if(mode.equals("copy"))Files.deleteIfExists(Path.of(Json.required(result.metadata(),"sourcePath")));skipped++;continue;}
-            JsonObject asset=Json.obj("id",id,"projectId",projectId,"name",source.getFileName().toString(),"width",result.width(),"height",result.height(),
-                "mediaUrl","autolabel-media://asset/"+id,"thumbnailUrl","autolabel-media://thumb/"+id,"contentHash",result.hash(),"status","unlabeled","annotations",new JsonArray(),"version",0,"source","import","metadata",result.metadata());
-            store.tx(c->{Store.update(c,"INSERT INTO assets(id,project_id,data,path) VALUES(?,?,?,?)",id,projectId,asset,result.path().toString());Store.event(c,"asset.imported",null,id,null,Json.obj("projectId",projectId));return null;});imported++;ids.add(id);
-        }catch(Exception e){if(e instanceof ApiError a&&a.status>=500)throw a;errors.add(Json.obj("name",source.getFileName().toString(),"code",e instanceof ApiError a?a.code:"image_decode_failed","message",e instanceof ApiError a?a.getMessage():"图片解码或保存失败，请检查格式与文件权限。"));}}
-        return Json.obj("imported",imported,"skipped",skipped,"errors",errors,"assetIds",ids);
+        return files;
+    }
+    /** 逐张归一化、每 200 张一次事务落库：坏图只记错跳过；去重走 content_hash 索引 + 批内指纹集。 */
+    void importFiles(JsonObject project,List<Path> files,String mode,ImportTally tally,ImportMeter meter)throws Exception{
+        String projectId=Json.required(project,"id");String background=Json.str(Json.object(project,"settings"),"alphaBackground","#ffffff");
+        List<JsonObject> rows=new ArrayList<>();Set<String> seen=new HashSet<>();int done=0;
+        for(Path source:files){
+            if(meter!=null)meter.checkpoint();
+            String id=Json.id();try{
+                Media.Normalized result=media.normalize(source,id,background,mode.equals("copy"));String hash=result.hash();
+                boolean duplicate=!seen.add(hash)||store.read(c->Store.one(c,"SELECT id FROM assets WHERE project_id=? AND content_hash=?",projectId,hash)!=null);
+                if(duplicate){Files.deleteIfExists(result.path());if(mode.equals("copy"))Files.deleteIfExists(Path.of(Json.required(result.metadata(),"sourcePath")));tally.skipped++;}
+                else{JsonObject asset=Json.obj("id",id,"projectId",projectId,"name",source.getFileName().toString(),"width",result.width(),"height",result.height(),
+                    "mediaUrl","autolabel-media://asset/"+id,"thumbnailUrl","autolabel-media://thumb/"+id,"contentHash",hash,"status","unlabeled","annotations",new JsonArray(),"version",0,"source","import","metadata",result.metadata(),"privatePath",result.path().toString());
+                    rows.add(asset);tally.ids.add(id);tally.imported++;if(rows.size()>=200)commitAssets(projectId,rows);}
+            }catch(Exception e){if(e instanceof ApiError a&&a.status>=500)throw a;
+                tally.errors.add(Json.obj("name",source.getFileName().toString(),"code",e instanceof ApiError a?a.code:"image_decode_failed","message",e instanceof ApiError a?a.getMessage():"图片解码或保存失败，请检查格式与文件权限。"));}
+            done++;if(meter!=null)meter.progress(done,files.size(),tally.skipped,tally.errors.size());
+        }
+        commitAssets(projectId,rows);
+    }
+    private void commitAssets(String projectId,List<JsonObject> rows){
+        if(rows.isEmpty())return;List<JsonObject> batch=new ArrayList<>(rows);rows.clear();
+        store.tx(c->{for(JsonObject asset:batch){String id=Json.required(asset,"id"),path=Json.required(asset,"privatePath");asset.remove("privatePath");
+                Store.update(c,"INSERT INTO assets(id,project_id,data,path) VALUES(?,?,?,?)",id,projectId,asset,path);}
+            Store.event(c,"asset.imported",null,null,null,Json.obj("projectId",projectId,"imported",batch.size()));return null;});
     }
     JsonObject save(JsonObject p){return save(p,"manual",null);}
     JsonObject save(JsonObject p,String source,JsonObject sourceMetadata){String id=Json.required(p,"assetId");if(!p.has("baseVersion")||!p.has("annotations")||!p.get("annotations").isJsonArray())throw new ApiError(400,"invalid_argument","保存必须包含 baseVersion 与 annotations 数组。");

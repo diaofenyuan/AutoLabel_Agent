@@ -77,10 +77,10 @@ export default function ChatHome() {
       setProjectPrompt({
         title: '导入图片', confirmLabel: '导入并继续', suggest: folderName(paths[0]),
         run: async target => {
-          const result = await request<{ imported: number; skipped: number }>('asset.import', { projectId: target.id, paths, mode: 'copy' });
-          await openProject(target, result.imported ? `刚导入了 ${result.imported} 张图片，请开始标注` : '这批图片之前已经导入过，请核对已有标注');
+          const result = await request<{ imported?: number; skipped?: number; queued?: boolean; total?: number }>('asset.import', { projectId: target.id, paths, mode: 'copy' });
+          await openProject(target, result.queued ? `这批有 ${result.total ?? 0} 张，已转入后台导入任务，完成后即可开始标注` : result.imported ? `刚导入了 ${result.imported} 张图片，请开始标注` : '这批图片之前已经导入过，请核对已有标注');
           // openProject 会清掉当前提示，所以导入结果必须放在它之后播报，否则用户看不到。
-          notify(`已导入 ${result.imported} 张，跳过 ${result.skipped} 张。`);
+          notify(result.queued ? `导入量较大（${result.total ?? 0} 张），已转入后台导入任务：进度见「任务 · 素材任务」，可随时取消。` : `已导入 ${result.imported} 张，跳过 ${result.skipped} 张。`);
         }
       });
     } catch (e) { notify(errorMessage(e), true); }
@@ -123,11 +123,11 @@ export default function ChatHome() {
       setProjectPrompt({
         title: '导入图片文件夹', confirmLabel: '导入并继续', suggest: directoryName(directory),
         run: async target => {
-          const result = await request<{ imported: number; skipped: number }>('asset.import', { projectId: target.id, paths: [directory], mode: 'copy' });
-          await openProject(target, result.imported ? `刚导入了 ${result.imported} 张图片，请开始标注` : '这个文件夹里的图片已经导入过，请核对已有标注');
+          const result = await request<{ imported?: number; skipped?: number; queued?: boolean; total?: number }>('asset.import', { projectId: target.id, paths: [directory], mode: 'copy' });
+          await openProject(target, result.queued ? `这批有 ${result.total ?? 0} 张，已转入后台导入任务，完成后即可开始标注` : result.imported ? `刚导入了 ${result.imported} 张图片，请开始标注` : '这个文件夹里的图片已经导入过，请核对已有标注');
           // openProject 会清掉当前提示，所以导入结果必须放在它之后播报。
           notify([
-            `已导入 ${result.imported} 张，跳过 ${result.skipped} 张。`,
+            result.queued ? `导入量较大（${result.total ?? 0} 张），已转入后台导入任务：进度见「任务 · 素材任务」，可随时取消。` : `已导入 ${result.imported} 张，跳过 ${result.skipped} 张。`,
             scanned?.unsupported ? `文件夹里另有 ${scanned.unsupported} 个文件不是 JPG / JPEG / PNG，没有导入。` : '',
             scanned?.truncated ? '文件夹过大，本次只处理了上限内的部分，其余请分批导入。' : ''
           ].filter(Boolean).join(' '));
@@ -188,7 +188,7 @@ export default function ChatHome() {
             if (attachments.length) {
               const result = await importAttachments(target.id, attachments);
               if (result.videos.length) setPendingVideoImports({ projectId: target.id, files: result.videos });
-              if (result.imported || result.skipped) notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`);
+              if (result.queued) notify(`这批有 ${result.total ?? 0} 张，导入量较大已转入后台任务：进度见「任务 · 素材任务」，可随时取消。`); else if (result.imported || result.skipped) notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`);
               setAttachments([]);
             }
             await openProject(target, text || `刚添加了 ${attachments.length} 个文件，请核对项目素材。`);

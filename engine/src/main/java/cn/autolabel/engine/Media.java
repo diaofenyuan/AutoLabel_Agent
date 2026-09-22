@@ -56,24 +56,32 @@ final class Media {
         try{bg=Color.decode(background);}catch(Exception e){throw new ApiError(400,"invalid_background","透明背景应使用 #RRGGBB 颜色。");}
         int sw=decoded.getWidth(),sh=decoded.getHeight();boolean swap=orientation>=5;
         BufferedImage flat=ColorNormalization.flatten(decoded,pngProfile,bg);decoded.flush();
-        BufferedImage normalized=new BufferedImage(swap?sh:sw,swap?sw:sh,BufferedImage.TYPE_INT_RGB);
         // ImageIO 解码颜色空间后合成到 sRGB RGB 基准图，EXIF 仅在此处应用一次。
-        for(int y=0;y<sh;y++)for(int x=0;x<sw;x++){
+        // 无旋转时直接复用合成结果（原来即使是恒等映射也逐像素拷一遍，12MP 图要几千万次调用）。
+        BufferedImage normalized=orientation==1?flat:new BufferedImage(swap?sh:sw,swap?sw:sh,BufferedImage.TYPE_INT_RGB);
+        if(orientation!=1)for(int y=0;y<sh;y++)for(int x=0;x<sw;x++){
             int dx=x,dy=y;
             switch(orientation){case 2->dx=sw-1-x;case 3->{dx=sw-1-x;dy=sh-1-y;}case 4->dy=sh-1-y;
                 case 5->{dx=y;dy=x;}case 6->{dx=sh-1-y;dy=x;}case 7->{dx=sh-1-y;dy=sw-1-x;}case 8->{dx=y;dy=sw-1-x;}}
             normalized.setRGB(dx,dy,flat.getRGB(x,y));
         }
-        flat.flush();Path dir=store.root.resolve("media");Files.createDirectories(dir);
+        if(normalized!=flat)flat.flush();
+        Path dir=store.root.resolve("media");Files.createDirectories(dir);
+        // 基准图保持 PNG：导出布局（images/{split}/{name}.png）、筛选基线与评测图片都以 PNG 为契约，
+        // 「导出格式口径不变」是硬约束；体积与耗时由免逐像素、批量事务与后台导入任务解决。
         Path destination=dir.resolve(assetId+".png"),temporary=dir.resolve(assetId+".tmp");
-        if(!ImageIO.write(normalized,"png",temporary.toFile()))throw new IOException("PNG writer unavailable");
+        String storedHash;MessageDigest digest=MessageDigest.getInstance("SHA-256");
+        try(OutputStream raw=Files.newOutputStream(temporary);java.security.DigestOutputStream out=new java.security.DigestOutputStream(raw,digest)){
+            if(!ImageIO.write(normalized,"png",out))throw new IOException("PNG writer unavailable");out.flush();
+        }
+        storedHash=HexFormat.of().formatHex(digest.digest());
         Files.move(temporary,destination,StandardCopyOption.ATOMIC_MOVE);normalized.flush();
         String sourceHash=hash(source);Path original=source.toAbsolutePath().normalize();
         if(copy){Path originals=store.materialsRoot;Files.createDirectories(originals);original=originals.resolve(assetId+(format.equals("jpeg")?".jpg":".png"));Files.copy(source,original);}
         JsonObject metadata=Json.obj("normalizationVersion",NORMALIZATION_VERSION,"inputVersion",1,"sourceWidth",sw,"sourceHeight",sh,
             "exifOrientation",orientation,"sourceToBaseline",matrix(orientation,sw,sh),"colorSpace","sRGB","alphaBackground",background,
             "sourceHash",sourceHash,"sourcePath",original.toString(),"importMode",copy?"copy":"reference","originalFormat",format,"pngIccApplied",pngProfile!=null);
-        return new Normalized(destination,swap?sh:sw,swap?sw:sh,hash(destination),metadata);
+        return new Normalized(destination,swap?sh:sw,swap?sw:sh,storedHash,metadata);
     }
     // 标注使用像素边界坐标，仿射平移取宽高；像素中心索引映射使用宽高减一。
     static JsonArray matrix(int o,int w,int h){return switch(o){case 2->Json.arr(-1,0,w,0,1,0);case 3->Json.arr(-1,0,w,0,-1,h);case 4->Json.arr(1,0,0,0,-1,h);case 5->Json.arr(0,1,0,1,0,0);case 6->Json.arr(0,-1,h,1,0,0);case 7->Json.arr(0,-1,h,-1,0,w);case 8->Json.arr(0,1,0,-1,0,w);default->Json.arr(1,0,0,0,1,0);};}

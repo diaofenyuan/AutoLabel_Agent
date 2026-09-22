@@ -51,7 +51,8 @@ public final class Main {
                                 Path thumb=Thumbnails.file(engine.store.root,source,Json.required(engine.projects.asset(id),"contentHash"));
                                 exchange.getResponseHeaders().set("Content-Type","image/jpeg");exchange.getResponseHeaders().set("Cache-Control","private, max-age=31536000, immutable");exchange.getResponseHeaders().set("X-Content-Type-Options","nosniff");exchange.sendResponseHeaders(200,Files.size(thumb));try(OutputStream out=exchange.getResponseBody()){Files.copy(thumb,out);}return;}
                             Path file=engine.projects.path(id);if(!Files.isRegularFile(file))throw new ApiError(404,"media_missing","基准图片不存在。");
-                            exchange.getResponseHeaders().set("Content-Type","image/png");exchange.getResponseHeaders().set("Cache-Control","private, max-age=86400");exchange.getResponseHeaders().set("X-Content-Type-Options","nosniff");exchange.sendResponseHeaders(200,Files.size(file));try(OutputStream out=exchange.getResponseBody()){Files.copy(file,out);}return;
+                            String fileName=file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);String contentType=fileName.endsWith(".jpg")||fileName.endsWith(".jpeg")?"image/jpeg":"image/png";
+                            exchange.getResponseHeaders().set("Content-Type",contentType);exchange.getResponseHeaders().set("Cache-Control","private, max-age=86400");exchange.getResponseHeaders().set("X-Content-Type-Options","nosniff");exchange.sendResponseHeaders(200,Files.size(file));try(OutputStream out=exchange.getResponseBody()){Files.copy(file,out);}return;
                         }finally{media.release();}
                     }
                     if(!commands.tryAcquire())throw new ApiError(503,"command_busy","引擎操作繁忙，请稍后重试。");acquired=true;

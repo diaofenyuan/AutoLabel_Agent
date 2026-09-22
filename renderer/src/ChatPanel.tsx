@@ -148,7 +148,8 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
       if (!project) { notify('请先选择项目。', { error: true, action: { label: '回到欢迎页', run: () => void startProjectChat() } }); return; }
       const result = await importAttachments(project.id, attachments);
       update({ attachments: [] });
-      if (result.imported || result.skipped) { await refreshAssets(); notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`); }
+      if (result.queued) { await refreshAssets(); notify(`这批有 ${result.total ?? 0} 张，导入量较大已转入后台任务：进度见「任务 · 素材任务」，可随时取消。`); }
+      else if (result.imported || result.skipped) { await refreshAssets(); notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`); }
       if (result.videos.length === 1) drop.openVideo({ projectId: project.id, path: result.videos[0] });
       else if (result.videos.length > 1) drop.openPicks({ projectId: project.id, files: result.videos });
     }

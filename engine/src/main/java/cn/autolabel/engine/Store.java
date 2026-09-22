@@ -7,7 +7,7 @@ import java.util.*;
 import java.util.concurrent.*;
 
 final class Store implements AutoCloseable {
-    static final int SCHEMA_VERSION=11;
+    static final int SCHEMA_VERSION=12;
     interface Work<T> { T run(Connection c) throws Exception; }
     final Path root;
     // 受管原图根默认在数据目录内；桌面可把它指到存储根下的 uploads 目录，使导入复制的训练集可单独配置。
@@ -42,6 +42,13 @@ final class Store implements AutoCloseable {
             s.execute("CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,data TEXT NOT NULL)");
             s.execute("CREATE TABLE IF NOT EXISTS assets(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),data TEXT NOT NULL,path TEXT NOT NULL)");
             s.execute("CREATE INDEX IF NOT EXISTS assets_project ON assets(project_id)");
+            // 导入去重与项目计数走生成列 + 索引：json_extract 全表扫在上万素材时是 O(n²)。
+            // 注意用 table_xinfo：虚拟生成列是隐藏列，table_info 不列出它，会把二次打开误判成缺列而重复 ALTER。
+            Set<String> assetColumns=new HashSet<>();try(ResultSet columns=s.executeQuery("PRAGMA table_xinfo(assets)")){while(columns.next())assetColumns.add(columns.getString("name"));}
+            if(!assetColumns.contains("content_hash"))s.execute("ALTER TABLE assets ADD COLUMN content_hash TEXT GENERATED ALWAYS AS (json_extract(data,'$.contentHash')) VIRTUAL");
+            if(!assetColumns.contains("status"))s.execute("ALTER TABLE assets ADD COLUMN status TEXT GENERATED ALWAYS AS (json_extract(data,'$.status')) VIRTUAL");
+            s.execute("CREATE INDEX IF NOT EXISTS assets_hash ON assets(project_id,content_hash)");
+            s.execute("CREATE INDEX IF NOT EXISTS assets_status ON assets(project_id,status)");
             s.execute("CREATE TABLE IF NOT EXISTS versions(id INTEGER PRIMARY KEY AUTOINCREMENT,asset_id TEXT NOT NULL REFERENCES assets(id),version INTEGER NOT NULL,source TEXT NOT NULL,data TEXT NOT NULL,attempt_id TEXT UNIQUE,created_at TEXT NOT NULL)");
             s.execute("CREATE INDEX IF NOT EXISTS versions_asset ON versions(asset_id,version)");
             s.execute("CREATE TABLE IF NOT EXISTS drafts(asset_id TEXT PRIMARY KEY REFERENCES assets(id),base_version INTEGER NOT NULL,data TEXT NOT NULL,saved_at TEXT NOT NULL)");
@@ -137,7 +144,7 @@ final class Store implements AutoCloseable {
             // 抽帧配方：全局记录（不属于任何项目），跟着数据目录与备份一起走；名称在同类配方内唯一。
             s.execute("CREATE TABLE IF NOT EXISTS media_recipes(id TEXT PRIMARY KEY,kind TEXT NOT NULL,name TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(kind,name))");
             s.execute("PRAGMA user_version="+SCHEMA_VERSION); writer.commit(); writer.setAutoCommit(true);
-        } catch(Exception e) {try{if(!writer.getAutoCommit())writer.rollback();}finally{writer.close();writes.shutdownNow();}if(e instanceof ApiError a)throw a;throw new ApiError(500,"database_migration_failed","数据库升级失败，未提交迁移；请保留原数据目录及迁移备份并查看诊断。");}
+        } catch(Exception e) {try{if(!writer.getAutoCommit())writer.rollback();}finally{writer.close();writes.shutdownNow();}if(e instanceof ApiError a)throw a;ApiError failure=new ApiError(500,"database_migration_failed","数据库升级失败，未提交迁移；请保留原数据目录及迁移备份并查看诊断。原因："+(e.getMessage()==null?e.getClass().getSimpleName():e.getMessage()));failure.initCause(e);throw failure;}
     }
     /** 受管原图根：默认 <数据目录>/originals；自定义时为绝对目录，且不能是磁盘根或数据目录的上级。 */
     private static Path resolveMaterials(Path root,Path materialsRoot)throws Exception{

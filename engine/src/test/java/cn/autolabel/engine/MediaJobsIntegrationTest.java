@@ -21,7 +21,7 @@ public final class MediaJobsIntegrationTest {
     private static JsonObject step(String id,String kind,JsonObject p){return Json.obj("id",id,"kind",kind,"enabled",true,"parameters",p);}
     public static void main(String[] args)throws Exception{
         if(args.length!=3)throw new IllegalArgumentException("ffmpeg ffprobe video");ffmpeg=Path.of(args[0]).toAbsolutePath();ffprobe=Path.of(args[1]).toAbsolutePath();video=Path.of(args[2]).toAbsolutePath();root=Path.of("engine/build/verification/media-jobs-"+System.currentTimeMillis()).toAbsolutePath();Files.createDirectories(root);
-        realVideo();sameContent();recoveryAndCancellation();artifactRecovery();System.out.println("PASS "+checks+" media integration checks; VERIFICATION_DIR="+root);
+        realVideo();sameContent();bulkImport();recoveryAndCancellation();artifactRecovery();System.out.println("PASS "+checks+" media integration checks; VERIFICATION_DIR="+root);
     }
     private static void realVideo()throws Exception{
         try(Engine e=new Engine(root.resolve("real"),startup())){
@@ -53,6 +53,33 @@ public final class MediaJobsIntegrationTest {
         Path data=root.resolve("recovery");String pid,queued;try(Engine e=new Engine(data,startup())){pid=Json.required(project(e),"id");cmd(e,"system.suspend",new JsonObject());queued=Json.required(cmd(e,"media.video.create",Json.obj("projectId",pid,"sourcePath",video.toString(),"parameters",parameters())),"id");JsonObject cancelled=cmd(e,"media.job.cancel",Json.obj("jobId",queued));check(Json.required(cancelled,"status").equals("cancelled")&&!Json.bool(cancelled,"artifactCommitted",true),"queued cancellation publishes no artifact");queued=Json.required(cmd(e,"media.job.retry",Json.obj("jobId",queued)),"id");check(Json.required(cmd(e,"media.job.get",Json.obj("jobId",queued)),"status").equals("queued"),"retry new persistent job");}
         try(Engine e=new Engine(data,startup())){JsonObject interrupted=cmd(e,"media.job.get",Json.obj("jobId",queued));check(Json.required(interrupted,"status").equals("interrupted")&&Json.bool(interrupted,"canRetry",false),"restart does not silently re-extract queued job");check(cmd(e,"media.job.resolve",Json.obj("jobId",queued)).has("sourcePath"),"private retry source reauthorization descriptor");JsonObject p=parameters();p.addProperty("maxOutputBytes",1);String limited=Json.required(cmd(e,"media.video.create",Json.obj("projectId",pid,"sourcePath",video.toString(),"parameters",p)),"id");JsonObject failed=await(e,limited);check(Json.required(failed,"status").equals("failed")&&!Json.bool(failed,"artifactCommitted",true),"actual output cap cannot publish partial frames");rejects("media_artifact_incomplete",()->cmd(e,"media.video.import",Json.obj("jobId",limited)));check(Json.integer(e.projects.get(pid),"assetCount",-1)==0,"failed media operation leaves no imported assets");}
     }
+    private static void bulkImport()throws Exception{
+        try(Engine e=new Engine(root.resolve("bulk-import"),startup())){
+            String pid=Json.required(project(e),"id");Path source=root.resolve("bulk-src");Files.createDirectories(source);
+            List<String> paths=new ArrayList<>();for(int i=0;i<1000;i++){Path file=source.resolve(String.format("bulk-%04d.png",i));
+                // 每张都画出唯一像素（色块位置 + 编号文字）：Media.sample 的图案会画出画布外，第 30 张起完全同图。
+                java.awt.image.BufferedImage sample=new java.awt.image.BufferedImage(320,240,java.awt.image.BufferedImage.TYPE_INT_RGB);java.awt.Graphics2D g=sample.createGraphics();
+                g.setColor(java.awt.Color.WHITE);g.fillRect(0,0,320,240);g.setColor(new java.awt.Color(i*7%256,i*13%256,i*29%256));g.fillRect((i%16)*20,(i/16%12)*20,20,20);
+                g.setColor(java.awt.Color.BLACK);g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF,java.awt.Font.BOLD,40));g.drawString(Integer.toString(i),20,130);g.dispose();
+                javax.imageio.ImageIO.write(sample,"png",file.toFile());sample.flush();paths.add(file.toString());}
+            // 反例：扩展名是 jpg、内容是坏字节 —— 必须整批跳过并逐条报因，不许中断、不许写脏记录。
+            Path corrupt=source.resolve("corrupt.jpg");Files.write(corrupt,new byte[]{(byte)0xFF,(byte)0xD8,1,2,3});paths.add(corrupt.toString());
+            long started=System.currentTimeMillis();
+            JsonObject queued=cmd(e,"asset.import",Json.obj("projectId",pid,"paths",Json.arr(paths.toArray()),"mode","copy"));
+            check(Json.bool(queued,"queued",false)&&queued.has("jobId"),"bulk import switches to a background job: "+queued);
+            long submitMs=System.currentTimeMillis()-started;check(submitMs<30000,"bulk import submission stays interactive, took "+submitMs+"ms");
+            String jobId=Json.required(queued,"jobId");JsonObject done=awaitLong(e,jobId,600);check(Json.required(done,"status").equals("completed"),"bulk import completed: "+done);
+            long elapsed=(System.currentTimeMillis()-started)/1000;
+            JsonObject summary=Json.object(done,"summary");check(Json.integer(summary,"imported",-1)==1000,"1000 images imported, got "+summary);
+            check(Json.integer(summary,"skipped",-1)==0,"no duplicates skipped, got "+summary);
+            check(Json.array(summary,"errors").size()==1&&Json.required(Json.array(summary,"errors").get(0).getAsJsonObject(),"name").equals("corrupt.jpg"),"corrupt jpg reported once with its name");
+            check(Json.integer(e.projects.get(pid),"assetCount",-1)==1000,"assets committed incrementally without dirty rows");
+            check(Json.integer(Json.object(done,"progress"),"completed",-1)==1001,"progress accounted for every file");
+            check(elapsed<180,"1000-image import well under the old 120s command timeout budget, took "+elapsed+"s");
+            System.out.println("bulk import: 1000 images + 1 corrupt in "+elapsed+"s (submit "+submitMs+"ms)");
+        }
+    }
+    private static JsonObject awaitLong(Engine e,String id,int seconds)throws Exception{long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(seconds);while(System.nanoTime()<end){JsonObject job=cmd(e,"media.job.get",Json.obj("jobId",id));if(!Set.of("queued","running","cancelling").contains(Json.required(job,"status")))return job;Thread.sleep(50);}throw new AssertionError("bulk import timeout "+id);}
     private static void artifactRecovery()throws Exception{
         Path data=root.resolve("artifact-recovery");String id,pid;
         try(Engine e=new Engine(data,startup())){pid=Json.required(project(e),"id");id=Json.required(cmd(e,"media.video.create",Json.obj("projectId",pid,"sourcePath",video.toString(),"parameters",parameters())),"id");check(Json.bool(await(e,id),"artifactCommitted",false),"artifact fixture completed");String jobId=id;e.store.tx(c->{JsonObject job=Store.document(c,"media_jobs",jobId);job.addProperty("status","running");job.addProperty("artifactCommitted",false);job.remove("manifestHash");job.remove("completeHash");job.remove("summary");Store.update(c,"UPDATE media_jobs SET status='running',data=? WHERE id=?",job,jobId);return null;});}

@@ -74,10 +74,11 @@ export function useChatFileDrop(onAttach: (attachments: ChatAttachment[]) => voi
 }
 
 /** 附件真正落库：图片与目录交给 asset.import，视频返回给调用方走抽帧流程。 */
-export async function importAttachments(projectId: string, attachments: ChatAttachment[]): Promise<{ imported: number; skipped: number; videos: string[] }> {
+export async function importAttachments(projectId: string, attachments: ChatAttachment[]): Promise<{ imported: number; skipped: number; videos: string[]; queued?: boolean; total?: number }> {
   const paths = attachments.filter(item => item.kind !== 'video').map(item => item.path);
   const videos = attachments.filter(item => item.kind === 'video').map(item => item.path);
   if (!paths.length) return { imported: 0, skipped: 0, videos };
-  const result = await request<{ imported: number; skipped: number }>('asset.import', { projectId, paths, mode: 'copy' });
-  return { ...result, videos };
+  // 超过阈值时引擎转入后台导入任务（queued），进度与取消走任务条；这里如实把两种结果都透出去。
+  const result = await request<{ imported?: number; skipped?: number; queued?: boolean; total?: number }>('asset.import', { projectId, paths, mode: 'copy' });
+  return { imported: result.imported ?? 0, skipped: result.skipped ?? 0, queued: result.queued, total: result.total, videos };
 }
