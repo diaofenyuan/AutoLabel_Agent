@@ -15,7 +15,7 @@ await access(jar); await access(path.join(root, 'build/runtime/bin/java.exe'));
 const builderHome = path.join(root, 'node_modules/electron-builder');
 const pkg = JSON.parse(await readFile(path.join(builderHome, 'package.json'), 'utf8'));
 // 只读取明确选定的稳定引擎，避免默认退回旧里程碑或混入正在开发的构建。
-const child = spawn(process.execPath, [path.join(builderHome, pkg.bin['electron-builder']), '--win', 'nsis', '--x64', '--config', 'build/electron-builder.cjs'],
+const child = spawn(process.execPath, [path.join(builderHome, pkg.bin['electron-builder']), '--win', 'nsis', '--x64', '--config', 'packaging/electron-builder.cjs'],
   { cwd: root, env: { ...process.env, AUTOLABEL_ENGINE_JAR: jar, AUTOLABEL_INFERENCE_DIR: inference }, windowsHide: true, stdio: 'inherit' });
 child.once('error', error => { console.error(error.message); process.exitCode = 1; });
 child.once('exit', code => { process.exitCode = code ?? 1; });

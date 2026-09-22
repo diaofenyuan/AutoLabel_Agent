@@ -2,7 +2,8 @@ import { copyFile, mkdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
-const selected = process.env.AUTOLABEL_MEDIA_TOOLS_DIR;
+// 发布和开发使用同一组固定工具；开发态未显式指定来源时直接复用已就位的 build/media-tools（同源时跳过复制）。
+const selected = process.env.AUTOLABEL_MEDIA_TOOLS_DIR || (await stat(path.resolve('build/media-tools/ffmpeg.exe')).then(() => path.resolve('build/media-tools'), () => null));
 if (!selected) throw new Error('请通过 AUTOLABEL_MEDIA_TOOLS_DIR 明确指定已验收的 FFmpeg 8.1.1 工具目录');
 const source = await realpath(selected), destination = path.resolve('build/media-tools');
 const versions = {};

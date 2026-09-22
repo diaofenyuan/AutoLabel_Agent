@@ -14,6 +14,7 @@
     "build:engine": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/engine-build.ps1",
     "build": "npm run build:engine && npm run build:renderer && npm run build:desktop",
     "check:desktop": "tsc --noEmit -p desktop/tsconfig.json",
+    "check:all": "node scripts/check-all.mjs",
     "test:desktop": "node scripts/desktop-test.mjs",
     "test:updates": "node scripts/desktop-update-test.mjs",
     "smoke:desktop": "node scripts/desktop-smoke.mjs",
@@ -58,8 +59,8 @@
     "prepare:runtime": "node scripts/desktop-runtime.mjs",
     "prepare:media-tools": "node scripts/desktop-media-tools.mjs",
     "check:models": "node scripts/desktop-models.mjs",
-    "pack:dir": "npm run build && npm run check:engine-jar && npm run prepare:runtime && npm run prepare:media-tools && npm run check:models && electron-builder --win --x64 --dir --config build/electron-builder.cjs",
-    "pack:win": "npm run build && npm run check:engine-jar && npm run prepare:runtime && npm run prepare:media-tools && npm run check:models && electron-builder --win nsis --x64 --config build/electron-builder.cjs",
+    "pack:dir": "npm run check:all -- --skip-ui && npm run build && npm run check:engine-jar && npm run prepare:runtime && npm run prepare:media-tools && npm run check:models && electron-builder --win --x64 --dir --config packaging/electron-builder.cjs",
+    "pack:win": "npm run check:all -- --skip-ui && npm run build && npm run check:engine-jar && npm run prepare:runtime && npm run prepare:media-tools && npm run check:models && electron-builder --win nsis --x64 --config packaging/electron-builder.cjs && npm run check:packaged-jar && npm run check:installer-contract && npm run smoke:packaged",
     "pack:milestone": "npm run build:renderer && npm run build:desktop && npm run prepare:media-tools && node scripts/desktop-pack-milestone.mjs"
   },
   "devDependencies": {

@@ -20,6 +20,6 @@ const chunk = (kind, data) => { const name = Buffer.from(kind); const out = Buff
 const header = Buffer.alloc(13); header.writeUInt32BE(size); header.writeUInt32BE(size, 4); header[8] = 8; header[9] = 6;
 const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]);
 const ico = Buffer.alloc(22); ico.writeUInt16LE(1, 2); ico.writeUInt16LE(1, 4); ico.writeUInt16LE(1, 10); ico.writeUInt16LE(32, 12); ico.writeUInt32LE(png.length, 14); ico.writeUInt32LE(22, 18);
-const output = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../build');
+const output = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../packaging');
 await mkdir(output, { recursive: true });
 await writeFile(path.join(output, 'icon.png'), png); await writeFile(path.join(output, 'icon.ico'), Buffer.concat([ico, png]));

@@ -35,7 +35,7 @@ fs.mkdirSync(path.join(app, 'desktop', 'dist'), { recursive: true });
 for (const name of ['main.cjs', 'preload.cjs', 'agent.cjs']) fs.copyFileSync(path.join(desktop, 'desktop', 'dist', name), path.join(app, 'desktop', 'dist', name));
 fs.cpSync(path.join(desktop, 'desktop', 'fallback'), path.join(app, 'desktop', 'fallback'), { recursive: true });
 fs.cpSync(renderer, path.join(app, 'renderer', 'dist'), { recursive: true });
-fs.cpSync(path.join(desktop, 'build'), buildResources, { recursive: true });
+fs.cpSync(path.join(desktop, 'packaging'), buildResources, { recursive: true });
 fs.mkdirSync(path.join(app, 'build')); fs.copyFileSync(path.join(buildResources, 'icon.png'), path.join(app, 'build', 'icon.png'));
 fs.mkdirSync(path.join(resources, 'engine')); fs.copyFileSync(engine, path.join(resources, 'engine', 'autolabel-engine.jar'));
 fs.cpSync(path.join(baseline, 'runtime'), path.join(resources, 'runtime'), { recursive: true });
@@ -55,7 +55,7 @@ if (main.split(marker).length !== 2) throw new Error('冻结启动检查标记�
 const checkFunction = { release5: 'checkRelease5', release6a: 'checkRelease6a', release6b: 'checkRelease6b', release7a: 'checkRelease7a', release7b: 'checkRelease7b' }[check];
 main = main.replace(marker, `  if (process.argv.includes("--desktop-${check}-check")) {\n    await require("./${check}-check.cjs").${checkFunction}(window, output2, engine, grants, userData);\n    require("electron").app.quit(); return;\n  }\n` + marker);
 fs.writeFileSync(mainPath, main);
-const config = require(path.join(desktop, 'build', 'electron-builder.cjs'));
+const config = require(path.join(desktop, 'packaging', 'electron-builder.cjs'));
 config.directories = { app, output, buildResources }; config.files = ['**/*', '!**/*.test.cjs'];
 config.extraResources = ['engine', 'runtime', 'inference', ...(media ? ['media-tools', 'third-party'] : [])].map(name => ({ from: path.join(resources, name), to: name }));
 config.win.icon = path.join(buildResources, 'icon.ico'); config.nsis.include = path.join(buildResources, 'installer.nsh');

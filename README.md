@@ -23,7 +23,7 @@ npm run dev
 npm run pack:win
 ```
 
-此入口先构建 Java、界面与桌面主进程，再生成包含运行时的安装包。输出在 build/release/；安装包支持选择安装路径和桌面快捷方式。当前签名与验收状态属本地计划文档（TASK_PLAN.md，未纳入版本库），安装包本身未做代码签名。
+打包配置在 `packaging/`（`electron-builder.cjs`、`installer.nsh`、图标）且**已入版本库**：换一台机器 clone 后就能出包。此入口先跑 `check:all -- --skip-ui`（类型检查 + 全部单测 + 引擎测试，任何一步红都拦下打包），再构建 Java、界面与桌面主进程，最后生成含运行时的安装包，并做打包后契约与冒烟（`check:packaged-jar`、`check:installer-contract`、`smoke:packaged`）。输出在 build/release/；安装包支持选择安装路径和桌面快捷方式。当前签名与验收状态属本地计划文档（TASK_PLAN.md，未纳入版本库），安装包本身未做代码签名。全量回归（含 27 条 UI 验收）用 `npm run check:all`，受限环境可加 `-- --skip-slow` 跳过真下载/真推理的几条。
 
 ## 内置模型（不花钱的本机标注）
 

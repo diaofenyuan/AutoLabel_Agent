@@ -574,6 +574,8 @@ const agentCommands = new Set(['provider.list', 'provider.capabilities', 'chat.s
   'local.runtime.get', 'local.model.get', 'local.model.list', 'model.library.status', 'media.job.get', 'media.job.list', 'media.video.create', 'media.video.frames', 'media.screening.result', 'media.screening.create',
   'track.timeline.list', 'track.timeline.get', 'track.timeline.frames', 'track.list', 'track.get', 'track.keyframe.list',
   'track.generation.list', 'track.generation.get', 'track.generation.results', 'track.generate.preview', 'track.generate', 'track.generation.cancel',
+  // 本地候选的只读查询（get / list）对助手开放：生成与确认/提升仍是用户显式操作。
+  'track.local.sequence.get', 'track.local.sequence.list',
   // 训练：只放开查询与触发（数据集快照只能由已生成的数据集版本建立，训练任务只提交与取消）。
   // 训练执行体不受影响：设备互斥、不可变快照、不计 API 预算、OOM 不自动重跑等约束都在引擎侧。
   // 目录上传快照、任务重试/删除、权重登记与产物目录设置仍只由用户显式操作。

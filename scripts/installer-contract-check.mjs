@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { execFileSync } from 'node:child_process';
 
 const root = process.cwd();
-const installer = path.join(root, 'build', 'installer.nsh');
-const builder = path.join(root, 'build', 'electron-builder.cjs');
+const installer = path.join(root, 'packaging', 'installer.nsh');
+const builder = path.join(root, 'packaging', 'electron-builder.cjs');
 const releaseDir = path.resolve(process.env.AUTOLABEL_RELEASE_DIR || path.join(root, 'build', 'release'));
 // 安装包文件名含版本号，从 package.json 推导而非硬编码，避免递增版本后此处失配。
 const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -18,6 +19,9 @@ const requireFile = (file) => {
 
 const installerText = requireFile(installer);
 const builderText = requireFile(builder);
+// 打包配置必须在版本库里：丢了它就无法出包，而 git 不会提醒（build/ 时代的血泪教训）。
+const tracked = execFileSync('git', ['ls-files', 'packaging/electron-builder.cjs', 'packaging/installer.nsh', 'packaging/icon.ico', 'packaging/icon.png'], { encoding: 'utf8' }).trim().split(/\r?\n/).filter(Boolean);
+if (tracked.length !== 4) throw new Error(`打包配置未全部入库，git ls-files 只见到：${tracked.join('、') || '（空）'}`);
 const installerChecks = [
   ['安装时提供快捷方式页面', /Page custom AutoLabelShortcutPage AutoLabelShortcutPageLeave/],
   ['取消快捷方式时删除桌面链接', /Delete "\$newDesktopLink"/],
@@ -50,6 +54,7 @@ const result = {
   package: path.relative(root, packageFile),
   packageBytes: fs.statSync(packageFile).size,
   unpackedExecutable: path.relative(root, unpackedExe),
+  packagingTracked: true,
   shortcutPage: true,
   cancelShortcutBranch: true,
   installDirectoryPage: true,
