@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Crop, Minus, MousePointer2, Plus, RotateCcw, SquareDashed, Trash2 } from 'lucide-react';
 import type { Annotation, LabelClass, Point, TaskType } from './types';
 import { Button, Field, Notice } from './ui';
@@ -23,6 +23,18 @@ export default function QualityCanvas({mediaUrl,width,height,annotations,classes
   const [pointTarget,setPointTarget]=useState<number|null>(null);const [preview,setPreview]=useState<Annotation[]|null>(null);const drag=useRef<Gesture|null>(null);const previewValue=useRef<Annotation[]|null>(null);
   // 小目标（例如视频里的手办）在整图视图中很难精确拖框；放大只改变显示层，保存的仍是原图坐标。
   const [zoom,setZoom]=useState(1);
+  // 滚轮以光标为中心缩放；中键或空格+左键拖拽平移视野；方向键把选中对象/顶点微调 1px（Shift = 10px）。
+  const viewport=useRef<HTMLDivElement|null>(null);const anchor=useRef<{ox:number;oy:number;ratio:number}|null>(null);
+  const pan=useRef<{x:number;y:number;left:number;top:number}|null>(null);const space=useRef(false);const hover=useRef(false);
+  useEffect(()=>{const el=viewport.current;if(!el)return;
+    const onWheel=(event:WheelEvent)=>{if(!event.deltaY)return;event.preventDefault();const bounds=el.getBoundingClientRect(),ox=event.clientX-bounds.left,oy=event.clientY-bounds.top,factor=event.deltaY<0?1.2:1/1.2;
+      setZoom(value=>{const next=clamp(Number((value*factor).toFixed(3)),1,4);if(next!==value)anchor.current={ox,oy,ratio:next/value};return next;});};
+    el.addEventListener('wheel',onWheel,{passive:false});return()=>el.removeEventListener('wheel',onWheel);},[]);
+  useEffect(()=>{const onKeyDown=(event:KeyboardEvent)=>{if(event.code==='Space'&&hover.current){space.current=true;event.preventDefault();}},onKeyUp=(event:KeyboardEvent)=>{if(event.code==='Space')space.current=false;};
+    window.addEventListener('keydown',onKeyDown);window.addEventListener('keyup',onKeyUp);return()=>{window.removeEventListener('keydown',onKeyDown);window.removeEventListener('keyup',onKeyUp);};},[]);
+  // 缩放改变了内容尺寸：按比例换算滚动位置，让光标下的那个点留在原地。
+  useLayoutEffect(()=>{const pending=anchor.current,el=viewport.current;anchor.current=null;if(!pending||!el)return;
+    el.scrollLeft=(el.scrollLeft+pending.ox)*pending.ratio-pending.ox;el.scrollTop=(el.scrollTop+pending.oy)*pending.ratio-pending.oy;},[zoom]);
   // 只标注区域：整图送模型时小目标框偏松，框一块区域再标能让目标相对变大。区域按比例存，与显示尺寸无关。
   // 拖拽同时记在 ref 上：pointermove 可能赶在 React 重渲染之前到达，读 state 会丢掉这一段位移。
   const [regionTool,setRegionTool]=useState(false);const [regionDraft,setRegionDraft]=useState<{start:Point;current:Point}|null>(null);const regionDraftRef=useRef<{start:Point;current:Point}|null>(null);
@@ -35,9 +47,17 @@ export default function QualityCanvas({mediaUrl,width,height,annotations,classes
   useEffect(()=>{onPendingChange?.(drawing||polygon.length>0);},[drawing,polygon.length,onPendingChange]);
   function position(e:React.PointerEvent<SVGSVGElement>){const bounds=e.currentTarget.getBoundingClientRect();return{x:clamp((e.clientX-bounds.left)/bounds.width*w,0,w),y:clamp((e.clientY-bounds.top)/bounds.height*h,0,h)};}
   function update(change:Partial<Annotation>){if(current&&editable)onChange!(list.map(a=>a.id===current.id?{...a,...change}:a));}
+  // 方向键微调：选中顶点时只动顶点，否则整体平移，越界按画布边界收拢（小目标 1px 精修）。
+  function nudge(dx:number,dy:number){if(!editable||!current)return;
+    if(vertex?.id===current.id&&current.points){update({points:current.points.map((pt,i)=>i===vertex.index?{x:clamp(pt.x+dx,0,w),y:clamp(pt.y+dy,0,h)}:pt)});return;}
+    const parts=[...vertices(current),...(current.keypoints??[]).filter(k=>k.visibility>0)];
+    const tx=parts.length?clamp(dx,-Math.min(...parts.map(p=>p.x)),w-Math.max(...parts.map(p=>p.x))):0,ty=parts.length?clamp(dy,-Math.min(...parts.map(p=>p.y)),h-Math.max(...parts.map(p=>p.y))):0;if(!tx&&!ty)return;
+    update({...(current.bbox?{bbox:{...current.bbox,x:current.bbox.x+tx,y:current.bbox.y+ty}}:{}),...(current.points?{points:current.points.map(pt=>({x:pt.x+tx,y:pt.y+ty}))}:{}),...(current.keypoints?{keypoints:current.keypoints.map(k=>k.visibility>0?{...k,x:k.x+tx,y:k.y+ty}:k)}:{})});}
   function finishPolygon(){if(!editable||polygon.length<3||polygon.length>MAX_POLYGON_POINTS)return;const shape:Annotation={id:crypto.randomUUID(),classId:classes[0]?.id??'',type:'segment',points:polygon};onChange!([...(annotations??[]),shape]);setSelected(shape.id);setPolygon([]);setTool('select');}
   function deleteVertex(){if(!editable||drag.current||polygon.length||vertex?.id!==current?.id||!current?.points||vertex===null)return;const points=deletePolygonPoint(current.points,vertex.index);if(points){update({points});setVertex(null);}}
   function down(e:React.PointerEvent<SVGSVGElement>){
+    // 中键或空格+左键拖拽平移（放大后挪视野），与画笔/选择手势互斥。
+    if(e.button===1||space.current&&e.button===0){const el=viewport.current;if(!el)return;e.preventDefault();pan.current={x:e.clientX,y:e.clientY,left:el.scrollLeft,top:el.scrollTop};try{e.currentTarget.setPointerCapture(e.pointerId);}catch{/* 合成事件没有真实指针 */}return;}
     if(!editable||error||e.button!==0||taskType==='classify')return;const start=position(e);e.currentTarget.focus();
     // 区域工具独占一次拖拽：它不改标注，只框出「只标注这块」的范围。
     if(regionTool&&onRegionChange){const draft={start,current:start};regionDraftRef.current=draft;setRegionDraft(draft);try{e.currentTarget.setPointerCapture(e.pointerId);}catch{/* 合成事件没有真实指针，拖拽仍按指针事件走 */}return;}
@@ -50,6 +70,8 @@ export default function QualityCanvas({mediaUrl,width,height,annotations,classes
     drag.current={start,original:structuredClone(annotations??[]),id,kind:tool==='draw'?'draw':vertex!==null?'vertex':handle?'resize':'move',handle,index:vertex!==null?Number(vertex):undefined};
   }
   function move(e:React.PointerEvent<SVGSVGElement>){
+    const panning=pan.current;
+    if(panning){const el=viewport.current;if(el){el.scrollLeft=panning.left-(e.clientX-panning.x);el.scrollTop=panning.top-(e.clientY-panning.y);}return;}
     const draft=regionDraftRef.current;
     if(draft){const next={...draft,current:position(e)};regionDraftRef.current=next;setRegionDraft(next);return;}
     const state=drag.current;if(!state)return;const p=position(e);let next=structuredClone(state.original);
@@ -62,13 +84,14 @@ export default function QualityCanvas({mediaUrl,width,height,annotations,classes
     });previewValue.current=next;setPreview(next);
   }
   function up(event:React.PointerEvent<SVGSVGElement>){
+    if(pan.current){pan.current=null;return;}
     // 区域拖拽收尾：太小的区域直接丢弃（引擎也会拒绝退化区域），其余按比例交给上层保存。
     const draft=regionDraftRef.current;
     if(draft){const p=position(event),x=Math.min(draft.start.x,p.x),y=Math.min(draft.start.y,p.y),rectW=Math.abs(p.x-draft.start.x),rectH=Math.abs(p.y-draft.start.y);regionDraftRef.current=null;setRegionDraft(null);setRegionTool(false);
       if(onRegionChange&&rectW>=w*0.02&&rectH>=h*0.02)onRegionChange({left:x/w,top:y/h,right:(x+rectW)/w,bottom:(y+rectH)/h});return;}
     const state=drag.current;if(state)move(event);drag.current=null;setDrawing(false);if(state&&previewValue.current){const next=previewValue.current.filter(a=>a.id!==state.id||!a.bbox||(a.bbox.width>=2&&a.bbox.height>=2));onChange?.(next);setTool('select');}previewValue.current=null;setPreview(null);}
   return <div className={`quality-canvas ${onChange?'editable':''}`}><div className="quality-canvas-heading"><strong>{title}</strong><div className="quality-canvas-tools">{list.some(a=>a.keypoints?.length)&&<label className="checkbox-row"><input type="checkbox" checked={showNames} onChange={e=>setShowNames(e.target.checked)}/>显示点名</label>}<div className="zoom-controls" role="group" aria-label="画布缩放"><Button aria-label="缩小画布" title="缩小画布" disabled={zoom<=1} onClick={()=>setZoom(value=>Math.max(1,Number((value-.25).toFixed(2))))}><Minus size={13}/></Button><span aria-live="polite">{Math.round(zoom*100)}%</span><Button aria-label="放大画布" title="放大画布" disabled={zoom>=4} onClick={()=>setZoom(value=>Math.min(4,Number((value+.25).toFixed(2))))}><Plus size={13}/></Button><Button aria-label="复位画布缩放" title="复位画布缩放" disabled={zoom===1} onClick={()=>setZoom(1)}><RotateCcw size={12}/></Button></div>{onRegionChange&&<div className="region-controls" role="group" aria-label="只标注区域"><Button aria-label="只标注这块区域" title="拖出一块只标注它的区域；坐标会自动换算回整图" aria-pressed={regionTool} disabled={!editable} onClick={()=>{setRegionTool(value=>!value);setTool('select');}}><Crop size={13}/>{regionTool?'拖出区域…':'只标注这块区域'}</Button>{region&&<Button aria-label="清除标注区域" title="清除标注区域，恢复整图标注" disabled={!editable} onClick={()=>onRegionChange(null)}>清除区域</Button>}</div>}</div>{onChange&&taskType!=='classify'&&<div className="actions"><Button disabled={!editable||polygon.length>0} aria-pressed={tool==='select'} onClick={()=>{setTool('select');setPointTarget(null);}}><MousePointer2 size={13}/>选择</Button><Button disabled={!editable||polygon.length>0||maxObjects!==undefined&&list.length>=maxObjects} aria-pressed={tool==='draw'} onClick={()=>{setTool('draw');setPointTarget(null);}}><SquareDashed size={13}/>{taskType==='segment'?'绘制标准多边形':taskType==='obb'?'绘制标准旋转框':purpose==='keyframe'?'绘制对象框':purpose==='asset'?'绘制标注框':'绘制标准框'}</Button></div>}</div>
-    <div className="quality-canvas-columns"><div><div className="quality-image"><div className="quality-image-stage" style={{width:`${zoom*100}%`}}><img src={mediaUrl} alt={imageAlt??(purpose==='keyframe'?'视频关键帧原图':purpose==='asset'?'素材原图':'评测样本原图')} onLoad={e=>{setNatural({width:e.currentTarget.naturalWidth,height:e.currentTarget.naturalHeight});onImageDimensions?.({width:e.currentTarget.naturalWidth,height:e.currentTarget.naturalHeight});setError(false);onImageReady?.(true);}} onError={()=>{setError(true);onImageReady?.(false);}}/>{!error&&<svg aria-label={onChange?purpose==='keyframe'?'关键帧标注画布':purpose==='asset'?'素材标注画布':'独立标准答案画布':title} tabIndex={onChange?0:undefined} viewBox={`0 0 ${w} ${h}`} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={()=>{drag.current=null;previewValue.current=null;setPreview(null);setDrawing(false);}} onKeyDown={e=>{if(e.key==='Enter'&&polygon.length){e.preventDefault();finishPolygon();}if(e.key==='Escape'){setPolygon([]);setPointTarget(null);setVertex(null);setInserting(false);setTool('select');}if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();e.stopPropagation();deleteVertex();}}}>
+    <div className="quality-canvas-columns"><div><div className="quality-image" ref={viewport} onPointerEnter={()=>hover.current=true} onPointerLeave={()=>{hover.current=false;space.current=false;}}><div className="quality-image-stage" style={{width:`${zoom*100}%`}}><img src={mediaUrl} alt={imageAlt??(purpose==='keyframe'?'视频关键帧原图':purpose==='asset'?'素材原图':'评测样本原图')} onLoad={e=>{setNatural({width:e.currentTarget.naturalWidth,height:e.currentTarget.naturalHeight});onImageDimensions?.({width:e.currentTarget.naturalWidth,height:e.currentTarget.naturalHeight});setError(false);onImageReady?.(true);}} onError={()=>{setError(true);onImageReady?.(false);}}/>{!error&&<svg aria-label={onChange?purpose==='keyframe'?'关键帧标注画布':purpose==='asset'?'素材标注画布':'独立标准答案画布':title} tabIndex={onChange?0:undefined} viewBox={`0 0 ${w} ${h}`} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={()=>{drag.current=null;pan.current=null;previewValue.current=null;setPreview(null);setDrawing(false);}} onKeyDown={e=>{const step={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[e.key];if(step&&editable&&current){e.preventDefault();nudge(step[0]*(e.shiftKey?10:1),step[1]*(e.shiftKey?10:1));return;}if(e.key==='Enter'&&polygon.length){e.preventDefault();finishPolygon();}if(e.key==='Escape'){setPolygon([]);setPointTarget(null);setVertex(null);setInserting(false);setTool('select');}if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();e.stopPropagation();deleteVertex();}}}>
       {list.map(a=>{const b=a.type==='obb'&&a.points?undefined:a.bbox,c=classes.find(c=>c.id===a.classId),stroke=c?.color??color,points=vertices(a),anchor=points.length?{x:Math.min(...points.map(p=>p.x)),y:Math.min(...points.map(p=>p.y))}:null;return <g key={a.id} data-quality-object={a.id} data-selected={selected===a.id ? 'true' : undefined}>
         {b&&<g transform={a.type==='obb'?`rotate(${a.rotation??0},${b.x+b.width/2},${b.y+b.height/2})`:undefined}><rect x={b.x} y={b.y} width={b.width} height={b.height} stroke={stroke} fill={onChange&&selected===a.id?'#437fe51a':'transparent'} strokeWidth={2*scale}/>{editable&&selected===a.id&&a.type!=='obb'&&[['nw',b.x,b.y],['ne',b.x+b.width,b.y],['sw',b.x,b.y+b.height],['se',b.x+b.width,b.y+b.height]].map(([handle,x,y])=><rect key={handle} data-quality-handle={handle} x={Number(x)-4*scale} y={Number(y)-4*scale} width={8*scale} height={8*scale} fill="white" stroke={stroke}/>)}</g>}
         {a.points&&<><polygon points={a.points.map(p=>`${p.x},${p.y}`).join(' ')} stroke={stroke} fill={`${stroke}18`} strokeWidth={2*scale}/>{editable&&selected===a.id&&a.type==='segment'&&<>{inserting&&a.points.map((p,i)=><line key={`edge-${i}`} data-quality-edge={i} x1={p.x} y1={p.y} x2={a.points![(i+1)%a.points!.length].x} y2={a.points![(i+1)%a.points!.length].y} stroke="transparent" strokeWidth={14*scale} className="segment-insert-edge"/>)}{a.points.map((p,i)=><circle key={i} data-quality-vertex={i} cx={p.x} cy={p.y} r={4*scale} fill={vertex?.id===a.id&&vertex.index===i?stroke:'white'} stroke={stroke}/>)}</>}</>}

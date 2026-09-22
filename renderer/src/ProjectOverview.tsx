@@ -20,6 +20,19 @@ import { Term } from './Term';
 const PAGE_SIZE = 100;
 const versionStatusNames: Record<string, string> = { draft: '草稿', building: '生成中', ready: '已生成', failed: '生成失败', cancelled: '已取消' };
 
+/** 结果筛选：审核批量结果时先按状态把「要处理的」筛出来，再勾选一次确认。 */
+type ResultFilter = 'all' | 'candidate' | 'empty' | 'failed' | 'confirmed' | 'unlabeled';
+const filterNames: Record<ResultFilter, string> = { all: '全部', candidate: '有候选', empty: '无目标', failed: '失败', confirmed: '已确认', unlabeled: '未处理' };
+const filterOrder: ResultFilter[] = ['all', 'candidate', 'empty', 'failed', 'confirmed', 'unlabeled'];
+const filterHints: Record<ResultFilter, string> = {
+  all: '已加载的全部素材（含人工修改中、异常等其它状态）',
+  candidate: '模型给了候选结果、还没有人工确认的素材',
+  empty: '模型成功返回但没有找到目标的素材：确认后记为已确认无目标',
+  failed: '最近一次标注运行失败或结果未知、且还没有人工确认的素材，需要重跑或人工补标',
+  confirmed: '已经人工确认的素材',
+  unlabeled: '还没有任何标注结果的素材',
+};
+
 /**
  * 项目概览：一个项目的数据面（素材、数据集版本、导出记录）与只读抽查。
  * 这里不放任何编辑表单——标注修正、建版本、导出都在对话里发起；页面只聚合已经存在的结果。
@@ -38,6 +51,9 @@ export default function ProjectOverview() {
   /** 「将选中版本载入草稿」的落点：载入后直接打开这张图的画布，历史版本才有实际去处。 */
   const [loadInto, setLoadInto] = useState<{ assetId: string; annotations: Annotation[] } | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [filter, setFilter] = useState<ResultFilter>('all');
+  /** 「失败」不在素材状态里，真相在运行样本上：后台聚合最近若干次运行的失败/结果未知清单。 */
+  const [failedIds, setFailedIds] = useState<Set<string>>(new Set());
 
   /**
    * 接受候选并确认：勾选多张，一次把当前结果写成正式标注并确认。
@@ -80,7 +96,26 @@ export default function ProjectOverview() {
     } catch (e) { setError(errorMessage(e)); }
     finally { setLoading(false); }
   }, [project?.id]);
-  useEffect(() => { setAssets([]); setTotal(0); void loadAssets(0); }, [loadAssets]);
+  useEffect(() => { setAssets([]); setTotal(0); setFilter('all'); void loadAssets(0); }, [loadAssets]);
+  useEffect(() => {
+    if (!project || isDemo) return;
+    let live = true;
+    void (async () => {
+      // 同一张图可能跑过多次：按运行从新到旧取每张图最近一次样本状态，只把最近仍为失败/未知的算作「失败」。
+      const latest = new Map<string, string>();
+      try {
+        const runs = await request<Array<{ id: string; createdAt?: string }>>('run.list', { projectId: project.id });
+        const ordered = [...runs].sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')));
+        for (const run of ordered.slice(0, 20)) {
+          const detail = await request<{ samples?: Array<{ assetId: string; status: string }> }>('run.get', { runId: run.id });
+          for (const sample of detail.samples ?? []) if (!latest.has(sample.assetId)) latest.set(sample.assetId, sample.status);
+        }
+      } catch { /* 运行历史读不到就等于没有失败筛选，不打扰页面 */ }
+      if (!live) return;
+      setFailedIds(new Set([...latest].filter(([, status]) => status === 'failed' || status === 'unknown').map(([assetId]) => assetId)));
+    })();
+    return () => { live = false; };
+  }, [project?.id]);
   useEffect(() => {
     if (!project || isDemo) return;
     let live = true;
@@ -102,11 +137,35 @@ export default function ProjectOverview() {
   function toggleAsset(id: string) {
     setSelectedAssetIds(list => list.includes(id) ? list.filter(item => item !== id) : [...list, id]);
   }
-  /** 全选只合并当前已加载的素材，不清掉之前跨页选中的那些。 */
+  /** 全选只合并当前筛选下可见的素材，不清掉之前跨页选中的那些。 */
   function selectLoaded() {
-    setSelectedAssetIds(list => [...new Set([...list, ...assets.map(item => item.id)])]);
+    setSelectedAssetIds(list => [...new Set([...list, ...visible.map(item => item.id)])]);
   }
   const selectedCount = selectedAssetIds.length;
+
+  /** 每张素材的筛选归类：人工确认优先（已经做完的不进待办），其次按最近一次运行结果与候选状态分流。 */
+  function stateOf(asset: Asset): Exclude<ResultFilter, 'all'> | 'other' {
+    if (asset.status === 'confirmed') return 'confirmed';
+    if (failedIds.has(asset.id)) return 'failed';
+    if (asset.status === 'candidate') return asset.annotations.length ? 'candidate' : 'empty';
+    if (asset.status === 'unlabeled') return 'unlabeled';
+    return 'other';
+  }
+  const filterCounts = filterOrder.reduce<Record<ResultFilter, number>>((counts, key) => {
+    counts[key] = key === 'all' ? assets.length : assets.filter(item => stateOf(item) === key).length;
+    return counts;
+  }, { all: 0, candidate: 0, empty: 0, failed: 0, confirmed: 0, unlabeled: 0 });
+  const visible = filter === 'all' ? assets : assets.filter(item => stateOf(item) === filter);
+  // 视频帧按来源组聚合：同一段视频抽出的帧同属一个来源组，逐帧之外还要能整组看待。
+  const frameGroups = new Map<string, Asset[]>();
+  for (const asset of assets) {
+    const meta = asset.metadata ?? {};
+    const group = String(meta.groupId ?? meta.sourceVideoId ?? meta.mediaJobId ?? '');
+    if (!group) continue;
+    const list = frameGroups.get(group) ?? [];
+    list.push(asset);
+    frameGroups.set(group, list);
+  }
 
   const distribution = project.classes.map(label => ({ ...label,
     count: assets.reduce((sum, asset) => sum + asset.annotations.filter(annotation => annotation.classId === label.id).length, 0) })).filter(item => item.count > 0);
@@ -164,12 +223,21 @@ export default function ProjectOverview() {
         <div className="actions"><Button busy={loading} disabled={loading} onClick={() => void loadAssets(0)}><RefreshCw size={14} />刷新</Button></div>
       </div>
       {distribution.length > 0 && <div className="result-stats">{distribution.map(item => <span key={item.id}><i style={{ background: item.color }} />{item.name} <strong>{item.count}</strong></span>)}</div>}
+      {assets.length > 0 && <div className="result-filters" role="group" aria-label="结果筛选">
+        {filterOrder.map(key => <button key={key} type="button" className="result-filter" data-result-filter={key} aria-pressed={filter === key}
+          title={filterHints[key]} onClick={() => setFilter(key)}>{filterNames[key]} <strong>{filterCounts[key]}</strong></button>)}
+      </div>}
+      {frameGroups.size > 0 && <div className="result-groups" role="note" aria-label="视频帧来源组小结">
+        <p>视频帧按来源组聚合：同一段视频抽出的帧属于同一个来源组。</p>
+        {[...frameGroups].map(([group, list]) => <p key={group} data-result-group={group.slice(0, 8)}>来源组 {group.slice(0, 8)} · {list.length} 帧 ·
+          {(['candidate', 'empty', 'failed', 'confirmed', 'unlabeled'] as const).map(key => `${filterNames[key]} ${list.filter(item => stateOf(item) === key).length}`).join(' · ')}</p>)}
+      </div>}
       {loading && !assets.length ? <Loading label="正在读取素材…" />
         : assets.length ? <>
           <div className="asset-selection" role="region" aria-label="素材选择">
-            <span className="asset-selection-count">{selectedCount ? `已选 ${selectedCount} 张` : '未选中素材'}</span>
+            <span className="asset-selection-count">{selectedCount ? `已选 ${selectedCount} 张` : '未选中素材'}{filter !== 'all' ? ` · 筛选「${filterNames[filter]}」${visible.length} 张` : ''}</span>
             <div className="actions">
-              <Button disabled={!loading && !assets.length} onClick={selectLoaded}>全选已加载</Button>
+              <Button disabled={!loading && !visible.length} onClick={selectLoaded}>{filter === 'all' ? '全选已加载' : `全选筛选结果（${visible.length}）`}</Button>
               <Button disabled={!selectedCount} onClick={() => setSelectedAssetIds([])}>清空选择</Button>
               {/* 批量确认：视频帧这类批量场景不用再逐张点开确认；语义与单张「保存并确认」一致。 */}
               <Button busy={confirming} disabled={!selectedCount || confirming} onClick={() => void confirmSelectedCandidates()}>接受候选并确认</Button>
@@ -179,7 +247,8 @@ export default function ProjectOverview() {
                 .catch(e => notify(errorMessage(e), true))}><MessageSquare size={14} />在对话里处理这些素材</Button>
             </div>
           </div>
-          <div className="result-grid">{assets.map(asset => <div className={`result-thumb-wrap ${selectedAssetIds.includes(asset.id) ? 'selected' : ''}`} key={asset.id}>
+          {visible.length
+            ? <div className="result-grid">{visible.map(asset => <div className={`result-thumb-wrap ${selectedAssetIds.includes(asset.id) ? 'selected' : ''}`} key={asset.id}>
             <button className="result-thumb" title={`${asset.name} · ${statusNames[asset.status] ?? asset.status}`} onClick={() => setPreview(asset)}>
               <img loading="lazy" src={asset.thumbnailUrl || asset.mediaUrl} alt={asset.name} />
               <span className="truncate">{asset.name}</span>
@@ -191,7 +260,8 @@ export default function ProjectOverview() {
             </label>
             {/* 版本记录、标签导入、效果图与文件位置这些命令不属于画布编辑，留在素材上，工作台退场后仍有入口。 */}
             <IconButton label={`${asset.name} 的素材与标注操作`} className="result-thumb-more" onClick={() => setActions(asset)}><MoreHorizontal size={14} /></IconButton>
-          </div>)}</div></>
+          </div>)}</div>
+            : <p className="quiet-empty">当前筛选「{filterNames[filter]}」没有素材。<Button onClick={() => setFilter('all')}>看全部</Button></p>}</>
         : <p className="quiet-empty">这个项目还没有素材，先在对话里说明要导入什么。</p>}
       {assets.length < (assetTotal || total) && <Button busy={loading} onClick={() => void loadAssets(assets.length)}>加载更多（还有 {(assetTotal || total) - assets.length} 张）</Button>}
     </section>

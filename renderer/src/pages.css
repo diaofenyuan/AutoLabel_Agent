@@ -430,6 +430,13 @@
 .result-thumb img{width:100%;height:66px;object-fit:cover;border-radius:4px;background:var(--surface)}
 .result-thumb span{font-size:11px;max-width:100%}
 .result-thumb small{font-size:9px;color:var(--soft)}
+.result-filters{display:flex;flex-wrap:wrap;gap:6px;margin:9px 0 2px}
+.result-filter{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid var(--border);border-radius:999px;background:var(--bg);font-size:11px;color:var(--soft);cursor:pointer}
+.result-filter strong{color:var(--text);font-weight:600}
+.result-filter:hover{border-color:var(--accent)}
+.result-filter[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.result-filter[aria-pressed="true"] strong{color:var(--accent)}
+.result-groups{display:grid;gap:2px;margin:6px 0 0;font-size:10px;color:var(--soft)}
 /* 只读标注预览：等比铺满容器，不接收任何指针事件，编辑一律走对话指令。 */
 .result-viewer{position:relative;width:100%;overflow:auto;background:var(--surface-soft);border:1px solid var(--border);border-radius:9px}
 .result-canvas{display:block;width:100%;height:auto}

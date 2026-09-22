@@ -14,6 +14,8 @@ import { gotoWelcome, openFirstAssetCanvas, openProjectChat, openSelectedProject
  * 2. 输入卡的「开始标注」能直接用**标注模型**建任务，全程不经过对话；
  * 3. 结果落成候选（candidate），人工已确认的内容不受影响；
  * 4. 项目没有类别时，弹层给出原因并禁用开始按钮，而不是让用户点了才发现。
+ * 5. 画布精修可用：方向键 1px / Shift 10px 微调、滚轮缩放、中键拖拽平移。
+ * 6. 结果筛选芯片（全部/有候选/无目标/失败/已确认/未处理）计数与网格一致，筛选态下全选只选筛选结果。
  *
  * 夹具是一个回环服务商：只回一份合法标注 JSON，classId 用项目里真实存在的类别。
  */
@@ -177,6 +179,35 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
       `区域应落在框选的位置上，实际：${json(region)}`);
     checks.push({ check: 'canvas-region-saved', region });
 
+    // ===== 画布精修：方向键 1px / Shift 10px 微调、滚轮缩放、中键拖拽平移 =====
+    // 微调属于未保存改动：关窗前的放弃确认在这一步就放行，验收只看行为、不落改动。
+    await js(`(()=>{window.confirm=()=>true;return true})()`);
+    const nudgeBefore = await js<number>(`(()=>{const x=document.querySelector('input[aria-label="标注对象x"]');return x?Number(x.value):NaN})()`);
+    assert.ok(Number.isFinite(nudgeBefore), '画布应默认选中第一个对象并给出 X 坐标输入框');
+    await js(`(()=>{const svg=document.querySelector('svg[aria-label="素材标注画布"]');svg.focus();
+      svg.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));return true})()`);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const nudgeOnce = await js<number>(`Number(document.querySelector('input[aria-label="标注对象x"]').value)`);
+    assert.ok(Math.abs(nudgeOnce - nudgeBefore - 1) < 0.02, `方向键应把选中对象右移 1px，实际 ${nudgeBefore} → ${nudgeOnce}`);
+    await js(`(()=>{const svg=document.querySelector('svg[aria-label="素材标注画布"]');
+      svg.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',shiftKey:true,bubbles:true,cancelable:true}));return true})()`);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const nudgeShift = await js<number>(`Number(document.querySelector('input[aria-label="标注对象x"]').value)`);
+    assert.ok(Math.abs(nudgeShift - nudgeOnce - 10) < 0.02, `Shift+方向键应右移 10px，实际 ${nudgeOnce} → ${nudgeShift}`);
+    await js(`(()=>{const viewport=document.querySelector('.quality-image');
+      const box=viewport.getBoundingClientRect();
+      viewport.dispatchEvent(new WheelEvent('wheel',{deltaY:-120,clientX:box.left+box.width/2,clientY:box.top+box.height/2,bubbles:true,cancelable:true}));return true})()`);
+    await waitFor(`parseFloat(document.querySelector('.quality-image-stage').style.width)>100`);
+    const refine = await js<{ zoomWidth: string; panScroll: number }>(`(()=>{const viewport=document.querySelector('.quality-image'),stage=document.querySelector('.quality-image-stage');
+      const zoomWidth=stage.style.width;
+      const svg=document.querySelector('svg[aria-label="素材标注画布"]'),start=viewport.scrollLeft;
+      const fire=(type,dx)=>{const b=svg.getBoundingClientRect();svg.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:2,isPrimary:true,button:1,buttons:4,clientX:b.left+b.width/2+dx,clientY:b.top+b.height/2}));};
+      fire('pointerdown',0);fire('pointermove',60);fire('pointerup',60);
+      return {zoomWidth,panScroll:start-viewport.scrollLeft}})()`);
+    assert.ok(parseFloat(refine.zoomWidth) > 100, `滚轮应放大画布，实际 stage 宽度 ${refine.zoomWidth}`);
+    assert.ok(refine.panScroll > 10, `中键拖拽应平移视野，scrollLeft 变化 ${refine.panScroll}`);
+    checks.push({ check: 'canvas-refine-nudge-zoom-pan', nudge1px: nudgeOnce - nudgeBefore, nudge10px: nudgeShift - nudgeOnce, zoomWidth: refine.zoomWidth, panScroll: refine.panScroll });
+
     // 画布上的区域要能在直达标注里看到，并且随运行一起发出去。
     await js(`([...document.querySelectorAll('dialog[open] button')].find(node=>node.innerText.trim()==='关闭')).click()`);
     await waitFor(`!document.querySelector('.asset-annotator')`);
@@ -210,6 +241,31 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     const afterRepeat = await api<{ items: Array<{ version: number }> }>('asset.list', { projectId, limit: 100 });
     assert.equal(afterRepeat.items[0].version, versionBefore, '已经确认过的素材不应再写新版本');
     checks.push({ check: 'bulk-confirm-candidates', statuses: confirmedAssets.items.map(item => item.status), objects: beforeConfirm, repeatVersion: afterRepeat.items[0].version });
+
+    // ===== 结果筛选芯片：计数与网格逐个对得上，筛选态下全选只选筛选结果 =====
+    await waitFor(`!!document.querySelector('.result-filters')`);
+    const chips = await js<Array<{ key: string; count: number }>>(`[...document.querySelectorAll('.result-filter')].map(node=>({key:node.getAttribute('data-result-filter'),count:Number(node.querySelector('strong').innerText)}))`);
+    assert.equal(chips.length, 6, `应有 6 个结果筛选芯片，实际：${json(chips)}`);
+    const filterShown: Record<string, number> = {};
+    for (const chip of chips) {
+      await js(`document.querySelector('.result-filter[data-result-filter=${json(chip.key)}]').click()`);
+      await new Promise(resolve => setTimeout(resolve, 150));
+      const shown = await js<number>(`document.querySelectorAll('.result-grid .result-thumb-wrap').length`);
+      assert.equal(shown, chip.count, `筛选「${chip.key}」应显示 ${chip.count} 张，实际 ${shown}`);
+      filterShown[chip.key] = shown;
+    }
+    const nonAll = chips.find(chip => chip.key !== 'all' && chip.count > 0);
+    assert.ok(nonAll, `批量确认后应至少有一个非「全部」芯片有计数，实际：${json(chips)}`);
+    await js(`document.querySelector('.result-filter[data-result-filter=${json(nonAll!.key)}]').click()`);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const label = await js<string>(`[...document.querySelectorAll('.asset-selection button')].map(node=>node.innerText.trim()).join('|')`);
+    assert.ok(label.includes('全选筛选结果'), `筛选态下全选按钮应指向筛选结果，实际：${label}`);
+    await js(`([...document.querySelectorAll('.asset-selection button')].find(node=>node.innerText.includes('全选筛选结果'))).click()`);
+    const picked = await js<number>(`document.querySelectorAll('.result-grid .result-thumb-wrap.selected').length`);
+    assert.equal(picked, nonAll!.count, `全选筛选结果应只选中筛选出的 ${nonAll!.count} 张，实际 ${picked}`);
+    await js(`([...document.querySelectorAll('.asset-selection button')].find(node=>node.innerText.trim()==='清空选择')).click()`);
+    await js(`document.querySelector('.result-filter[data-result-filter="all"]').click()`);
+    checks.push({ check: 'result-filter-chips', shown: filterShown, selectedFilter: nonAll!.key });
 
     // ===== 参考帧：把一张已人工确认的图当示例发出去，而它自己不被标注 =====
     const extra = path.join(fixtures, 'reference.png');
@@ -278,7 +334,8 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
       return { text: p.innerText.replace(/\\s+/g,' '), startDisabled: Boolean(start?.disabled) };})()`);
     assert.ok(blocked.text.includes('还没有类别'), `没有类别时应说明原因，实际：${blocked.text.slice(0, 200)}`);
     assert.equal(blocked.startDisabled, true, '没有类别时开始按钮应禁用');
-    checks.push({ check: 'direct-run-blocks-without-classes', reason: blocked.text.slice(0, 160) });
+    // 原因文本要完整记录：截断会让下游汇总断言读不到真正的拦截原因（曾把「还没有类别」截在 160 字之外）。
+    checks.push({ check: 'direct-run-blocks-without-classes', reason: blocked.text });
     await writeFile(output, json({ checks, passed: true }));
   } catch (error) {
     await writeFile(output, json({ checks, passed: false, error: error instanceof Error ? error.message : String(error), body: await js(`document.body.innerText`) }));
