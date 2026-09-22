@@ -120,7 +120,7 @@ export default function LocalModelPicker({ project, disabled, onPick }: { projec
         {!project && picked.entry.openVocabulary && <p className="muted tiny">还没进入项目：发送后助手会先确认项目与类别，再列映射给你看。</p>}
         <div className="actions">
           <button type="button" className="button primary" onClick={buildPrompt}>填进输入框</button>
-          <button type="button" className="text-button" onClick={() => { setOpen(false); void navigate('settings', 'ai'); }}>去模型库</button>
+          <button type="button" className="text-button" onClick={() => { setOpen(false); void navigate('settings', 'ai-library'); }}>去模型库</button>
         </div>
       </div>}
       {note && Boolean(choices.length) && <p className="inline-error" role="alert">{note}</p>}

@@ -8,7 +8,7 @@ export type Page = 'chat' | 'overview' | 'tasks' | 'settings';
  * 设置页的区块键，与 `Settings.tsx` 的标签栏一一对应。
  * 单独抽出来是为了让「深链到指定区块」有类型约束：媒体错误里的「打开媒体运行时设置」靠它落到视频工具。
  */
-export type SettingsSection = 'appearance' | 'ai' | 'workspace' | 'storage' | 'chats' | 'execution' | 'local' | 'media' | 'samples' | 'shortcuts' | 'updates' | 'diagnostics';
+export type SettingsSection = 'appearance' | 'ai' | 'ai-library' | 'workspace' | 'storage' | 'chats' | 'execution' | 'local' | 'media' | 'samples' | 'shortcuts' | 'updates' | 'diagnostics';
 
 /** 扁平导航注册表：侧栏主入口与 Ctrl+K 快速跳转共用同一份页面清单，避免两处各自维护而漂移。 */
 export interface NavEntry { key: Page; label: string; icon: LucideIcon }
@@ -32,7 +32,7 @@ export function navLabel(page: Page): string {
 export interface ChatAttachment { id: string; path: string; kind: 'image' | 'video' | 'directory'; name: string }
 
 export interface ChatSession {
-  id: string; messages: Array<{ role: 'user'|'assistant'; content: string }>;
+  id: string; messages: Array<{ role: 'user'|'assistant'; content: string; failed?: boolean }>;
   referenceResources?:import('../../shared/resources').ReferenceSelection[];
   input: string; busy: boolean; cancelRequested?: boolean; exportDir: string; scope: 'current'|'project'|'page'|'selected'; autoExecute: boolean; runningScope?: string;
   streamingText?: string; streamSinceSequence?: number;

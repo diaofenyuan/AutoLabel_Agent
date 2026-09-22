@@ -205,7 +205,7 @@ export function Sidebar() {
       onClose={() => setCreatingProject(false)}
       onConfirm={async choice => {
         if (choice.mode !== 'create') throw new Error('请填写项目名称。');
-        let created = await request<Project>('project.create', { name: choice.name.slice(0, 80), taskType: 'detect' });
+        let created = await request<Project>('project.create', { name: choice.name.slice(0, 80), taskType: choice.taskType });
         // 新建时就落下的类别与标注要求，与「类别与点位模板」走同一条通路。
         created = await applyProjectDraft(created.id, choice.classes, choice.rules) ?? created;
         await refreshProjects();

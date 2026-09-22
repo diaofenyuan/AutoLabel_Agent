@@ -4,6 +4,7 @@ import type { LocalRuntimeState } from '../../shared/inference';
 import { runtimeSetupBusy, RUNTIME_SETUP_PHASE_NAMES, type RuntimeSetupState } from '../../shared/runtime-setup';
 import { getBridge, request, errorMessage, isDemo } from './bridge';
 import { Button, Notice } from './ui';
+import { useApp } from './context';
 
 const localErrorActions: Record<string, string> = {
   model_task_unverified: '无法确认模型任务类型。请重新导出带任务元数据的模型，再登记新版本。',
@@ -17,9 +18,13 @@ const localErrorActions: Record<string, string> = {
 };
 
 export function LocalError({ error, code }: { error: string; code?: string }) {
+  const { navigate } = useApp();
   const errorCode = code ?? error.match(/\b(model_task_unverified|model_task_mismatch|device_unavailable|local_model_load_required|class_map_incomplete|vocabulary_term_needs_english|vocabulary_encoder_missing)\b/)?.[0];
   const action = errorCode ? localErrorActions[errorCode] : undefined;
-  return error ? <div className="local-error"><p>{action ?? '本地推理操作未完成。请展开诊断详情，确认原因后重试。'}</p><details><summary>诊断详情</summary><p>{code ? `[${code}] ${error}` : error}</p></details></div> : null;
+  return error ? <div className="local-error"><p>{action ?? '本地推理操作未完成。请展开诊断详情，确认原因后重试。'}</p>
+    {/* 缺编码器的出路只有一个：到模型库下载。给真按钮，不指望用户自己找设置的哪一层。 */}
+    {errorCode === 'vocabulary_encoder_missing' && <div className="actions"><Button onClick={() => void navigate('settings', 'ai-library')}>去模型库下载编码器</Button></div>}
+    <details><summary>诊断详情</summary><p>{code ? `[${code}] ${error}` : error}</p></details></div> : null;
 }
 
 /**

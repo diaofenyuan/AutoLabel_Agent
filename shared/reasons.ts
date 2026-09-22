@@ -8,7 +8,7 @@
  */
 
 /** 建议动作的标识：由调用方按自身能力提供 handler，缺少 handler 的动作不渲染，避免点了没反应。 */
-export type ReasonActionId = 'openTemplate' | 'openChat' | 'openExport' | 'openAssets' | 'openScreening';
+export type ReasonActionId = 'openTemplate' | 'openChat' | 'openExport' | 'openAssets' | 'openScreening' | 'openModelLibrary' | 'openAiSettings';
 export type ReasonActionHandlers = { [K in ReasonActionId]?: () => void };
 
 export const ACTION_LABELS: Record<ReasonActionId, string> = {
@@ -16,7 +16,9 @@ export const ACTION_LABELS: Record<ReasonActionId, string> = {
   openChat: '去对话里处理',
   openExport: '改用数据导出',
   openAssets: '查看素材',
-  openScreening: '去素材筛选'
+  openScreening: '去素材筛选',
+  openModelLibrary: '去模型库下载编码器',
+  openAiSettings: '去接口设置'
 };
 
 /** 聚合计数用的短标签：必须覆盖 DatasetSelection 的全部原因码，否则会在界面上漏出原始码。 */
@@ -50,7 +52,10 @@ export const REASON_ACTIONS: Record<string, ReasonActionId> = {
   media_missing: 'openAssets',
   dataset_augment_flip_requires_symmetry: 'openTemplate',
   screening_not_complete: 'openScreening',
-  dataset_split_leak_detected: 'openScreening'
+  dataset_split_leak_detected: 'openScreening',
+  vocabulary_encoder_missing: 'openModelLibrary',
+  vocabulary_term_needs_english: 'openTemplate',
+  model_not_found: 'openAiSettings'
 };
 
 /** 聚合计数用的中文标签；未收录的码退化为中性描述，绝不把原始码摆到界面上。 */

@@ -40,11 +40,11 @@ export default function OnboardingLanes({ busy, onImportImages, onImportImageFol
       <header><span className="onboarding-step">3</span><h2>让 AI 自动标注</h2></header>
       {configured
         ? <p><CheckCircle2 size={13} />当前模型：{prefs.chatModel || '已在设置里配置'}。在下面的输入框描述要求即可开始。</p>
-        : <p>配置一个接口与 API Key 后，助手就能按你的描述批量标注。</p>}
+        : <p>配一个接口可以云端标注；也可以用软件自带的<b>内置模型</b>在本机标注——不需要 API Key，也不产生接口费用。</p>}
       <div className="onboarding-actions">
         <button disabled={busy} onClick={() => void navigate('settings', 'ai')}>{configured ? <><Settings2 size={14} />调整 AI 配置</> : <><Sparkles size={14} />配置 AI</>}</button>
-        {/* 没配云接口时给一条不花钱的路：软件自带的模型在本机跑，不需要 API Key。 */}
-        {!configured && <button disabled={busy} onClick={() => void navigate('settings', 'ai')}><Cpu size={14} />用内置模型标注（无需 API Key）</button>}
+        {/* 没配云接口时给一条不花钱的路：直落「模型库」页签，启用内置模型后即可用输入卡的「开始标注」跑通。 */}
+        {!configured && <button disabled={busy} onClick={() => void navigate('settings', 'ai-library')}><Cpu size={14} />用内置模型标注（无需 API Key）</button>}
       </div>
     </section>
   </div>;

@@ -58,7 +58,7 @@ export default function ChatHome() {
     if (action.mode === 'existing') target = action.project;
     else {
       const existing = sameNameProject(projects, action.name);
-      target = existing ?? await request<Project>('project.create', { name: action.name.slice(0, 80), taskType: 'detect' });
+      target = existing ?? await request<Project>('project.create', { name: action.name.slice(0, 80), taskType: action.taskType });
       if (existing) notify(`已接入同名项目「${existing.name}」。`);
       // 同名接入时沿用项目原有模板，只有新建的项目才写入这次填的类别与标注要求。
       else target = await applyProjectDraft(target.id, action.classes, action.rules) ?? target;

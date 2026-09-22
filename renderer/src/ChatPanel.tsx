@@ -20,7 +20,7 @@ import { blankChatSession, useApp, type ChatSession } from './context';
 import { request, getBridge, isDemo, errorMessage } from './bridge';
 import { Composer, Button, Empty } from './ui';
 
-type ChatMessageData = { role: 'user' | 'assistant'; content: string };
+type ChatMessageData = { role: 'user' | 'assistant'; content: string; failed?: boolean };
 
 /**
  * 空会话的起手式：不是模板，只是把「一句话能说清什么」摆给第一次用的人。
@@ -33,7 +33,7 @@ const sampleRequests = [
 ];
 
 function ChatMessage({ message, previousUser, onEdit, onRetry, onCopy }: { message: ChatMessageData; previousUser?: string; onEdit: (text: string) => void; onRetry: (text: string) => void; onCopy: (text: string) => void }) {
-  const failed = message.role === 'assistant' && message.content.startsWith('本次调用未完成：');
+  const failed = message.role === 'assistant' && Boolean(message.failed);
   return <div className={`chat-message ${message.role} ${failed ? 'chat-message-failed' : ''}`}>
     <div className="chat-message-head"><span className={`chat-avatar ${message.role}`} aria-hidden="true">{message.role === 'assistant' ? <Sparkles size={12} /> : '你'}</span><small>{message.role === 'user' ? '你' : '标注助手'}</small></div>
     <div className="chat-text">{failed&&<span className="chat-error-label">这次没有完成</span>}<RichText text={message.content}/></div>
@@ -166,7 +166,7 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
       });
       // 先看方案时 agent 只给出待执行的操作：确认卡片据此渲染，写操作一个都没跑。
       update({ messages: [...next, { role: 'assistant', content: result.content || (result.status === 'cancelled' ? '对话已停止。' : '接口未返回文本。') }], planned: result.actions?.filter(action => action.status === 'planned'), streamingText: undefined, streamSinceSequence: undefined });
-    } catch (e) { update({ messages: [...next, { role: 'assistant', content: `本次调用未完成：${errorMessage(e)}` }], streamingText: undefined, streamSinceSequence: undefined }); notify(errorMessage(e), true); }
+    } catch (e) { update({ messages: [...next, { role: 'assistant', content: errorMessage(e), failed: true }], streamingText: undefined, streamSinceSequence: undefined }); notify(errorMessage(e), true); }
     finally { update({ busy: false, cancelRequested: false }); void refreshChatSessions().catch(() => undefined); }
   }
   useEffect(() => {

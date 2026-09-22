@@ -50,7 +50,11 @@ const ERROR_TITLES: Record<string, string> = {
   SECRET_FIELD_DENIED: '凭据请用 API Key 专用输入保存',
   // 本机开放词汇的两个类别名问题：只拿到原因码时也要能直接看出下一步。
   vocabulary_term_needs_english: '类别名是中文，开放词汇的文本编码器只认英文：请改成英文名（例如「手办」→ figurine）',
-  vocabulary_encoder_missing: '这个英文类别名不在内置词表里，需要先在模型库下载「CLIP 文本编码器 ViT-B/32」'
+  vocabulary_encoder_missing: '这个英文类别名不在内置词表里，需要先在模型库下载「CLIP 文本编码器 ViT-B/32」',
+  // 服务商侧的英文报错：给出真正能走通的下一步，而不是把原文甩给用户。
+  model_not_found: '接口没有这个模型 id：请点「获取模型列表」，从接口返回的清单里选模型 id（不是文档里的显示名）',
+  provider_response_invalid: '接口返回的不是标注结果（多为超时或网关错误页），请稍后重试或检查接口地址',
+  model_annotation_json_invalid: '接口返回的不是标注结果，多为超时或网关错误；已拒绝按标注解析，素材保持原状'
 };
 
 const BRACKET_CODE = /^\[([A-Za-z0-9_]+)\]\s*([\s\S]*)$/;

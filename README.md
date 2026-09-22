@@ -50,5 +50,6 @@ npm run pack:win
 - `node scripts/validate-agent-integration.mts`：隔离本地协议服务下的 Agent → Java → 标注队列联调，不代表实际服务商验证。
 - `py -3.11 scripts/validate-datasets.py <导出目录...>`：使用已安装的 Ultralytics 读取实际导出数据，不训练模型。
 - `py -3.11 inference/validate_vocabulary.py <模型.pt> <图片>`：开放词汇的分级词表（内置 / 缓存 / 编码器）与离线拒绝。
+- `node scripts/validate-figurine-flow.mts`：真实接口下的「手办标注」端到端基线（候选落库、纯文本模型被拦且不污染结果、中文新词显式拒绝）；凭据只走 `AUTOLABEL_TEST_*` 环境变量，不落盘。
 
 模型 API Key 在应用「设置 → 软件 AI 配置」里填写，由桌面凭据模块保存；不要放进源码。离线街景为合成图片，附带的两个框是人工预置示范，不是完整真值集或 AI 标注结果。

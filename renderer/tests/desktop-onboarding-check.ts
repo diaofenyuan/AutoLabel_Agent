@@ -78,6 +78,18 @@ export async function checkDesktopOnboarding(window: BrowserWindow, output: stri
     const section = await js<string>(`document.querySelector('.settings-tabs button.selected')?.innerText.trim() ?? ''`);
     assert.equal(section, '软件 AI 配置', `第 3 条路应落到软件 AI 配置，实际落在「${section}」`);
     checks.push({ check: 'ai-lane-opens-settings', section });
+
+    // ===== 「用内置模型标注」必须直落「模型库」页签，而不是停在「在线接口」表单上等人自己找 =====
+    await js(`[...document.querySelectorAll('.sidebar-scroll .nav-item')].find(node=>node.innerText.trim()==='新对话').click()`);
+    await waitFor(`!!document.querySelector('.onboarding-lanes')`);
+    await laneButton(2, '用内置模型标注（无需 API Key）');
+    await waitFor(`!!document.querySelector('.settings-body')`);
+    const library = await js<{ tab: string; copy: string }>(`(()=>{const body=document.querySelector('.settings-body');
+      const tab=[...body.querySelectorAll('.tabs button')].find(node=>node.classList.contains('selected'))?.innerText.trim()??'';
+      return {tab, copy:body.innerText.replace(/\\s+/g,' ').slice(0,400)}})()`);
+    assert.equal(library.tab, '模型库', `「用内置模型标注」应直落模型库页签，实际落在「${library.tab}」`);
+    assert.ok(library.copy.includes('模型'), `落点应是模型库内容，实际：${library.copy}`);
+    checks.push({ check: 'builtin-lane-opens-model-library', tab: library.tab });
     await writeFile(output, json({ checks, passed: true }));
   } catch (error) {
     await writeFile(output.replace(/\.json$/, '-failure.png'), (await window.webContents.capturePage()).toPNG());

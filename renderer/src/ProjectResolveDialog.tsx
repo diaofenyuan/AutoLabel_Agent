@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { Button, Field, Modal } from './ui';
 import { errorMessage } from './bridge';
 import { MAX_CLASSES, MAX_CLASS_NAME, parseClassNames } from './projectSetup';
-import type { Project } from './types';
+import type { Project, TaskType } from './types';
+import { taskNames } from './types';
 
-export type ProjectChoice = { mode: 'create'; name: string; classes: string[]; rules: string } | { mode: 'existing'; project: Project };
+export type ProjectChoice = { mode: 'create'; name: string; taskType: TaskType; classes: string[]; rules: string } | { mode: 'existing'; project: Project };
 
 /**
  * 项目归属确认框：新建项目必须由用户命名，不再从描述或文件夹名自动取名。
@@ -27,6 +28,8 @@ export default function ProjectResolveDialog({ title, confirmLabel, projects, su
   const preferred = matched ?? remembered;
   const [mode, setMode] = useState<'create' | 'existing'>(allowExisting && preferred ? 'existing' : 'create');
   const [name, setName] = useState(suggestName);
+  // 任务类型在新建时就能定：以前硬编码成检测框，分割/关键点/旋转框/分类项目从界面根本建不出来。
+  const [taskType, setTaskType] = useState<TaskType>('detect');
   // 「要标什么」在新建时就能填：以前只能等对话模型去建类别，模型不可用或没凭证时整条链就断在这里。
   const [classText, setClassText] = useState('');
   const [rules, setRules] = useState('');
@@ -44,7 +47,7 @@ export default function ProjectResolveDialog({ title, confirmLabel, projects, su
         if (classes.length > MAX_CLASSES) throw new Error(`类别最多 ${MAX_CLASSES} 个，请先删掉一些。`);
         const tooLong = classes.find(item => item.length > MAX_CLASS_NAME);
         if (tooLong) throw new Error(`类别「${tooLong}」太长，请控制在 ${MAX_CLASS_NAME} 个字以内。`);
-        await onConfirm({ mode: 'create', name: name.trim(), classes, rules: rules.trim() });
+        await onConfirm({ mode: 'create', name: name.trim(), taskType, classes, rules: rules.trim() });
       } else {
         const project = projects.find(item => item.id === selectedId);
         if (!project) throw new Error('请选择一个项目。');
@@ -62,6 +65,10 @@ export default function ProjectResolveDialog({ title, confirmLabel, projects, su
       {mode === 'create'
         ? <><Field label="项目名称"><input autoFocus maxLength={80} value={name} onChange={e => setName(e.target.value)} placeholder="给项目起个名字"
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (name.trim()) void confirm(); } }} /></Field>
+          <Field label="标注任务类型" hint="决定画布工具与导出格式；不确定就用默认的检测框，之后不能改。">
+            <select aria-label="新建项目任务类型" value={taskType} onChange={e => setTaskType(e.target.value as TaskType)}>
+              {Object.entries(taskNames).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+            </select></Field>
           <Field label="要标注的类别（可留空）" hint="用「、」或逗号分隔，最多 20 个；也可以进项目后再改。类别名就是导出时标签里的名字。">
             <input maxLength={1200} value={classText} onChange={e => setClassText(e.target.value)} placeholder="例如：手办、车辆、行人" /></Field>
           <Field label="标注要求（可留空）" hint="会随项目的标注规则发给模型。写清区分口径最有效。">

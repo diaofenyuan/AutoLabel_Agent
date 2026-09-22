@@ -30,8 +30,8 @@ function describeFailures(results:Record<string,Test>,required:boolean){
   return capabilityOrder.filter(cap=>requiredCapabilities.has(cap)===required)
     .filter(cap=>results[cap]?.status!=='verified').map(cap=>capabilityNames[cap]).join('、');
 }
-export default function AiSettings(){
-  const [kind,setKind]=useState<'api'|'local'|'library'>('api');
+export default function AiSettings({initialKind='api'}:{initialKind?:'api'|'local'|'library'}){
+  const [kind,setKind]=useState<'api'|'local'|'library'>(initialKind);
   const {providers,refreshProviders,prefs,savePrefs,notify}=useApp();
   const [form,setForm]=useState<Form>(()=>providerForm(prefs,providers[0]));
   const [key,setKey]=useState('');const [tests,setTests]=useState<Record<string,Test>>({});
