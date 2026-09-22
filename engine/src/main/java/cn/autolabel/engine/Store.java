@@ -143,6 +143,8 @@ final class Store implements AutoCloseable {
             s.execute("CREATE INDEX IF NOT EXISTS dataset_version_builds_version ON dataset_version_builds(version_id,created_at DESC)");
             // 抽帧配方：全局记录（不属于任何项目），跟着数据目录与备份一起走；名称在同类配方内唯一。
             s.execute("CREATE TABLE IF NOT EXISTS media_recipes(id TEXT PRIMARY KEY,kind TEXT NOT NULL,name TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(kind,name))");
+            // 事件表只增不减会让 WAL 与事件查询随会龄膨胀：启动时清掉 30 天前的事件（当前会话与近期任务不受影响）。
+            s.execute("DELETE FROM events WHERE timestamp < '"+java.time.Instant.now().minus(30,java.time.temporal.ChronoUnit.DAYS).toString()+"'");
             s.execute("PRAGMA user_version="+SCHEMA_VERSION); writer.commit(); writer.setAutoCommit(true);
         } catch(Exception e) {try{if(!writer.getAutoCommit())writer.rollback();}finally{writer.close();writes.shutdownNow();}if(e instanceof ApiError a)throw a;ApiError failure=new ApiError(500,"database_migration_failed","数据库升级失败，未提交迁移；请保留原数据目录及迁移备份并查看诊断。原因："+(e.getMessage()==null?e.getClass().getSimpleName():e.getMessage()));failure.initCause(e);throw failure;}
     }

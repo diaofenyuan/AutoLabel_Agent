@@ -176,7 +176,10 @@ export default function App() {
         if (disposed) return;
         let statusRevision = 0;
         unsubscribe.push(bridge.onEngineStatus(status => { statusRevision++; setEngine(status); if (status.state === 'ready') { void refreshProjects().catch(e => notify(errorMessage(e), true)); void refreshProviders().catch(() => {}); void refreshChatSessions().catch(() => {}); } }));
-        unsubscribe.push(bridge.onEvent(event => { if (seen.has(event.sequence)) return; seen.add(event.sequence); if (seen.size > 2000) seen.delete(seen.values().next().value!); setEvents(list => [...list, event].slice(-200)); }));
+        const eventBuffer: EngineEvent[] = []; let eventScheduled = false;
+        unsubscribe.push(bridge.onEvent(event => { if (seen.has(event.sequence)) return; seen.add(event.sequence); if (seen.size > 2000) seen.delete(seen.values().next().value!);
+          // 进度类事件成串到达（导入/抽帧每 250ms 一条）：攒到下一帧一起应用，避免整树逐条重渲染。
+          eventBuffer.push(event); if (!eventScheduled) { eventScheduled = true; requestAnimationFrame(() => { eventScheduled = false; const batch = eventBuffer.splice(0, eventBuffer.length); if (batch.length) setEvents(list => [...list, ...batch].slice(-200)); }); } }));
         const initialRevision = statusRevision;
         const initial = await Promise.allSettled([bridge.engineStatus(), request<Project[]>('project.list'), request<Preferences>('settings.get'), request<Provider[]>('provider.list'), request<EngineEvent[]>('event.list', { after: 0 }), request<ChatHistoryList>('chat.history.list')]);
         if (disposed) return;

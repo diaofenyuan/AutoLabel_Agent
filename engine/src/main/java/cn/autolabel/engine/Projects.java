@@ -44,7 +44,16 @@ final class Projects {
         return store.read(c->{Store.document(c,"projects",id);String condition="project_id=?";List<Object> args=new ArrayList<>(List.of(id));
             if(p.has("status")){condition+=" AND status=?";args.add(Json.required(p,"status"));}
             long total=Store.one(c,"SELECT COUNT(*) AS n FROM assets WHERE "+condition,args.toArray()).get("n").getAsLong();
-            args.add(limit);args.add(offset);JsonArray items=new JsonArray();for(JsonObject r:Store.rows(c,"SELECT id FROM assets WHERE "+condition+" ORDER BY rowid LIMIT ? OFFSET ?",args.toArray()))items.add(asset(c,r.get("id").getAsString()));return Json.obj("items",items,"total",total);});
+            args.add(limit);args.add(offset);JsonArray items=new JsonArray();
+            // 一次取页内的素材 + 一次取这些素材的草稿：原来逐行各查两遍（N+1），上万素材时列表查询是主要卡顿源。
+            List<JsonObject> rows=Store.rows(c,"SELECT id,data,path FROM assets WHERE "+condition+" ORDER BY rowid LIMIT ? OFFSET ?",args.toArray());
+            Map<String,JsonObject> drafts=new HashMap<>();if(!rows.isEmpty()){
+                List<Object> draftArgs=new ArrayList<>();StringBuilder marks=new StringBuilder();
+                for(JsonObject r:rows){if(marks.length()>0)marks.append(',');marks.append('?');draftArgs.add(Json.required(r,"id"));}
+                for(JsonObject d:Store.rows(c,"SELECT asset_id,data,base_version,saved_at FROM drafts WHERE asset_id IN ("+marks+")",draftArgs.toArray()))drafts.put(Json.required(d,"asset_id"),d);}
+            for(JsonObject r:rows){JsonObject item=Json.parse(r.get("data").getAsString());JsonObject draft=drafts.get(Json.required(r,"id"));
+                if(draft!=null){item.add("draft",Json.parse(draft.get("data").getAsString()));JsonObject m=Json.object(item,"metadata");m.add("draftBaseVersion",draft.get("base_version"));m.add("draftSavedAt",draft.get("saved_at"));item.add("metadata",m);}items.add(item);}
+            return Json.obj("items",items,"total",total);});
     }
     /** 逐张归一化的取消与进度口子：同步导入用空实现，后台任务接真实任务状态。 */
     interface ImportMeter{default void checkpoint(){}default void progress(int done,int total,int skipped,int errors){}}

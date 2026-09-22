@@ -79,7 +79,8 @@ final class VideoFrames implements AutoCloseable {
                         if(lastSignature!=null&&difference(signature,lastSignature)<sceneThreshold){Files.delete(png);dropped++;continue;}
                         lastSignature=signature;lastKept=seconds;
                         if(count>=integer(fixed,"maxFrames",1,100000))throw error(413,"video_frame_limit","实际帧数超过上限，未发布截断结果。");}
-                    if(!scene)validateImage(png,fixed);Path temporary=png;
+                    // 完整性与尺寸由 readPng 的 IHDR/CRC 校验保证，这里不再整图解码一遍（每帧曾多两次全解码）。
+                    Path temporary=png;
                     if(format.equals("jpg")){temporary=directory.resolve(stem+".jpg.tmp");jpeg(png,temporary,remaining,fixed,job);Files.delete(png);}
                     long size=Files.size(temporary);if(size<=0||size>remaining)throw error(413,"video_output_limit","抽帧文件超过累计字节预算。");String imageHash=hash(temporary,job);Path image=frames.resolve(stem+"."+format);Files.move(temporary,image,StandardCopyOption.ATOMIC_MOVE);bytes=Math.addExact(bytes,size);JsonObject item=frame(fixed,parser,pending,image.getFileName().toString(),imageHash,size);
                     manifest.write(item.toString());manifest.newLine();manifest.flush();count++;
@@ -174,7 +175,8 @@ final class VideoFrames implements AutoCloseable {
     }
 
     private static JsonObject frame(JsonObject fixed,Parser parser,Frame frame,String file,String hash,long bytes){
-        return Json.obj("frameId",String.format(Locale.ROOT,"frame-%08d",frame.output),"imagePath","frames/"+file,"contentHash",hash,"bytes",bytes,"width",fixed.get("outputWidth"),"height",fixed.get("outputHeight"),"sourceVideoId",fixed.get("sourceVideoId"),"sourceHash",fixed.get("sourceHash"),"streamIndex",fixed.get("streamIndex"),"sourcePresentationIndex",frame.source,"sourcePts",Long.toString(frame.pts),"originPts",Long.toString(parser.origin),"relativePts",Long.toString(frame.relative),"timeBase",fixed.get("timeBase"),"timeSeconds",(double)frame.relative*parser.numerator/parser.denominator,"rangeIndex",frame.range,"bucketIndex",frame.bucket<0?null:frame.bucket,"codedVideoToFrame",fixed.get("codedVideoToFrame"),"selectionVersion",SELECTION);
+        // frameId 必须与文件名同源：去重丢帧后「发出序号」与「保留序号」会错位，清单身份对不上就导不进库。
+        return Json.obj("frameId",file.substring(0,file.lastIndexOf('.')),"imagePath","frames/"+file,"contentHash",hash,"bytes",bytes,"width",fixed.get("outputWidth"),"height",fixed.get("outputHeight"),"sourceVideoId",fixed.get("sourceVideoId"),"sourceHash",fixed.get("sourceHash"),"streamIndex",fixed.get("streamIndex"),"sourcePresentationIndex",frame.source,"sourcePts",Long.toString(frame.pts),"originPts",Long.toString(parser.origin),"relativePts",Long.toString(frame.relative),"timeBase",fixed.get("timeBase"),"timeSeconds",(double)frame.relative*parser.numerator/parser.denominator,"rangeIndex",frame.range,"bucketIndex",frame.bucket<0?null:frame.bucket,"codedVideoToFrame",fixed.get("codedVideoToFrame"),"selectionVersion",SELECTION);
     }
     private static Rotation rotation(JsonObject stream){
         JsonArray raw=null;Integer rotation=null;for(JsonElement element:Json.array(stream,"side_data_list")){JsonObject side=element.getAsJsonObject();if(!Json.str(side,"side_data_type","").equals("Display Matrix"))continue;if(raw!=null)throw error(422,"video_rotation_unsupported","视频包含冲突的显示矩阵。");String matrix=text(side,"displaymatrix",2000);List<Long> numbers=new ArrayList<>();for(String line:matrix.strip().split("\\R")){int colon=line.indexOf(':');if(colon<0)throw error(422,"video_rotation_unsupported","无法解释视频显示矩阵。");for(String value:line.substring(colon+1).strip().split("\\s+"))numbers.add(Long.parseLong(value));}if(numbers.size()!=9)throw error(422,"video_rotation_unsupported","视频显示矩阵尺寸无效。");raw=Json.element(numbers).getAsJsonArray();
@@ -238,7 +240,6 @@ final class VideoFrames implements AutoCloseable {
         double[] values=new double[32*24];for(int y=0;y<24;y++)for(int x=0;x<32;x++){int rgb=tiny.getRGB(x,y);values[y*32+x]=0.299*((rgb>>16)&255)+0.587*((rgb>>8)&255)+0.114*(rgb&255);}tiny.flush();return values;
     }
     private static double difference(double[] a,double[] b){double sum=0;for(int i=0;i<a.length;i++)sum+=Math.abs(a[i]-b[i]);return sum/a.length/255;}
-    private static void validateImage(Path path,JsonObject fixed)throws IOException{BufferedImage image=ImageIO.read(path.toFile());if(image==null)throw error(422,"video_image_invalid","抽帧图片不能完整解码。");try{if(image.getWidth()!=integer(fixed,"outputWidth",1,20000)||image.getHeight()!=integer(fixed,"outputHeight",1,20000))throw error(422,"video_image_invalid","抽帧图片实际尺寸与元数据不一致。");}finally{image.flush();}}
     private static void atomicJson(Path path,JsonObject value)throws IOException{Path temporary=path.resolveSibling(path.getFileName()+".tmp");Files.writeString(temporary,value.toString(),StandardCharsets.UTF_8,StandardOpenOption.CREATE_NEW);Files.move(temporary,path,StandardCopyOption.ATOMIC_MOVE);}
     private static void incomplete(Path directory,Job job,ApiError failure){try{atomicJson(directory.resolve("incomplete.json"),Json.obj("jobId",job.id,"status",failure.code.equals("video_cancelled")?"cancelled":"failed","error",failure.json()));}catch(Exception ignored){}}
     private static void dimensions(int w,int h){if(w<1||h<1||w>20000||h>20000||(long)w*h>Media.MAX_PIXELS)throw error(413,"video_dimensions_exceeded","视频或输出超过支持的像素范围。");}

@@ -474,7 +474,7 @@ const schemas: Record<string, z.ZodType> = {
     ...reuseFields, ...referenceFields,
   }).refine(referenceCapacity, '项目和资源库参考合计最多 63 张'),
   'run.list': z.strictObject({ projectId: id.optional() }),
-  'run.get': z.strictObject({ runId: id }),
+  'run.get': z.strictObject({ runId: id, sampleLimit: z.number().int().min(1).max(5000).optional(), sampleOffset: z.number().int().min(0).max(2147483647).optional() }),
   'run.pause': runControl, 'run.resume': runControl, 'run.cancel': runControl,
   'run.retry': z.strictObject({ runId: id, assetIds, retryUnknown: z.boolean().optional() }),
   'run.attempts': z.strictObject({ runId: id, assetId: id.optional() }),

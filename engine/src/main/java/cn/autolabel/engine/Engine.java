@@ -84,7 +84,7 @@ final class Engine implements AutoCloseable {
         case "provider.list"->providers.list();case "provider.save"->providers.save(p);case "provider.delete"->providers.delete(p);case "provider.models"->providers.models(Json.required(p,"providerId"));case "provider.test"->providers.test(p);case "provider.capabilities"->providers.capabilities(p);case "credential.set"->providers.credential(p);
         case "chat.send"->providers.chat(p);
         case "chat.cancel"->providers.cancel(Json.required(p,"sessionId"));
-        case "run.create"->runs.create(p);case "run.list"->runs.list(Json.str(p,"projectId",null));case "run.get"->runs.get(Json.required(p,"runId"));case "run.attempts"->runs.attempts(p);
+        case "run.create"->runs.create(p);case "run.list"->runs.list(Json.str(p,"projectId",null));case "run.get"->runs.get(p);case "run.attempts"->runs.attempts(p);
         case "budget.get"->store.read(c->Budgets.view(c,Json.required(p,"budgetScopeId")));
         case "budget.update"->store.tx(c->{String id=Json.required(p,"budgetScopeId");Budgets.ensure(c,id,p.has("maxRequests")?Costs.integer(p,"maxRequests",1,9_007_199_254_740_991L):Long.MAX_VALUE,true);if(p.has("costLimit"))Costs.update(c,id,p.get("costLimit"));return Budgets.view(c,id);});
         case "budget.estimate"->Costs.estimate(providers.get(Json.required(p,"providerId")),p);
@@ -92,7 +92,7 @@ final class Engine implements AutoCloseable {
         case "system.suspend"->runs.suspend(true);case "system.resume"->runs.suspend(false);
         case "event.list"->store.read(c->Store.events(c,Json.number(p,"after",0),Json.str(p,"runId",null),Json.str(p,"assetId",null),Json.str(p,"flowRunId",null),Json.bounded(p,"limit",500,1,2000)));
         case "event.snapshot"->store.read(c->{JsonObject result=Json.obj("sequence",Store.cursor(c),"timestamp",Json.now());
-            if(p.has("runId"))result.add("run",runs.view(c,Json.required(p,"runId"),true));else{JsonArray all=new JsonArray();for(JsonObject row:Store.rows(c,"SELECT id FROM runs ORDER BY rowid DESC LIMIT 100"))all.add(runs.view(c,Json.required(row,"id"),false));result.add("runs",all);}return result;});
+            if(p.has("runId"))result.add("run",runs.view(c,Json.required(p,"runId"),5000,0));else{JsonArray all=new JsonArray();for(JsonObject row:Store.rows(c,"SELECT id FROM runs ORDER BY rowid DESC LIMIT 100"))all.add(runs.view(c,Json.required(row,"id"),0,0));result.add("runs",all);}return result;});
         case "resource.list"->new ResourceLibrary(store,projects).list(p);case "resource.save"->new ResourceLibrary(store,projects).save(p);
         case "resource.get"->new ResourceLibrary(store,projects).get(p);case "resource.apply"->new ResourceLibrary(store,projects).apply(p);case "resource.reference"->new ResourceLibrary(store,projects).addReference(p);case "resource.image"->resourceImage(p);
         case "settings.get"->settings();
