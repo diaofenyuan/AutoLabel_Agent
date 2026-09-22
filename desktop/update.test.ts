@@ -33,6 +33,7 @@ async function fixture(options: { packageFile?: string; slow?: boolean; corrupt?
       res.end(JSON.stringify(options.malformed ? { ...manifest, appId: 'other.application' } : manifest)); return;
     }
     if (req.url === '/bad-redirect') { res.writeHead(302, { Location: 'file:///C:/Windows/win.ini' }); res.end(); return; }
+    if (req.url === '/error') { res.writeHead(500); res.end(); return; }
     if (req.url !== '/package') { res.writeHead(404); res.end(); return; }
     if (options.slow) {
       res.setHeader('Content-Length', 65536); res.write('MZ');
@@ -79,11 +80,15 @@ test('安装前阻断本地或媒体配置不确定状态', () => {
     assert.throws(() => assertUpdateIdle({ ...base, [field]: true }), (error: unknown) => error instanceof DesktopError && error.code === 'UPDATE_TASKS_ACTIVE');
   }
 });
-test('清单错误、HTTP失败与降级重定向均不产生可用更新', async () => {
+test('清单错误、HTTP故障、未发布清单与降级重定向均不产生可用更新', async () => {
   const f = await fixture({ malformed: true });
   try {
     const updater = f.create(); assert.equal((await updater.check()).error?.code, 'UPDATE_MANIFEST_INVALID');
-    updater.configure(`${f.origin}/missing`); assert.equal((await updater.check()).error?.code, 'UPDATE_HTTP_ERROR');
+    // 404 = 清单尚未发布（官方默认源在首个发布之前的常态）：如实「已是最新」，不冒充故障。
+    updater.configure(`${f.origin}/missing`); const missing = await updater.check();
+    assert.equal(missing.state, 'up-to-date'); assert.equal(missing.error?.code, undefined);
+    // 5xx 才是服务器故障：明确报 UPDATE_HTTP_ERROR。
+    updater.configure(`${f.origin}/error`); assert.equal((await updater.check()).error?.code, 'UPDATE_HTTP_ERROR');
     updater.configure(`${f.origin}/bad-redirect`); assert.equal((await updater.check()).error?.code, 'UPDATE_URL_INVALID');
     updater.configure(''); assert.equal((await updater.check()).state, 'unconfigured');
   } finally { await f.close(); }

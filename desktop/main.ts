@@ -5,7 +5,7 @@ import { readFile, writeFile, mkdir, stat, statfs, realpath, readdir } from 'nod
 import { spawn } from 'node:child_process';
 import { EngineManager } from './engine';
 import { AgentManager } from './agent-manager';
-import { UpdateManager, assertUpdateIdle, validateUpdateUrl } from './updater';
+import { UpdateManager, assertUpdateIdle, validateUpdateUrl, DEFAULT_UPDATE_MANIFEST_URL } from './updater';
 import { readExecutableIdentity, verifyUpdatePackage } from './update-package';
 import { checkDesktopUi, checkDesktopConnection, checkPersistedUiEdit, checkPackagedRelease, checkTrainingUi } from './ui-check';
 import { DialogFixtures } from './dialog-fixtures';
@@ -1063,7 +1063,7 @@ app.on('child-process-gone', async (_event, details) => {
       guard: () => { if (installingUpdate || agent.activeCount || credentialSaves || localExecution.busy || mediaExecution.busy || shutdownStarted) throw new DesktopError('STORAGE_TASKS_ACTIVE', '请先完成对话、配置保存或更新，再维护数据目录'); },
     });
     if (['ask', 'tray', 'quit'].includes(String(preferences.closeBehavior))) closeBehavior = preferences.closeBehavior as typeof closeBehavior;
-    try { updates.configure(typeof preferences.updateManifestUrl === 'string' ? preferences.updateManifestUrl : ''); } catch { engine.log('保存的更新清单地址无效，请在设置中重新配置'); }
+    try { updates.configure(typeof preferences.updateManifestUrl === 'string' ? preferences.updateManifestUrl : DEFAULT_UPDATE_MANIFEST_URL); } catch { engine.log('保存的更新清单地址无效，请在设置中重新配置'); }
     if (app.isPackaged) {
       try {
         const identity = await readExecutableIdentity(process.execPath);

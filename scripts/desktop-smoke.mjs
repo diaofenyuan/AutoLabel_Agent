@@ -557,7 +557,7 @@ if (windowOnly) {
     assert.ok(view.controls.every(control => control.region === 'no-drag'));
     assert.equal(view.maximized, true); assert.equal(view.restored, true);
   }
-  assert.equal(result.resizable, true); assert.equal(result.updateStatus.state, 'unconfigured');
+  assert.equal(result.resizable, true); assert.equal(result.updateStatus.state, 'idle');
   console.log(`窗口与诊断界面检查通过：${output}`); process.exit(0);
 }
 assert.equal(result.bridge, true); assert.equal(result.nodeExposed, false);

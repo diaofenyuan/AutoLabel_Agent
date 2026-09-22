@@ -54,6 +54,7 @@
     "check:installer-contract": "node scripts/installer-contract-check.mjs",
     "check:engine-jar": "node scripts/engine-jar-freshness.mjs",
     "check:packaged-jar": "node scripts/engine-jar-freshness.mjs --package",
+    "check:install-lifecycle": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-lifecycle-check.ps1",
     "check:agent": "tsc -p agent/tsconfig.json",
     "test:agent": "npm --prefix agent test",
     "prepare:runtime": "node scripts/desktop-runtime.mjs",

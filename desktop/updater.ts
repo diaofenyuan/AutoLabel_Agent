@@ -11,6 +11,8 @@ const manifestSchema = z.strictObject({ schemaVersion: z.literal(1), appId: z.li
   releaseNotes: z.string().max(32000), downloadUrl: z.string().max(8192), sha256: z.string().regex(/^[0-9a-fA-F]{64}$/),
   size: z.number().int().positive().max(2 * 1024 ** 3), publishedAt: z.iso.datetime({ offset: true }).optional() });
 export type UpdateManifest = z.infer<typeof manifestSchema>;
+/** 官方默认更新清单（GitHub Release 固定文件名）；用户可在设置里覆盖，保存空值则显式关闭更新。 */
+export const DEFAULT_UPDATE_MANIFEST_URL = 'https://github.com/diaofenyuan/AutoLabel_Agent/releases/latest/download/update-manifest.json';
 export interface UpdateStatus {
   state: 'unconfigured' | 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'verifying' | 'ready' | 'cancelled' | 'error' | 'installing';
   currentVersion: string;
@@ -141,7 +143,7 @@ export class UpdateManager {
   private finish(controller: AbortController): void {
     if (this.operation === controller) { this.operation = undefined; this.resolveOperation?.(); this.resolveOperation = undefined; }
   }
-  private async response(value: string, signal: AbortSignal): Promise<Response> {
+  private async response(value: string, signal: AbortSignal, allowMissing = false): Promise<Response> {
     let url = validateUpdateUrl(value, this.options.allowLoopbackHttp);
     for (let redirects = 0; redirects <= 3; redirects++) {
       const response = await fetch(url, { redirect: 'manual', signal, headers: { 'Accept-Encoding': 'identity' } });
@@ -152,7 +154,7 @@ export class UpdateManager {
         if (url.protocol === 'https:' && next.protocol !== 'https:') throw new DesktopError('UPDATE_REDIRECT_INVALID', '更新地址不能重定向到未加密连接');
         url = next; continue;
       }
-      if (!response.ok || !response.body) { await response.body?.cancel(); throw new DesktopError('UPDATE_HTTP_ERROR', `更新服务器返回错误（${response.status}）`); }
+      if (!response.ok || !response.body) { await response.body?.cancel(); if (allowMissing && response.status === 404) return response; throw new DesktopError('UPDATE_HTTP_ERROR', `更新服务器返回错误（${response.status}）`); }
       return response;
     }
     throw new DesktopError('UPDATE_REDIRECT_INVALID', '更新地址重定向次数过多');
@@ -163,7 +165,9 @@ export class UpdateManager {
     const controller = this.begin(); this.manifest = undefined; this.readyFile = undefined;
     this.setState('checking', { release: undefined, downloadedBytes: 0, totalBytes: undefined });
     try {
-      const response = await this.response(this.manifestUrl, AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]));
+      const response = await this.response(this.manifestUrl, AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]), true);
+      // 清单 404 是「尚未发布版本」的常态，不是故障：如实报「已是最新」，不吓唬用户。
+      if (response.status === 404) return this.setState('up-to-date');
       const reader = response.body!.getReader(); const chunks: Uint8Array[] = []; let total = 0;
       while (true) {
         const { done, value } = await reader.read(); if (done) break; total += value.length;
