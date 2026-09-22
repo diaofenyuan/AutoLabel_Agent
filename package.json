@@ -22,6 +22,7 @@
     "check:window": "node scripts/desktop-smoke.mjs --packaged --window",
     "check:ui": "node scripts/desktop-smoke.mjs --packaged --ui",
     "check:update-ui": "node scripts/desktop-smoke.mjs --update-ui",
+    "check:usability-ui": "node scripts/desktop-smoke.mjs --usability",
     "check:run-controls": "node scripts/desktop-smoke.mjs --run-controls",
     "check:media-ui": "node scripts/desktop-smoke.mjs --media",
     "check:reason-ui": "node scripts/desktop-smoke.mjs --reason",

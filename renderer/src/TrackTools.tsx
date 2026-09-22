@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Track, TrackAffectedScope, TrackFrame, TrackGeneration, TrackGenerationParameters, TrackGenerationPreview, TrackLocalSequenceCandidate, TrackLocalSequenceResult, TrackTimelineDetail } from '../../shared/tracks';
 import { Button, Field, Modal, Notice } from './ui';
 import { errorMessage, request } from './bridge';
+import { confirmDialog } from './confirm';
 import type { LocalRuntimeState } from '../../shared/inference';
 import { TrackError, TrackIssues, trackRequest } from './trackUi';
 
@@ -63,7 +64,7 @@ export default function TrackTools({ timeline, track, frame, tracks, onChanged }
   }
   async function confirmLocalCandidate(candidate: TrackLocalSequenceCandidate) {
     if (candidate.confirmation || confirmingCandidate) return;
-    if (!window.confirm('确认已阅读该本地跟踪候选并提交人工复核？此操作不会自动写入正式轨迹。')) return;
+    if (!(await confirmDialog('确认已阅读该本地跟踪候选并提交人工复核？此操作不会自动写入正式轨迹。'))) return;
     setConfirmingCandidate(candidate.candidateId); setError('');
     try {
       const result = await trackRequest('track.local.sequence.confirm', { candidateId: candidate.candidateId, timelineId: timeline.id, timelineVersion: timeline.version, confirm: true });
@@ -74,7 +75,7 @@ export default function TrackTools({ timeline, track, frame, tracks, onChanged }
   const promotableCandidates = localCandidates.filter(candidate => candidate.confirmation && !candidate.promotion);
   async function promoteLocalCandidate(candidate: TrackLocalSequenceCandidate) {
     if (candidate.promotion || promotingCandidate) return;
-    if (!window.confirm('把该本地跟踪候选写入正式轨迹与生成任务？会建立真实轨迹并按逐帧真实检测生成待复核候选贡献，人工修订并保存前不会导出。')) return;
+    if (!(await confirmDialog('把该本地跟踪候选写入正式轨迹与生成任务？会建立真实轨迹并按逐帧真实检测生成待复核候选贡献，人工修订并保存前不会导出。'))) return;
     setPromotingCandidate(candidate.candidateId); setError('');
     try {
       const result = await trackRequest('track.local.sequence.promote', { candidateId: candidate.candidateId, timelineId: timeline.id, timelineVersion: timeline.version, confirm: true });

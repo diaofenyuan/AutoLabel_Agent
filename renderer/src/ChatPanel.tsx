@@ -12,7 +12,7 @@ import LocalModelPicker from './LocalModelPicker';
 import ClassPicker from './ClassPicker';
 import DirectRun from './DirectRun';
 import { DropOverlay } from './fileDrop';
-import { VideoPickList, useChatFileDrop, importAttachments } from './chatDrop';
+import { VideoPickList, useChatFileDrop, importAttachments, filesToAttachments } from './chatDrop';
 import { RichText } from './chatText';
 import { useEffect, useRef, useState } from 'react';
 import { MessageSquare, Settings2, FolderOpen, Sparkles, ChevronDown } from 'lucide-react';
@@ -21,6 +21,8 @@ import { request, getBridge, isDemo, errorMessage } from './bridge';
 import { Composer, Button, Empty } from './ui';
 
 type ChatMessageData = { role: 'user' | 'assistant'; content: string; failed?: boolean };
+/** 消息流渲染上限：超长会话先折叠更早的历史，展开按钮写明折叠了多少条。 */
+const MESSAGE_FOLD = 200;
 
 /**
  * 空会话的起手式：不是模板，只是把「一句话能说清什么」摆给第一次用的人。
@@ -67,6 +69,7 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
   });
   const dropActive = compact ? false : drop.active;
   const key = sessionId ?? activeSessionId;
+  const [showAllHistory, setShowAllHistory] = useState(false);
   const sessionOverride = key ? chats[key] : undefined;
   // 会话级覆盖优先，未改过就用设置里的默认值（见实施计划 6.2）。
   const selectedProviderId = sessionOverride?.providerId ?? chatConfig.providerId;
@@ -216,10 +219,10 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
   }
   return <div className={`chat-panel ${compact ? 'compact' : ''} ${dropActive ? 'drop-active' : ''}`} {...(compact ? {} : drop.handlers)}>
     {!compact && <DropOverlay visible={dropActive} />}
-    <div className="chat-messages" role="log" aria-label="对话消息">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><Button onClick={() => void navigate('settings', 'ai')}><Settings2 size={14} />配置对话模型</Button><div className="chat-examples">{sampleRequests.map(text => <button key={text} type="button" onClick={() => editComposer(text)}>{text}</button>)}</div></Empty> : session.messages.map((message, i) => {
-      const previousUser = [...session.messages.slice(0, i)].reverse().find(item => item.role === 'user')?.content;
+    <div className="chat-messages" role="log" aria-label="对话消息">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><Button onClick={() => void navigate('settings', 'ai')}><Settings2 size={14} />配置对话模型</Button><div className="chat-examples">{sampleRequests.map(text => <button key={text} type="button" onClick={() => editComposer(text)}>{text}</button>)}</div></Empty> : <>{session.messages.length > MESSAGE_FOLD && <button type="button" className="text-button chat-history-fold" onClick={() => setShowAllHistory(true)}>更早的 {session.messages.length - MESSAGE_FOLD} 条历史已折叠 · 展开</button>}{session.messages.slice(showAllHistory ? 0 : -MESSAGE_FOLD).map((message, i, folded) => {
+      const previousUser = [...folded.slice(0, i)].reverse().find(item => item.role === 'user')?.content;
       return <ChatMessage key={i} message={message} previousUser={previousUser} onEdit={editComposer} onRetry={retryMessage} onCopy={copyMessage} />;
-    })}{session.busy && session.streamingText && <div className="chat-message assistant streaming"><div className="chat-message-head"><span className="chat-avatar assistant" aria-hidden="true"><Sparkles size={12} /></span><small>标注助手</small></div><div className="chat-text"><RichText text={session.streamingText}/></div></div>}{session.busy && <div className="chat-wait" role="status" aria-live="polite"><span className="waiting-dots">•••</span>{session.cancelRequested ? '正在请求停止 · 已发送请求的结果仍需核对' : chatStatus(events, session.id)} · {session.runningScope}</div>}
+    })}</>}{session.busy && session.streamingText && <div className="chat-message assistant streaming"><div className="chat-message-head"><span className="chat-avatar assistant" aria-hidden="true"><Sparkles size={12} /></span><small>标注助手</small></div><div className="chat-text"><RichText text={session.streamingText}/></div></div>}{session.busy && <div className="chat-wait" role="status" aria-live="polite"><span className="waiting-dots">•••</span>{session.cancelRequested ? '正在请求停止 · 已发送请求的结果仍需核对' : chatStatus(events, session.id)} · {session.runningScope}</div>}
       {/* 结果卡片跟着会话走：已经有回复且绑定了项目时才展开实际结果，避免空转读取。 */}
       {!compact && <AgentSteps steps={steps} busy={session.busy} />}
       {!compact && session.planned?.length ? <PlanCard actions={session.planned} busy={session.busy}
@@ -240,11 +243,12 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
       {/* 配置就绪时不再占一行：模型选择器里已经有「调整配置」，重复一行只会把输入区往下压。 */}
       {!configReady && <ConfigurationView value={chatConfig} providers={providers} compact onConfigure={() => void navigate('settings', 'ai')}/>}
       <Composer value={session.input} onChange={input => update({ input })} onSend={() => void send()} placeholder="描述你的标注任务…" busy={session.busy}
+        onAttachFiles={files => void filesToAttachments(files).then(list => { if (list.length) update({ attachments: [...(session.attachments ?? []), ...list] }); }).catch(e => notify(errorMessage(e), true))}
         attachments={session.attachments} onRemoveAttachment={id => update({ attachments: (session.attachments ?? []).filter(item => item.id !== id) })}
         onCancel={() => { if (session.cancelRequested) return; update({ cancelRequested: true }); void request('agent.cancel', { sessionId: session.id }).catch(e => { update({ cancelRequested: false }); notify(errorMessage(e), true); }); }}>
         <div className="chat-options">
           <div className="composer-scope" ref={scopeRoot}>
-            <button type="button" className="composer-summary" disabled={session.busy} aria-haspopup="dialog" aria-expanded={toolsOpen} onClick={() => setToolsOpen(value => !value)}>
+            <button type="button" className="composer-summary" disabled={session.busy} title={session.busy ? '任务执行中不能改处理范围与执行方式' : undefined} aria-haspopup="dialog" aria-expanded={toolsOpen} onClick={() => setToolsOpen(value => !value)}>
               <span className="truncate">{scopeLabel} · {session.autoExecute ? '直接执行' : '先看方案'}</span><ChevronDown size={12} />
             </button>
             {toolsOpen && <div className="picker-popover composer-popover" role="dialog" aria-label="处理范围与执行方式">

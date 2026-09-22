@@ -26,6 +26,7 @@ const trainingUiOnly = process.argv.includes('--training-ui');
  */
 const MANUAL_CHECKS = [
   { flag: '--update-ui', label: 'update-ui-check', env: 'AUTOLABEL_UPDATE_UI_CHECK', extraEnv: { AUTOLABEL_UPDATE_TEST: '1' } },
+  { flag: '--usability', label: 'usability-check', env: 'AUTOLABEL_USABILITY_UI_CHECK' },
   { flag: '--run-controls', label: 'run-control-check', env: 'AUTOLABEL_RUN_CONTROL_UI_CHECK' },
   { flag: '--media', label: 'media-check', env: 'AUTOLABEL_MEDIA_UI_CHECK' },
   { flag: '--reason', label: 'reason-check', env: 'AUTOLABEL_REASON_UI_CHECK' },
@@ -59,6 +60,7 @@ const manual = MANUAL_CHECKS.find(entry => process.argv.includes(entry.flag)) ??
 /** 各断言分支仍按名字读，但名字不再是各自独立的一份声明，避免清单之间漂移。 */
 const flagIs = flag => manual?.flag === flag;
 const updateUiOnly = flagIs('--update-ui');
+const usabilityOnly = flagIs('--usability');
 const runControlOnly = flagIs('--run-controls');
 const mediaOnly = flagIs('--media');
 const reasonOnly = flagIs('--reason');
@@ -559,6 +561,15 @@ if (windowOnly) {
   }
   assert.equal(result.resizable, true); assert.equal(result.updateStatus.state, 'idle');
   console.log(`窗口与诊断界面检查通过：${output}`); process.exit(0);
+}
+if (usabilityOnly) { assert.equal(result.passed, true);
+  const scroll = result.checks.find(check => check.check === 'overscroll-contain');
+  const disabled = result.checks.find(check => check.check === 'disabled-buttons-explain');
+  const paste = result.checks.find(check => check.check === 'paste-into-attachments-pipeline');
+  assert.ok(scroll && scroll.contain.length === 2 && !scroll.missing.length, `滚动隔离未落实：${JSON.stringify(scroll)}`);
+  assert.ok(disabled && String(disabled.sampleProbe ?? '').includes('获取模型列表'), `灰置必有因未落实：${JSON.stringify(disabled)}`);
+  assert.ok(paste && String(paste.rejection ?? '').length > 0, `粘贴拒绝未如实提示：${JSON.stringify(paste)}`);
+  console.log(`快速上手细节检查通过：${output}`); process.exit(0);
 }
 assert.equal(result.bridge, true); assert.equal(result.nodeExposed, false);
 assert.equal(result.blockedCommand, true); assert.equal(result.blockedPath, true);

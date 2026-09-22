@@ -52,9 +52,12 @@ export default function ModelPicker({ providers, providerId, model, depth, disab
   const options = useMemo(() => modelOptions(providers, { providerId, model }), [providers, providerId, model]);
   const nameOf = (item: ModelChoice) => `${providers.find(provider => provider.id === item.providerId)?.name ?? item.providerId} · ${item.model}`;
   const providerOf = (id: string) => providers.find(provider => provider.id === id);
-  const visible = options
+  const [showAllModels, setShowAllModels] = useState(false);
+  const matched = options
     .filter(item => !query.trim() || nameOf(item).toLowerCase().includes(query.trim().toLowerCase()))
     .sort((a, b) => Number(favorites.includes(b.key)) - Number(favorites.includes(a.key)));
+  // 列表默认收敛：接口模型一多，整层弹出就被列表占满——先给前 8 个，其余「还有 N 个 · 全部」再展开。
+  const visible = showAllModels ? matched : matched.slice(0, 8);
   const current = options.find(item => item.providerId === providerId && item.model === model);
   useEffect(() => {
     if (!open) return;
@@ -87,7 +90,7 @@ export default function ModelPicker({ providers, providerId, model, depth, disab
         </button>
         <button type="button" className={`picker-star ${favorites.includes(item.key) ? 'on' : ''}`} aria-pressed={favorites.includes(item.key)}
           aria-label={favorites.includes(item.key) ? `取消常用 ${item.model}` : `标为常用 ${item.model}`} onClick={() => toggleFavorite(item.key)}><Star size={15} /></button>
-      </div>)}{!visible.length && <p className="quiet-empty">{providers.length ? '没有匹配的模型。' : '还没有配置接口。'}</p>}</div>
+      </div>)}{matched.length > 8 && !showAllModels && <button type="button" className="local-model-more" onClick={() => setShowAllModels(true)}>还有 {matched.length - 8} 个 · 全部</button>}{!visible.length && <p className="quiet-empty">{providers.length ? '没有匹配的模型。' : '还没有配置接口。'}</p>}</div>
       {/* 档位跟随当前模型：服务商没有统一定义 reasoning，档位改的是助手自身的投入。 */}
       <div className="picker-effort">
         <p className="muted tiny">思考深度 · {model ?? '未选择模型'}</p>

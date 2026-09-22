@@ -12,6 +12,7 @@ import AssetAnnotator from './AssetAnnotator';
 import TemplateDialog from './TemplateDialog';
 import TruthSets from './TruthSets';
 import { errorMessage, isDemo, request } from './bridge';
+import { confirmDialog } from './confirm';
 import { Button, Empty, IconButton, Loading, Modal, PageHeader } from './ui';
 import { statusNames, taskNames } from './types';
 import { Term } from './Term';
@@ -68,7 +69,7 @@ export default function ProjectOverview() {
     const empty = targets.filter(asset => !asset.annotations.length).length;
     const warning = `将把选中的 ${targets.length} 张当前结果写成正式标注并确认${empty ? `，其中 ${empty} 张是「模型没有找到目标」，确认后记为已确认无目标` : ''}。`
       + '人工确认过的素材不会被改动；有未保存草稿或版本已变化的会跳过并单独报出。';
-    if (!window.confirm(warning)) return;
+    if (!(await confirmDialog(warning))) return;
     setConfirming(true);
     let confirmed = 0;
     const skipped: string[] = [];

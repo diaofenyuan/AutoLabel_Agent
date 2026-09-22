@@ -437,6 +437,8 @@
 .result-filter[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .result-filter[aria-pressed="true"] strong{color:var(--accent)}
 .result-groups{display:grid;gap:2px;margin:6px 0 0;font-size:10px;color:var(--soft)}
+/* 弹层与内滚动区把滚动留在自己肚子里：滚到底不再带动整页一起滑。 */
+.picker-popover,.picker-list,.class-picker-list,.direct-run-body,.action-tabs,.label-pairs,.location-list,.composer-popover,.video-pick-list,.sample-table,.event-panel .timeline{overscroll-behavior:contain}
 /* 只读标注预览：等比铺满容器，不接收任何指针事件，编辑一律走对话指令。 */
 .result-viewer{position:relative;width:100%;overflow:auto;background:var(--surface-soft);border:1px solid var(--border);border-radius:9px}
 .result-canvas{display:block;width:100%;height:auto}

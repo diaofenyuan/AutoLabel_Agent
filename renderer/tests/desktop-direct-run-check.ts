@@ -210,6 +210,8 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
 
     // 画布上的区域要能在直达标注里看到，并且随运行一起发出去。
     await js(`([...document.querySelectorAll('dialog[open] button')].find(node=>node.innerText.trim()==='关闭')).click()`);
+    await waitFor(`[...document.querySelectorAll('dialog[open] button')].some(node=>node.innerText.trim()==='确定')`);
+    await js(`([...document.querySelectorAll('dialog[open] button')].find(node=>node.innerText.trim()==='确定')).click()`);
     await waitFor(`!document.querySelector('.asset-annotator')`);
     await openProjectChat(driver, projectName!);
     await js(`document.querySelector('.chat-panel .direct-run-trigger').click()`);
@@ -229,6 +231,8 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     await js(`([...document.querySelectorAll('.asset-selection button')].find(node=>node.innerText.trim()==='全选已加载')).click()`);
     await waitFor(`[...document.querySelectorAll('.asset-selection button')].some(node=>node.innerText.trim()==='接受候选并确认'&&!node.disabled)`);
     await js(`([...document.querySelectorAll('.asset-selection button')].find(node=>node.innerText.trim()==='接受候选并确认')).click()`);
+    await waitFor(`[...document.querySelectorAll('dialog[open] button')].some(node=>node.innerText.trim()==='确定')`);
+    await js(`([...document.querySelectorAll('dialog[open] button')].find(node=>node.innerText.trim()==='确定')).click()`);
     await waitFor(`window.autoLabel.request('asset.list',{projectId:${json(projectId)},limit:100}).then(list=>list.items.every(item=>item.status==='confirmed'))`, 25000);
     const confirmedAssets = await api<{ items: Array<{ status: string; annotations?: unknown[]; version: number }> }>('asset.list', { projectId, limit: 100 });
     const beforeConfirm = assets.items[0].annotations?.length ?? 0;

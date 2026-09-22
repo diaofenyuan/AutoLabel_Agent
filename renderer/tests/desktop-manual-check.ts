@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { checkDesktopQuality } from './desktop-quality-check';
+import { checkDesktopUsability } from './desktop-usability-check';
 import { checkDesktopRerun } from './desktop-rerun-check';
 import { checkDesktopFive } from './desktop-five-check';
 import { checkDesktopStorage } from './desktop-storage-check';
@@ -62,6 +63,7 @@ const DISPATCH: Array<[string, (window: BrowserWindow, output: string) => Promis
   ['AUTOLABEL_STORAGE_UI_CHECK', checkDesktopStorage],
   ['AUTOLABEL_RERUN_UI_CHECK', checkDesktopRerun],
   ['AUTOLABEL_QUALITY_UI_CHECK', checkDesktopQuality],
+  ['AUTOLABEL_USABILITY_UI_CHECK', checkDesktopUsability],
   ['AUTOLABEL_UPDATE_UI_CHECK', checkDesktopUpdateUi],
   ['AUTOLABEL_RUN_CONTROL_UI_CHECK', checkDesktopRunControls],
 ];

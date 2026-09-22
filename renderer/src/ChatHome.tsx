@@ -10,7 +10,7 @@ import FlowPicker from './FlowPicker';
 import LocalModelPicker from './LocalModelPicker';
 import ProjectResolveDialog, { type ProjectChoice } from './ProjectResolveDialog';
 import { applyProjectDraft } from './projectSetup';
-import { VideoPickList, useChatFileDrop, importAttachments } from './chatDrop';
+import { VideoPickList, useChatFileDrop, importAttachments, filesToAttachments } from './chatDrop';
 import { VIDEO_EXTENSION_LABEL } from '../../shared/mediaFormats';
 import { directoryName, folderName, sameNameProject } from './projectNaming';
 import type { ChatAttachment } from './context';
@@ -195,7 +195,8 @@ export default function ChatHome() {
           }
         });
       }} placeholder="例如：标注工地照片里的安全帽和人员…" busy={busy}
-        attachments={attachments} onRemoveAttachment={id => setAttachments(list => list.filter(item => item.id !== id))}>
+        attachments={attachments} onRemoveAttachment={id => setAttachments(list => list.filter(item => item.id !== id))}
+        onAttachFiles={files => void filesToAttachments(files).then(list => { if (list.length) setAttachments(previous => [...previous, ...list]); }).catch(e => notify(errorMessage(e), true))}>
         <div className="chat-options">
           <FlowPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
           {/* 本机模型与云端接口并列在工具行：不配 API Key 也能开始标注。 */}

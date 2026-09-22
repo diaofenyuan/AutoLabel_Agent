@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Eye, PencilLine } from 'lucide-react';
 import type { Asset, Annotation, LabelClass, Project, TaskType } from './types';
 import { errorMessage, request } from './bridge';
+import { confirmDialog } from './confirm';
 import { useApp } from './context';
 import { Button, Loading, Notice } from './ui';
 import QualityCanvas from './QualityCanvas';
@@ -93,9 +94,9 @@ export default function AssetAnnotator({ asset, classes, taskType, templateSetti
     } catch (e) { setError(errorMessage(e)); } finally { setRegionBusy(false); }
   }
 
-  function close() {
+  async function close() {
     if (busy) return;
-    if (unsaved && !window.confirm('还有未保存的标注改动，确定放弃并关闭？')) return;
+    if (unsaved && !(await confirmDialog('还有未保存的标注改动，确定放弃并关闭？'))) return;
     onClose();
   }
 
@@ -113,7 +114,7 @@ export default function AssetAnnotator({ asset, classes, taskType, templateSetti
   return <div className="asset-annotator">
     <div className="asset-annotator-bar">
       <span className="muted tiny">{current.name} · 当前版本 {current.version} · {current.annotations.length} 个对象{dirty ? ' · 有未保存改动' : ''}</span>
-      <Button disabled={busy} onClick={() => { if (dirty && !window.confirm('有未保存的改动，确定返回预览？')) return; setDirty(false); setAnnotations(structuredClone(current.annotations)); setMode('view'); }}><Eye size={14} />返回预览</Button>
+      <Button disabled={busy} onClick={async () => { if (dirty && !(await confirmDialog('有未保存的改动，确定返回预览？'))) return; setDirty(false); setAnnotations(structuredClone(current.annotations)); setMode('view'); }}><Eye size={14} />返回预览</Button>
     </div>
     <QualityCanvas mediaUrl={current.mediaUrl ?? ''} width={current.width} height={current.height} annotations={annotations}
       classes={classes} taskType={taskType} purpose="asset" keypointNames={templateSettings?.keypointNames as string[] | undefined}

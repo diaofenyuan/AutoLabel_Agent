@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useApp, type ChatAttachment } from './context';
 import { errorMessage, getBridge, request } from './bridge';
-import { Button, Modal } from './ui';
-import { dropRejectionNotice, useFileDrop, type DroppedFiles } from './fileDrop';
+import { Button, Modal, SearchField } from './ui';
+import { dropRejectionNotice, classifyDrop, useFileDrop, type DroppedFiles } from './fileDrop';
 import { IMAGE_EXTENSION_LABEL, VIDEO_EXTENSION_LABEL } from '../../shared/mediaFormats';
 import { baseName } from './projectNaming';
 
@@ -15,17 +15,34 @@ export interface VideoPicks { projectId: string; files: string[] }
  * 所以只做「先列出来、逐个点」这一步，并在清单上把这件事写明白。
  */
 export function VideoPickList({ picks, onChoose, onClose }: { picks: VideoPicks | null; onChoose: (path: string) => void; onClose: () => void }) {
+  const [query, setQuery] = useState(''), [showAll, setShowAll] = useState(false);
   if (!picks) return null;
+  const matched = picks.files.filter(file => !query.trim() || file.toLowerCase().includes(query.trim().toLowerCase()));
+  // 清单默认收敛到 20 条：一个文件夹拖进几十个视频时，整窗被列表吃掉还要一路滚。
+  const visible = showAll ? matched : matched.slice(0, 20);
   return <Modal title="选择要抽帧的视频" onClose={onClose}>
     <div className="form-stack">
-      <p className="muted tiny">共 {picks.files.length} 个候选，一次处理一个：抽完一个再点下一个，避免多个抽帧任务同时跑。</p>
-      <div className="board-list">{picks.files.map(file => <article className="board-row" key={file}>
+      <p className="muted tiny">共 {picks.files.length} 个候选{matched.length !== picks.files.length ? `（筛选出 ${matched.length} 个）` : ''}，一次处理一个：抽完一个再点下一个，避免多个抽帧任务同时跑。</p>
+      {picks.files.length > 8 && <SearchField value={query} onChange={setQuery} placeholder="按文件名搜索" />}
+      <div className="board-list video-pick-list">{visible.map(file => <article className="board-row" key={file}>
         <div className="board-main"><strong>{baseName(file)}</strong><span className="muted tiny break-word">{file}</span></div>
         <Button onClick={() => onChoose(file)}>抽帧</Button>
       </article>)}</div>
+      {matched.length > visible.length && <Button onClick={() => setShowAll(true)}>还有 {matched.length - visible.length} 个 · 全部</Button>}
       <div className="modal-actions"><Button onClick={onClose}>关闭</Button></div>
     </div>
   </Modal>;
+}
+
+/** 粘贴 / 点选的文件：与拖入同一条归类与授权管道（路径由 preload 解析、拒绝原因照旧如实回报）。 */
+export async function filesToAttachments(files: File[]): Promise<ChatAttachment[]> {
+  const result = await classifyDrop(files);
+  const attachments: ChatAttachment[] = [...result.images.map(item => ({ id: crypto.randomUUID(), path: item, kind: 'image' as const, name: baseName(item) })),
+    ...result.videos.map(item => ({ id: crypto.randomUUID(), path: item, kind: 'video' as const, name: baseName(item) })),
+    ...result.directories.map(item => ({ id: crypto.randomUUID(), path: item, kind: 'directory' as const, name: baseName(item) }))];
+  // 一个都没进附件且有拒绝/未解析文件时必须发声：粘贴/点选拿不到路径、类型不支持都不能静默吞掉。
+  if (!attachments.length && (result.rejected?.length || result.unresolved?.length)) throw new Error(dropRejectionNotice(result) ?? `以下文件无法作为附件：${(result.unresolved ?? []).join('、')}`);
+  return attachments;
 }
 
 /**

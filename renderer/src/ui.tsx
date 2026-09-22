@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
-import { LoaderCircle, X, Search, ArrowUp, Square, Info, Image as ImageIcon, Film, Folder } from 'lucide-react';
+import { LoaderCircle, X, Search, ArrowUp, Square, Info, Image as ImageIcon, Film, Folder, Paperclip } from 'lucide-react';
 import type { ChatAttachment } from './context';
 
 export function Button({ children, className = '', busy, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean }) {
@@ -31,7 +31,12 @@ export function Loading({ label = '正在读取…', compact = false }: { label?
   return <div className={`inline-loading ${compact ? 'compact' : ''}`} role="status" aria-live="polite"><LoaderCircle className="spin" size={compact ? 14 : 17} /><span>{label}</span></div>;
 }
 export function Notice({ children }: { children: ReactNode }) { return <div className="notice"><Info size={16} /><div>{children}</div></div>; }
-export function Composer({ value, onChange, onSend, placeholder, busy, onCancel, children, attachments, onRemoveAttachment }: { value: string; onChange: (v: string) => void; onSend: () => void; placeholder: string; busy?: boolean; onCancel?: () => void; children?: ReactNode; attachments?: ChatAttachment[]; onRemoveAttachment?: (id: string) => void }) {
+/** 统一确认框：替代原生 window.confirm——原生弹窗与整体视觉不一致，且在自动化验收里不可控。 */
+export function ConfirmModal({ message, onYes, onNo }: { message: string; onYes: () => void; onNo: () => void }) {
+  return <Modal title="请确认" onClose={onNo}><div className="form-stack"><p>{message}</p>
+    <div className="modal-actions"><Button onClick={onNo}>取消</Button><Button className="primary" onClick={onYes}>确定</Button></div></div></Modal>;
+}
+export function Composer({ value, onChange, onSend, placeholder, busy, onCancel, children, attachments, onRemoveAttachment, onAttachFiles }: { value: string; onChange: (v: string) => void; onSend: () => void; placeholder: string; busy?: boolean; onCancel?: () => void; children?: ReactNode; attachments?: ChatAttachment[]; onRemoveAttachment?: (id: string) => void; onAttachFiles?: (files: File[]) => void }) {
   const hasAttachments = Boolean(attachments?.length);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const iconOf = (kind: ChatAttachment['kind']) => kind === 'image' ? <ImageIcon size={12} /> : kind === 'video' ? <Film size={12} /> : <Folder size={12} />;
@@ -46,10 +51,14 @@ export function Composer({ value, onChange, onSend, placeholder, busy, onCancel,
       {iconOf(item.kind)}<span className="truncate">{item.name}</span>
       {onRemoveAttachment && <button aria-label={`移除 ${item.name}`} onClick={() => onRemoveAttachment(item.id)}><X size={12} /></button>}
     </span>)}</div>}
-    <textarea ref={textareaRef} aria-label={placeholder} value={value} onChange={e => { resizeTextarea(e.currentTarget); onChange(e.target.value); }} placeholder={placeholder} onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !busy) { e.preventDefault(); onSend(); } }} />
+    <textarea ref={textareaRef} aria-label={placeholder} value={value} onChange={e => { resizeTextarea(e.currentTarget); onChange(e.target.value); }} placeholder={placeholder}
+      onPaste={e => { const files = [...(e.clipboardData?.files ?? [])]; if (files.length && onAttachFiles) { e.preventDefault(); onAttachFiles(files); } }}
+      onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !busy) { e.preventDefault(); onSend(); } }} />
     {/* 工具行收进卡片内：流程/模型/范围在左，快捷键提示与发送钮在右，不再散落在框外。 */}
     <div className="composer-toolbar">
       <div className="composer-tools">{children}</div>
+      {/* 拖拽之外的一等输入路径：点选与粘贴（Ctrl+V）都直接进附件条。 */}
+      {onAttachFiles && <button type="button" className="composer-pick" title="选择文件作为附件" aria-label="选择文件作为附件" onClick={() => { const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'image/*,video/*'; input.onchange = () => onAttachFiles([...(input.files ?? [])]); input.click(); }}><Paperclip size={13} /></button>}
       <kbd className="composer-kbd">Ctrl + Enter</kbd>
       <button className="send-button" aria-label={busy ? '停止对话' : '发送'} disabled={!busy && !value.trim() && !hasAttachments} onClick={busy ? onCancel : onSend}>{busy ? <Square size={13} /> : <ArrowUp size={17} />}<span className="send-button-label">{busy ? '停止' : '发送'}</span></button>
     </div>
