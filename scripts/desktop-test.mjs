@@ -10,7 +10,8 @@ const entries = [['desktop/security.test.ts', 'desktop/dist/security.test.cjs'],
   ['desktop/flow.test.ts', 'desktop/dist/flow.test.cjs'],
   ['desktop/track-validation.test.ts', 'desktop/dist/track-validation.test.cjs'],
   ['desktop/media-execution.test.ts', 'desktop/dist/media-execution.test.cjs'],
-  ['desktop/local-execution.test.ts', 'desktop/dist/local-execution.test.cjs']];
+  ['desktop/local-execution.test.ts', 'desktop/dist/local-execution.test.cjs'],
+  ['desktop/model-library.test.ts', 'desktop/dist/model-library.test.cjs']];
 for (const [entry, outfile] of entries) await build({ entryPoints: [entry], bundle: true, platform: 'node', format: 'cjs', outfile, logLevel: 'warning',
   // 纯 node 里没有 electron 运行时：vault 等模块的 electron 依赖打到确定性桩上（真链路由冒烟验收覆盖）。
   alias: { electron: './desktop/test-support/electron-stub.cjs' } });

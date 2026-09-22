@@ -50,6 +50,9 @@ const ultralytics = (file: string): { downloadUrl: string; mirrorUrls: string[] 
 const ULTRALYTICS_LICENSE = 'AGPL-3.0（Ultralytics）';
 
 /** CLIP 文本编码器：YOLO-World 用它把类别名编码成文本向量。原文件来自 OpenAI CLIP 官方发布。 */
+// CLIP 官方源（Azure CDN，国内一般可达）。国内镜像现状（2026-09 实测）：hf-mirror 无同名原始文件、
+// ModelScope 检索端点不可用，未找到能通过同一 sha256 的镜像——宁缺毋滥，不写没验证过的地址。
+// 镜像槽位已就位（mirrorUrls）：谁提供经哈希验证的镜像，把地址加进来即可，内容真伪始终按 sha256 判定。
 const CLIP_ENCODER_URL = 'https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt';
 
 export const MODEL_CATALOG: CatalogModel[] = [

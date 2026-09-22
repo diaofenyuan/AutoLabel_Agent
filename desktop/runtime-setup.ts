@@ -182,26 +182,34 @@ export class RuntimeSetup {
 
       this.patch('installing', `正在从国内镜像安装依赖（约 300 MB）：${RUNTIME_DEPENDENCIES.map(item => item.name).join('、')}…`);
       const packages = RUNTIME_DEPENDENCIES.map(dependency => `${dependency.packageName ?? dependency.name}==${dependency.version}`);
-      const install = await run(environmentPython, ['-m', 'pip', 'install', '--no-input', '--disable-pip-version-check', '--progress-bar', 'off',
-        '--index-url', setupIndexUrl(), ...packages], {
-        timeoutMs: INSTALL_TIMEOUT_MS,
-        env: { PYTHONIOENCODING: 'utf-8', PIP_INDEX_URL: setupIndexUrl() },
-        onLine: line => {
-          this.appendLog(line);
-          // pip 输出里只有几行用户看得懂，挑出来当状态文字，其余留在诊断里。
-          if (/^Collecting /.test(line)) this.patch('installing', `正在下载 ${line.replace(/^Collecting\s+/, '').trim()}…`);
-          else if (/^Installing collected packages/.test(line)) this.patch('installing', '正在安装已下载的依赖…');
-        },
-      });
-      if (install.timedOut) throw new DesktopError('RUNTIME_SETUP_TIMEOUT', `依赖安装超过 ${Math.round(INSTALL_TIMEOUT_MS / 60000)} 分钟未完成，已中止。请检查网络后重试，已下载的部分会复用。`);
-      if (install.code !== 0) throw new DesktopError('RUNTIME_SETUP_INSTALL_FAILED',
-        `依赖安装失败（退出码 ${install.code ?? '未知'}）。请检查网络与镜像可达性后重试，已下载的部分会复用。`);
+      // 镜像回退：主源装不通换阿里云再试；两个源都不通才失败（留日志、不动已有环境）。
+      const indices = [...new Set([setupIndexUrl(), 'https://mirrors.aliyun.com/pypi/simple/'])];
+      let install: Awaited<ReturnType<typeof run>> | undefined; let usedIndex = indices[0];
+      for (const index of indices) {
+        usedIndex = index;
+        install = await run(environmentPython, ['-m', 'pip', 'install', '--no-input', '--disable-pip-version-check', '--progress-bar', 'off',
+          '--index-url', index, ...packages], {
+          timeoutMs: INSTALL_TIMEOUT_MS,
+          env: { PYTHONIOENCODING: 'utf-8', PIP_INDEX_URL: index },
+          onLine: line => {
+            this.appendLog(line);
+            // pip 输出里只有几行用户看得懂，挑出来当状态文字，其余留在诊断里。
+            if (/^Collecting /.test(line)) this.patch('installing', `正在下载 ${line.replace(/^Collecting\s+/, '').trim()}…`);
+            else if (/^Installing collected packages/.test(line)) this.patch('installing', '正在安装已下载的依赖…');
+          },
+        });
+        if (install.timedOut) throw new DesktopError('RUNTIME_SETUP_TIMEOUT', `依赖安装超过 ${Math.round(INSTALL_TIMEOUT_MS / 60000)} 分钟未完成，已中止。请检查网络后重试，已下载的部分会复用。`);
+        if (install.code === 0) break;
+        this.appendLog(`镜像 ${index} 安装失败（退出码 ${install.code}）${index === indices[indices.length - 1] ? '' : '，换下一个镜像重试'}…`);
+      }
+      if (!install || install.code !== 0) throw new DesktopError('RUNTIME_SETUP_INSTALL_FAILED',
+        `依赖安装失败（退出码 ${install?.code ?? '未知'}），已试过 ${indices.length} 个镜像（${indices.join('、')}）。请检查网络后重试，已下载的部分会复用。`);
 
       this.patch('verifying', '依赖已装完，正在核对版本…');
       await this.verify(environment);
       this.appendLog(`版本核对通过：${this.state.dependencies.map(item => `${item.name} ${item.installed}`).join('、')}`);
       await writeFile(path.join(environment, 'autolabel-env.json'), JSON.stringify({ createdAt: new Date().toISOString(),
-        basePython: python.basePython, pythonVersion: python.version, environment, indexUrl: setupIndexUrl(),
+        basePython: python.basePython, pythonVersion: python.version, environment, indexUrl: usedIndex,
         dependencies: this.state.dependencies.map(item => ({ name: item.name, version: item.installed })), recordedBy: 'autolabel' }, null, 2));
 
       this.patch('configuring', '正在交给引擎检测…');

@@ -85,7 +85,14 @@ export class ModelLibrary {
     dataDirectory: () => string;
     /** 下载进度；按行回调，界面据此显示进度而不是一个转圈。 */
     onProgress?: (progress: ModelDownloadProgress) => void;
+    /** 验收注入点：单测用本地回环夹具验证下载语义（哈希不符丢弃 / 断网 / 断流续传），不给生产留测试开关。 */
+    catalogOverride?: CatalogModel[];
+    sourcesOverride?: (model: CatalogModel) => string[];
   }) {}
+
+  private model(catalogId: string): CatalogModel | undefined {
+    return this.options.catalogOverride?.find(item => item.id === catalogId) ?? catalogModel(catalogId);
+  }
 
   /** 库内文件只可能来自这两个目录；授权时用它限定可信任范围，避免这条通道被用来授权任意路径。 */
   roots(): string[] {
@@ -166,7 +173,7 @@ export class ModelLibrary {
 
   /** 就绪模型的绝对路径与哈希；登记与授权由调用方拿着它走既有入口，这里不下发路径给界面。 */
   async readyFile(catalogId: string): Promise<{ model: CatalogModel; path: string } | null> {
-    const model = catalogModel(catalogId);
+    const model = this.model(catalogId);
     if (!model) return null;
     for (const candidate of this.candidates(model)) {
       const found = await this.inspect(model, candidate.location, candidate.file);
@@ -182,7 +189,7 @@ export class ModelLibrary {
    * 已经就绪的模型直接返回当前状态，不重复下载。
    */
   async install(catalogId: string, options: { force?: boolean } = {}, onProgress?: (progress: ModelDownloadProgress) => void): Promise<ModelLibraryState> {
-    const model = catalogModel(catalogId);
+    const model = this.model(catalogId);
     if (!model) throw new DesktopError('MODEL_LIBRARY_UNKNOWN', '模型库里没有这个模型，请刷新后重试');
     if (this.busy.has(model.id)) throw new DesktopError('MODEL_LIBRARY_BUSY', '这个模型正在下载，请等待当前下载完成');
     this.busy.add(model.id);
@@ -196,7 +203,7 @@ export class ModelLibrary {
       const target = this.storageFile(model);
       await mkdir(path.dirname(target), { recursive: true });
       const part = `${target}.part`;
-      const sources = [model.downloadUrl, ...model.mirrorUrls];
+      const sources = this.options.sourcesOverride ? this.options.sourcesOverride(model) : [model.downloadUrl, ...model.mirrorUrls];
       let verifyFailures = 0; let lastError = '';
       for (const url of sources) {
         try {
@@ -218,6 +225,8 @@ export class ModelLibrary {
         return await this.status();
       }
       await rm(part, { force: true });
+      // 全部下载源连不上是网络问题，和「内容不对」是两回事：分开报，用户才知道该换网络还是该报目录问题。
+      if (verifyFailures === 0 && sources.length > 0 && lastError.includes('下载源无法连接')) throw new DesktopError('MODEL_LIBRARY_SOURCE_UNREACHABLE', '每个下载源都无法连接（网络问题）。请检查网络后重试；内容真伪始终按目录里的哈希核对。');
       throw verifyFailures === sources.length
         ? new DesktopError('MODEL_LIBRARY_HASH_MISMATCH', `每个下载源取回的内容都与目录记录的哈希不一致，已全部丢弃。请稍后重试；若反复出现，请反馈以便核对目录。`)
         : new DesktopError('MODEL_LIBRARY_DOWNLOAD_FAILED', `模型未能下载完成（${lastError}）。无效临时文件已清理，请稍后重试。`);
