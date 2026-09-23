@@ -165,6 +165,7 @@ async function dispatch(command: string, p: Record<string, unknown>): Promise<un
       throw new Error('当前是隔离的浏览器演示，未连接模型或 Java 引擎。请在桌面版本使用此功能。');
     case 'agent.cancel': return { status: 'cancelled' };
     case 'run.list': case 'event.list': case 'export.list': return [];
+    case 'review.suggestions': return { confidenceThreshold: null, trainingSuggestion: { assetIds: [], count: 0, reason: '演示模式没有复核数据；桌面版会在复核与评测后给出送训建议（只建议不自动改）。' } };
     case 'event.snapshot': return { sequence: 0 };
     case 'resource.list': return data.resources.filter(item => !p.kind || item.kind === p.kind);
     case 'resource.save': {

@@ -19,20 +19,34 @@ const steps = [
 ];
 // 27 条手工 UI 验收（与 desktop-smoke.mjs 的 MANUAL_CHECKS 对应）+ 开发态三项桌面检查。
 // 一键准备两条会真实下载几百 MB、本机标注两条跑真实推理：默认计入，--skip-slow 可跳过。
-const manual = ['update-ui', 'usability', 'run-controls', 'media-ui', 'reason-ui', 'annotate-ui', 'unknown-retry-ui', 'frame-scope-ui',
+const manual = ['update-ui', 'usability-ui', 'run-controls', 'media-ui', 'reason-ui', 'annotate-ui', 'unknown-retry-ui', 'frame-scope-ui',
   'project-identity-ui', 'directory-import-ui', 'onboarding-ui', 'ai-preset-ui', 'composer-ui', 'settings-ui', 'error-action-ui',
   'sidebar-ui', 'provider-delete-ui', 'editing-ui', 'quality-ui', 'local-ui', 'storage-ui', 'model-library-ui',
   'local-annotate-ui', 'direct-run-ui', 'builtin-five-ui', 'rerun-ui', 'five-ui', 'connection-ui'];
 const slow = new Set(['runtime-setup-ui', 'runtime-setup-offline-ui', 'local-annotate-ui', 'builtin-five-ui', 'five-ui']);
+const setupChecks = ['runtime-setup-ui', 'runtime-setup-offline-ui'];
 if (!skipUi) {
   for (const name of manual) if (!(skipSlow && slow.has(name))) steps.push([`UI 验收 ${name}`, npm, ['run', `check:${name}`]]);
-  for (const name of ['runtime-setup-ui', 'runtime-setup-offline-ui']) if (!skipSlow) steps.push([`UI 验收 ${name}`, npm, ['run', `check:${name}`]]);
+  for (const name of setupChecks) if (!skipSlow) steps.push([`UI 验收 ${name}`, npm, ['run', `check:${name}`]]);
   steps.push(['UI 验收 主导航与人工示例', 'node', ['scripts/desktop-smoke.mjs', '--ui']]);
   steps.push(['UI 验收 窗口与诊断', 'node', ['scripts/desktop-smoke.mjs', '--window']]);
   steps.push(['桌面冒烟（默认）', 'node', ['scripts/desktop-smoke.mjs']]);
-  // check-all 的 UI 清单与 desktop-smoke.mjs 的 MANUAL_CHECKS 逐条对应：新增手工验收时两边都要登记，否则这里会红。
-  const smokeFlags = (readFileSync('scripts/desktop-smoke.mjs', 'utf8').match(/flag: '--/g) ?? []).length;
-  if (manual.length !== smokeFlags) throw new Error(`UI 清单条数（${manual.length}）与 desktop-smoke.mjs 的 MANUAL_CHECKS（${smokeFlags}）不一致，请同步登记`);
+  // check-all 的 UI 清单与 desktop-smoke.mjs 的登记双向覆盖（新增手工验收两边都要登记，否则这里就红）：
+  // ①清单里每条都必须有指向 desktop-smoke.mjs 的 check:* 脚本，且脚本用的 flag 真在 desktop-smoke.mjs 登记；
+  // ②desktop-smoke.mjs 登记的每个 flag 也必须被某个 check:* 脚本引用，防止「登记了却永远没人跑」。
+  // （旧的「条数相等」自检从 connection-ui 以 --connection-ui 特例加入起就没成立过，等于门禁常红、无人再信。）
+  const smokeSource = readFileSync('scripts/desktop-smoke.mjs', 'utf8');
+  const packageScripts = JSON.parse(readFileSync('package.json', 'utf8')).scripts ?? {};
+  for (const name of [...manual, ...setupChecks]) {
+    const script = packageScripts[`check:${name}`];
+    if (typeof script !== 'string' || !script.includes('desktop-smoke.mjs')) throw new Error(`UI 清单条目 check:${name} 缺少指向 desktop-smoke.mjs 的脚本，请同步登记`);
+    const flag = script.split('desktop-smoke.mjs')[1].trim().split(/\s+/)[0];
+    if (!flag || !smokeSource.includes(flag)) throw new Error(`check:${name} 使用的入口 ${flag} 未在 desktop-smoke.mjs 登记，请同步登记`);
+  }
+  for (const match of smokeSource.match(/flag: '--[\w-]+'/g) ?? []) {
+    const flag = match.slice(7, -1);
+    if (!Object.values(packageScripts).some(script => typeof script === 'string' && script.includes(flag))) throw new Error(`desktop-smoke.mjs 登记的 ${flag} 没有任何 check:* 脚本引用，请同步登记`);
+  }
 }
 const started = Date.now();
 for (const [label, command, args] of steps) {

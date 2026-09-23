@@ -109,12 +109,13 @@ preflight 和 create 都核对实际 run 快照中的参考素材：任何评测
 
 | 命令 | payload | data |
 | --- | --- | --- |
-| review.build | evaluationId 或 runId（二选一）, rules?: `{minMatchedIoU?,maxNormalizedPointError?}` | `{created,existing,items,itemsTruncated}`，按来源及候选版本幂等建立 |
-| review.list | projectId, evaluationId?, runId?, sampleId?, status?, source?, offset?, limit? | `{items,total}`，source 为 execution/truth_comparison/random，total 使用相同过滤条件 |
+| review.build | evaluationId 或 runId（二选一）, source?: 'issues'（缺省）/'hard', rules?: `{minMatchedIoU?,maxNormalizedPointError?}` | `{created,existing,items,itemsTruncated}`，按来源及候选版本幂等建立 |
+| review.list | projectId, evaluationId?, runId?, sampleId?, status?, source?, offset?, limit? | `{items,total}`，source 为 execution/truth_comparison/random/hard，total 使用相同过滤条件 |
 | review.resolve | itemId, baseCandidateVersion（失败无候选时为 null）, action: checked/dismissed/request_relabel, note? | 更新后的复核项 |
 | review.sample | projectId, assetIds（非空）, seed, count | `{id,mode:'random',populationCount,count,seed,assetVersions,createdAt}` |
+| review.suggestions | projectId, evaluationId? | `{confidenceThreshold:{suggested,basis,matchedCount,extraCount}\|null,trainingSuggestion:{assetIds,count,reason}}`，只建议不自动改 |
 
-复核项保存 `{id,projectId,assetId,candidateVersion,objectId?,reason,severity,source,status,evaluationId?,runId?,sampleId?}`。有真值时来源可为漏标、多标、配置阈值下的定位误差；仅 runId 时只利用实际失败/未知、格式或几何校验异常，不能把没有真值的正常候选推断为内容正确或错误。未配置的定位阈值不暗设“错误概率”，模型自报置信度不能直接作为准确率。构建复核不发送额外模型请求。
+复核项保存 `{id,projectId,assetId,candidateVersion,objectId?,reason,severity,source,status,evaluationId?,runId?,sampleId?}`。有真值时来源可为漏标、多标、配置阈值下的定位误差；仅 runId 时只利用实际失败/未知、格式或几何校验异常，不能把没有真值的正常候选推断为内容正确或错误。未配置的定位阈值不暗设“错误概率”，模型自报置信度不能直接作为准确率。构建复核不发送额外模型请求。`source='hard'` 建立**难例优先队列**：每素材一条，`priority=(1-最低标注置信度)+0.5×geometryIssues 数+0.5×需几何复核+0.4×漏检数+0.2×多检数`，`review.list` 过滤 source=hard 时按 priority 降序返回（低置信在前、geometryIssues 加权）；信号取自候选版本标注与评测行，同样不发送任何模型请求、不改任何标注。`review.suggestions` 是复核结果回流的两张**建议**卡：「建议置信度阈值」取「多余预测最高置信度」与「命中预测最低置信度」的中点，区间重叠时不给建议并说明原因；「建议送训练的素材清单」来自重标请求、难例队列与未处理的漏检/多检素材（去重、上限 500）。两张卡**只建议不自动改**：阈值必须由用户手动设置后小批量验证，送训练必须由用户确认清单后走既有训练数据集链路。
 
 checked/dismissed 只处理该版本的该条复核记录，不自动确认素材、不改变真值；request_relabel 只标记待重标，不直接产生新调用。新候选不会继承旧项的解决状态。定位项保存实际触发阈值；改变该阈值形成独立判断，无关规则不会重复建立已有事实项。pending 样本复核为 info，missing 为 warning。随机抽样固定候选/正式版本、完整抽样范围、种子与名单，生成独立 mode=random 的待查记录；定向疑点与随机抽查分开统计，不混用分母。未标注素材版本可为 0，失败无候选为 null。
 

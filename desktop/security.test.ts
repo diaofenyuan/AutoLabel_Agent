@@ -295,8 +295,14 @@ test('重新评测与预算查询只接收固定标识，Agent 不能改价或�
   assert.doesNotThrow(() => validateCommand('budget.get', { budgetScopeId: 'session-1' }));
   assert.throws(() => validateCommand('evaluation.rerun.finish', { comparisonId: 'comparison-1', maxRequests: 100 }), /格式不正确/);
   assert.throws(() => validateCommand('budget.get', { budgetScopeId: '../private' }), /格式不正确/);
-  for (const source of ['execution', 'truth_comparison', 'random']) assert.doesNotThrow(() => validateCommand('review.list', { projectId: 'p', source }));
+  for (const source of ['execution', 'truth_comparison', 'random', 'hard']) assert.doesNotThrow(() => validateCommand('review.list', { projectId: 'p', source }));
   assert.throws(() => validateCommand('review.list', { projectId: 'p', source: 'model_confidence' }), /格式不正确/);
+  // 难例优先队列与建议卡（只建议不自动改）：source='hard' 排队，review.suggestions 只读回显。
+  assert.doesNotThrow(() => validateCommand('review.build', { runId: 'r', source: 'hard' }));
+  assert.throws(() => validateCommand('review.build', { runId: 'r', source: 'model_confidence' }), /格式不正确/);
+  assert.doesNotThrow(() => validateCommand('review.suggestions', { projectId: 'p', evaluationId: 'e' }));
+  assert.doesNotThrow(() => validateCommand('review.suggestions', { projectId: 'p' }));
+  assert.throws(() => validateCommand('review.suggestions', { projectId: 'p', apply: true }), /格式不正确/);
   for (const command of ['evaluation.rerun.preflight', 'evaluation.rerun.create', 'evaluation.rerun.get', 'evaluation.rerun.finish', 'budget.estimate', 'budget.get']) assert.doesNotThrow(() => assertAgentCommand(command));
   for (const command of ['provider.save', 'provider.delete', 'provider.pricing', 'budget.update']) assert.throws(() => assertAgentCommand(command), /Agent 工具范围/);
 });

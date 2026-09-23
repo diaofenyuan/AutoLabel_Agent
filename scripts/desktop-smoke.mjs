@@ -42,7 +42,9 @@ const MANUAL_CHECKS = [
   { flag: '--model-library', label: 'model-library-check', env: 'AUTOLABEL_MODEL_LIBRARY_UI_CHECK' },
   { flag: '--runtime-setup', label: 'runtime-setup-check', env: 'AUTOLABEL_RUNTIME_SETUP_UI_CHECK' },
   // 断网场景：镜像指向不可达主机，验证「装不上时明确失败且不动原有配置」。
-  { flag: '--runtime-setup-offline', label: 'runtime-setup-offline-check', env: 'AUTOLABEL_RUNTIME_SETUP_UI_CHECK', extraEnv: { AUTOLABEL_RUNTIME_SETUP_OFFLINE: '1', AUTOLABEL_RUNTIME_INDEX_URL: 'https://127.0.0.1:9/simple' } },
+  { flag: '--runtime-setup-offline', label: 'runtime-setup-offline-check', env: 'AUTOLABEL_RUNTIME_SETUP_UI_CHECK', extraEnv: { AUTOLABEL_RUNTIME_SETUP_OFFLINE: '1', AUTOLABEL_RUNTIME_INDEX_URL: 'https://127.0.0.1:9/simple',
+    // 失败注入必须落在全新存储根：共享存储根里已装好的 python-env 会被「复用已有环境」短路，负例永远不失败。
+    AUTOLABEL_TEST_STORAGE_ROOT: path.join(root, 'build', 'runtime-setup-offline-storage') } },
   { flag: '--local-annotate', label: 'local-annotate-check', env: 'AUTOLABEL_LOCAL_ANNOTATE_UI_CHECK' },
   { flag: '--direct-run', label: 'direct-run-check', env: 'AUTOLABEL_DIRECT_RUN_UI_CHECK' },
   { flag: '--builtin-five', label: 'builtin-five-check', env: 'AUTOLABEL_BUILTIN_FIVE_UI_CHECK' },
@@ -282,7 +284,8 @@ if (flagIs('--runtime-setup')) {
   // 真实装完一轮后必须检测到依赖版本，且记录里的版本与固定版本一致。
   const prepared = byCheck.get('prepare-installs-usable-environment');
   assert.ok(prepared?.ultralyticsVersion && prepared?.torchVersion, `一键准备后没有检测到依赖版本：${JSON.stringify(prepared)}`);
-  assert.deepEqual(prepared?.dependencies?.map(item => item.name), ['torch', 'torchvision', 'ultralytics', 'clip']);
+  // 依赖清单以 shared/runtime-setup.ts 的固定清单为准（setuptools 是为 CLIP 的 pkg_resources 兼容而固定，不是捎带装上的）。
+  assert.deepEqual(prepared?.dependencies?.map(item => item.name), ['setuptools', 'torch', 'torchvision', 'ultralytics', 'clip']);
   console.log(`一键准备本地推理环境检查通过：${output}`); process.exit(0);
 }
 if (flagIs('--runtime-setup-offline')) {

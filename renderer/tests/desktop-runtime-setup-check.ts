@@ -1,6 +1,6 @@
 import type { BrowserWindow } from 'electron';
 import assert from 'node:assert/strict';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
@@ -63,6 +63,11 @@ export async function checkDesktopRuntimeSetup(window: BrowserWindow, output: st
     checks.push({ check: 'prepare-entry-and-advanced-toggle', primary: entry.primary, advanced: entry.advancedLabel });
 
     if (offline) {
+      // 失败注入必须落在全新存储根：共享存储根里若已有上一轮真实装好的 python-env，
+      // 一键准备会「复用已有环境」、pip 对已满足的固定版本直接成功，负例永远等不到 failed（历史红的根因）。
+      const forcedRoot = process.env.AUTOLABEL_TEST_STORAGE_ROOT;
+      assert.ok(forcedRoot, '离线负例必须显式指定隔离存储根（AUTOLABEL_TEST_STORAGE_ROOT）');
+      await rm(forcedRoot!, { recursive: true, force: true });
       // ===== 先有一个能用的解释器，再验证失败的安装不会把它冲掉 =====
       const fixtures = path.join(userData!, 'fixtures'), environment = path.join(fixtures, 'python-env'), pythonPath = path.join(environment, 'Scripts', 'python.exe');
       await mkdir(fixtures, { recursive: true });

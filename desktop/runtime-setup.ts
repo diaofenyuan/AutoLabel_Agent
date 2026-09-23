@@ -183,7 +183,11 @@ export class RuntimeSetup {
       this.patch('installing', `正在从国内镜像安装依赖（约 300 MB）：${RUNTIME_DEPENDENCIES.map(item => item.name).join('、')}…`);
       const packages = RUNTIME_DEPENDENCIES.map(dependency => `${dependency.packageName ?? dependency.name}==${dependency.version}`);
       // 镜像回退：主源装不通换阿里云再试；两个源都不通才失败（留日志、不动已有环境）。
-      const indices = [...new Set([setupIndexUrl(), 'https://mirrors.aliyun.com/pypi/simple/'])];
+      // 显式覆盖安装源（验收的断网钩子 / 用户指定内网源）时**不**追加回退镜像：显式选择就是明确意图——
+      // 悄悄换源既会让「装不上必须明确失败」的负例假通过，也可能把内网环境的包拉去公网源。
+      const indices = process.env.AUTOLABEL_RUNTIME_INDEX_URL
+        ? [setupIndexUrl()]
+        : [...new Set([setupIndexUrl(), 'https://mirrors.aliyun.com/pypi/simple/'])];
       let install: Awaited<ReturnType<typeof run>> | undefined; let usedIndex = indices[0];
       for (const index of indices) {
         usedIndex = index;

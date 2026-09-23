@@ -100,7 +100,11 @@ export async function resolveStoragePaths(preferences: DesktopPreferences, insta
   };
   const savedRoot = savedValue('root');
   let rootDecision: Probed;
-  if (savedRoot) rootDecision = await probeWithFallback(savedRoot, fallbackRoot, '存储根目录', 'custom');
+  // 验收隔离钩子（与 AUTOLABEL_TEST_USER_DATA 同一思路）：显式指定存储根时只认该目录，
+  // 让「一键准备失败注入」这类负例不被共享存储根里上一轮真实装好的 python-env 短路成成功。
+  const forcedRoot = process.env.AUTOLABEL_TEST_STORAGE_ROOT?.trim();
+  if (forcedRoot) rootDecision = await probeWithFallback(path.resolve(forcedRoot), path.resolve(forcedRoot), '存储根目录', 'custom');
+  else if (savedRoot) rootDecision = await probeWithFallback(savedRoot, fallbackRoot, '存储根目录', 'custom');
   else {
     // 卸载会把 <安装目录>\AutoLabelData 迁到用户目录保留；默认根为空而保留目录有数据时沿用，
     // 避免重装后默认位置空着、用户以为数据丢失。

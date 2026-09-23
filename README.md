@@ -39,9 +39,10 @@ npm run pack:win
 
 ## 验证
 
+- `npm run check:all`：一键全跑（类型检查 + 全部单测 + 引擎测试 + 全部 UI 验收串跑；`--skip-ui` 只跑前半段，`--skip-slow` 跳过真下载与真推理）。
 - `npm run check:desktop`、`npm run check:agent`：类型检查。
 - `npm run test:desktop`、`npm run test:agent`：关键通信和操作边界。
-- `powershell -File scripts/engine-build.ps1 -Test`：引擎关键链路。
+- `powershell -File scripts/engine-build.ps1 -Test`：引擎关键链路（含难例优先队列排序与「只建议不自动改」的两张建议卡断言）。
 - `npm run check:models`：内置权重在位且 sha256 与目录一致（打包前自动执行，不一致即中断打包）。
 - `npm run check:model-library-ui`：模型库列表、一键启用与「内容不对就报需要修复」。
 - `npm run check:runtime-setup-ui` / `check:runtime-setup-offline-ui`：一键准备环境的成功路径与断网保护。

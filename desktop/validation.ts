@@ -417,16 +417,20 @@ const schemas: Record<string, z.ZodType> = {
   }),
   'budget.estimate': estimateRequest,
   'review.build': z.strictObject({ evaluationId: id.optional(), runId: id.optional(),
+    // source='hard'：按「低置信 + 几何问题 + 评测漏检/多检」排出难例优先队列（只排队不改标注）。
+    source: z.enum(['issues', 'hard']).optional(),
     rules: z.strictObject({ minMatchedIoU: finite.min(0).max(1).optional(), maxNormalizedPointError: finite.min(0).max(1).optional() }).optional(),
   }).refine(value => !!value.evaluationId !== !!value.runId, '应选择评测或运行中的一个来源'),
   'review.list': z.strictObject({ projectId: id, evaluationId: id.optional(), runId: id.optional(), sampleId: id.optional(),
-    source: z.enum(['execution', 'truth_comparison', 'random']).optional(),
+    source: z.enum(['execution', 'truth_comparison', 'random', 'hard']).optional(),
     status: z.enum(['pending', 'checked', 'dismissed', 'request_relabel']).optional(), ...evaluationPage }),
   'review.resolve': z.strictObject({ itemId: id, baseCandidateVersion: count.nullable(),
     action: z.enum(['checked', 'dismissed', 'request_relabel']), note: text.optional() }),
   'review.sample': z.strictObject({ projectId: id, assetIds: evaluationAssetIds,
     seed: z.string().min(1).max(256).refine(value => !!value.trim(), '随机种子不能为空'), count: count.min(1).max(1000),
   }).refine(value => value.count <= value.assetIds.length, '抽样数量不能超过素材范围'),
+  // 复核结果回流的两张建议卡数据（只建议不自动改）：建议置信度阈值 / 建议送训练的素材清单。
+  'review.suggestions': z.strictObject({ projectId: id, evaluationId: id.optional() }),
   'provider.list': empty,
   'provider.save': z.strictObject({
     id: id.optional(), name, baseUrl: z.url().refine(value => { const u = new URL(value); return ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password && !u.search && !u.hash; }, '接口地址应为不含凭据的 HTTP/HTTPS 基础地址'),
