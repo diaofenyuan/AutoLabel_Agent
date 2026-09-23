@@ -161,7 +161,7 @@ async function dispatch(command: string, p: Record<string, unknown>): Promise<un
       data.providers = [...data.providers.filter(item => item.id !== provider.id), provider]; result = provider; break;
     }
     case 'credential.set': throw new Error('演示模式不保存 API Key。请在桌面版本中安全配置。');
-    case 'provider.models': case 'provider.test': case 'run.create': case 'agent.chat': case 'chat.send':
+    case 'provider.models': case 'provider.test': case 'provider.testAll': case 'run.create': case 'agent.chat': case 'chat.send':
       throw new Error('当前是隔离的浏览器演示，未连接模型或 Java 引擎。请在桌面版本使用此功能。');
     case 'agent.cancel': return { status: 'cancelled' };
     case 'run.list': case 'event.list': case 'export.list': return [];

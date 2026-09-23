@@ -6,6 +6,7 @@ import { access, mkdir, readFile, realpath, stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { referencePriceRows } from '../shared/pricing';
 import { PROTOCOL_VERSION, type EngineStatus } from '../shared/protocol';
 import { DesktopError } from './validation';
 import { redact, normalizeMedia, type MediaTarget } from './security';
@@ -220,6 +221,8 @@ export class EngineManager extends EventEmitter {
           } catch (error) { if (error instanceof DesktopError) { clean(); reject(error); } }
         });
         child.stdin.write(JSON.stringify({ token: this.token, dataDir: this.options.dataDir, protocolVersion: PROTOCOL_VERSION, localWorkerPath, trainingWorkerPath, localModelAuthorizations,
+          // 参考单价表随启动下发（shared/pricing.ts 单一来源）：未手填单价时引擎按参考价预估，不联网取价、查不到不猜。
+          referencePricing: referencePriceRows(),
           ...(materialsRoot ? { materialsRoot } : {}),
           ...(trainingRoot ? { trainingRoot } : {}),
           ...(localVocabularyCacheDir ? { localVocabularyCacheDir } : {}),

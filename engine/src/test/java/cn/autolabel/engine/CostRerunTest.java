@@ -8,12 +8,39 @@ final class CostRerunTest {
     static void check(boolean value,String message){EngineTest.check(value,message);}
     static JsonObject cmd(Engine e,String name,JsonObject p)throws Exception{return (JsonObject)e.command(name,p);}
     static JsonObject pricing(String currency,double input,double cached,double output){return Json.obj("model","fixture","currency",currency,"inputPerMillion",input,"cachedInputPerMillion",cached,"outputPerMillion",output);}
-    static void run(Path root)throws Exception{arithmetic();workflow(root);}
+    static void run(Path root)throws Exception{arithmetic();reference(root);workflow(root);}
     static void arithmetic(){JsonObject price=pricing("CNY",2,0.5,4),chat=Json.obj("prompt_tokens",1000,"completion_tokens",200,"prompt_tokens_details",Json.obj("cached_tokens",600),"completion_tokens_details",Json.obj("reasoning_tokens",150)),responses=Json.obj("input_tokens",1000,"output_tokens",200,"input_tokens_details",Json.obj("cached_tokens",600),"output_tokens_details",Json.obj("reasoning_tokens",150));
         check(Math.abs(Json.decimal(Costs.calculate(price,chat),"amount",0)-0.0019)<1e-12,"chat cache subset priced without duplicate reasoning");check(Costs.calculate(price,chat).equals(Costs.calculate(price,responses)),"both usage protocols have same accounting");
         check(Json.required(Costs.calculate(price,JsonNull.INSTANCE),"status").equals("unknown"),"missing usage not free");responses.remove("input_tokens_details");check(Json.required(Costs.calculate(price,responses),"reason").equals("cached_usage_missing"),"unknown cache with different rates remains unknown");
         JsonObject missing=price.deepCopy();missing.remove("outputPerMillion");check(Json.required(Costs.calculate(missing,chat),"status").equals("unknown"),"missing price remains unknown");JsonObject invalid=chat.deepCopy();Json.object(invalid,"prompt_tokens_details").addProperty("cached_tokens",1001);check(Json.required(Costs.calculate(price,invalid),"status").equals("unknown"),"cache count cannot exceed input");
         Json.object(chat,"prompt_tokens_details").addProperty("cache_write_tokens",10);check(Json.required(Costs.calculate(price,chat),"reason").equals("usage_category_unpriced"),"unpriced cache writes not silently ordinary input");
+    }
+    /** 参考价兜底与历史假设：未手填单价不再「金额未知」停摆；手填逐字段优先；缓存项永不自动填（省略≠按零计）。 */
+    static void reference(Path root)throws Exception{
+        JsonArray table=Json.arr(Json.obj("host","priced.example.test","model","ref-model","currency","CNY","inputPerMillion",2,"cachedInputPerMillion",1,"outputPerMillion",4,"source","https://example.test/pricing","asOf","2026-09-23","note","测试行：以官网为准"));
+        try(Engine e=new Engine(root.resolve("cost-reference"),Json.obj("referencePricing",table))){
+            JsonObject bare=Json.obj("id","ref-provider","baseUrl","https://priced.example.test/v1","revision",1);
+            JsonObject snapshot=Costs.snapshot(bare,"ref-model"),usage=Json.obj("input_tokens",1000,"output_tokens",500,"input_tokens_details",Json.obj("cached_tokens",0));
+            check(Json.required(snapshot,"source").equals("reference")&&Costs.priceProblem(snapshot)==null,"未手填单价由参考价补齐三项，不再金额未知");
+            check(Math.abs(Json.decimal(Costs.calculate(snapshot,usage),"amount",0)-0.004)<1e-12,"参考价按报告用量计得估算金额");
+            check(Json.required(Costs.calculate(snapshot,usage),"basis").equals("reported_usage_reference_prices"),"参考价计价必须标注口径，不冒充实付");
+            JsonObject partial=Json.obj("id","ref-partial","baseUrl","https://priced.example.test/v1","revision",1,"pricing",Json.obj("model","ref-model","currency","CNY","outputPerMillion",9));
+            check(Math.abs(Json.decimal(Costs.calculate(Costs.snapshot(partial,"ref-model"),usage),"amount",0)-0.0065)<1e-12,"手填单价逐字段覆盖参考价");
+            JsonObject full=Json.obj("id","ref-user","baseUrl","https://priced.example.test/v1","revision",1,"pricing",Json.obj("model","ref-model","currency","CNY","inputPerMillion",1,"cachedInputPerMillion",1,"outputPerMillion",1));
+            check(Json.required(Costs.snapshot(full,"ref-model"),"source").equals("user_configured"),"手填三项齐全完全按用户价计价");
+            check(Costs.priceProblem(Costs.snapshot(bare,"no-reference-model"))!=null,"查不到参考价的模型保持金额未知，不猜价");
+            e.store.tx(c->{Costs.update(c,"ref-scope",Json.obj("currency","CNY","amount",1));return null;});
+            check(e.store.read(c->Costs.blockReason(c,"ref-scope",snapshot))==null,"参考价下费用阈值不再因未手填单价停摆");
+            try{e.store.read(c->{Costs.reserve(c,"ref-scope",Costs.snapshot(bare,"no-reference-model"));return null;});check(false,"无参考价无手填必须拦截");}catch(ApiError error){check(error.code.equals("budget_pricing_unknown")&&error.getMessage().contains("手填"),"拦截原因必须指出手填入口");}
+            for(int i=0;i<3;i++){final int n=i;e.store.tx(c->{Store.update(c,"INSERT INTO attempts(id,run_id,sample_id,group_id,status,data) VALUES(?,?,?,?,?,?)",Json.id(),null,null,"ref-group","completed",Json.obj("providerId","ref-provider","model","ref-model","usage",Json.obj("prompt_tokens",1000+n*1000,"completion_tokens",200)).toString());return null;});}
+            JsonObject auto=e.store.read(c->Costs.estimate(c,bare,Json.obj("model","ref-model","requests",2,"cachedInputTokensPerRequest",0)));
+            check(Json.required(auto,"source").equals("historical_usage_average")&&Json.integer(auto,"historySamples",0)==3,"缺省 token 假设按历史用量均值自动填");
+            check(Json.integer(Json.object(auto,"assumptions"),"inputTokensPerRequest",-1)==2000&&Json.integer(Json.object(auto,"assumptions"),"outputTokensPerRequest",-1)==200,"历史均值取最近已完成调用的实际用量");
+            check(Math.abs(Json.decimal(auto,"estimatedCost",0)-0.0096)<1e-12,"自动填假设同样按单价计得预估");
+            JsonObject missing=e.store.read(c->Costs.estimate(c,bare,Json.obj("model","ref-model","requests",1)));
+            check(Json.object(missing,"assumptions").get("cachedInputTokensPerRequest").isJsonNull()&&missing.get("estimatedCost").isJsonNull(),"缓存项永不自动填：省略不等于按零计");
+            check(Json.required(missing,"reason").equals("cached_usage_missing"),"省略缓存项仍如实报未知原因");
+        }
     }
     static void workflow(Path root)throws Exception{Path data=root.resolve("cost-rerun-data");String comparisonId,evaluationId,versionId;
         try(EngineTest.Mock mock=new EngineTest.Mock()){

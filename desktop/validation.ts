@@ -51,8 +51,9 @@ const referenceFields = {
 const referenceCapacity = (value: { referenceAssetIds?: string[]; referenceResources?: unknown[] }) =>
   (value.referenceAssetIds?.length ?? 0) + (value.referenceResources?.length ?? 0) <= 63;
 const estimateRequest = z.strictObject({ providerId: id, model: name, requests: count.min(1),
-  inputTokensPerRequest: tokenCount, outputTokensPerRequest: tokenCount, cachedInputTokensPerRequest: tokenCount.optional(),
-}).refine(value => (value.cachedInputTokensPerRequest ?? 0) <= value.inputTokensPerRequest, '缓存 token 不能超过输入 token');
+  // token 假设可整组省略：引擎按历史实际用量均值自动填（可改）；只给一部分时缺的项保持「未知」，不静默补零。
+  inputTokensPerRequest: tokenCount.optional(), outputTokensPerRequest: tokenCount.optional(), cachedInputTokensPerRequest: tokenCount.optional(),
+}).refine(value => (value.cachedInputTokensPerRequest ?? 0) <= (value.inputTokensPerRequest ?? Number.MAX_SAFE_INTEGER), '缓存 token 不能超过输入 token');
 const rerunRequest = z.strictObject({ setVersionId: id, budgetScopeId: id, maxRequests: count.min(1),
   // 相同方案可以作为独立重复实验；只有单方案中的参考素材需要去重。
   schemes: z.array(z.strictObject({ name: name.optional(), providerId: id, model: name,

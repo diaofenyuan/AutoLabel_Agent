@@ -7,12 +7,12 @@ import { isLocalCost } from '../../shared/budget';
 export type Pricing = ModelPricing;
 export type CostSummary = BudgetCost;
 export type BudgetState = RequestBudget;
-export const costReasons:Record<string,string>={pricing_model_mismatch:'单价对应的模型不一致',pricing_incomplete:'单价未完整配置',usage_missing:'接口未返回用量',cached_usage_missing:'未提供缓存输入用量',usage_invalid_or_incomplete:'用量缺失或无效',usage_category_unpriced:'存在未定价的用量类别'};
+export const costReasons:Record<string,string>={pricing_model_mismatch:'单价对应的模型不一致',pricing_incomplete:'单价未完整配置',usage_missing:'接口未返回用量',cached_usage_missing:'未提供缓存输入用量',usage_invalid_or_incomplete:'用量缺失或无效',usage_category_unpriced:'存在未定价的用量类别',token_assumptions_missing:'缺少 token 假设且没有历史用量可参考',budget_pricing_unknown:'未手填单价且没有参考价',budget_cost_unknown:'存在用量未知的调用，无法核账',budget_cost_exhausted:'已知金额已达费用阈值',budget_currency_mismatch:'同一预算混用了不同币种'};
 export function money(value:number,currency:string|null){return `${currency??'币种未定'} ${value.toLocaleString('zh-CN',{maximumFractionDigits:9})}`;}
 export function CostView({cost}:{cost?:SchemeCost}){
   // 本机运行没有调用费：直接说「不产生调用费」，不要说成「金额未知」——那是两件事。
   if(isLocalCost(cost))return <div className="cost-summary local-cost"><strong>本机运行 · ¥0</strong><p>不经过任何接口，没有调用费；耗时见指标表的「成本 / 单张耗时」一行。</p></div>;
-  return <div className="cost-summary">{cost?<><strong>已知金额 {money(cost.knownCost,cost.currency)}</strong><p>已计价 {cost.knownCalls} 次 · 金额未知 {cost.unknownCalls} 次 · 仍在途 {cost.inFlightCalls} 次</p><small>{cost.limit===null?'未设费用停止阈值':`已知金额停止阈值 ${money(cost.limit,cost.currency)}`}。金额依据接口报告用量与手动单价计算，服务商账单未核验。未知用量不按免费处理；在途请求可能使最终费用超过阈值。</small></>:<p className="muted">费用未记录，金额未知。</p>}</div>;
+  return <div className="cost-summary">{cost?<><strong>已知金额 {money(cost.knownCost,cost.currency)}{cost.referenceCalls>0?`（含 ${cost.referenceCalls} 次按参考价估算）`:''}</strong><p>已计价 {cost.knownCalls} 次 · 金额未知 {cost.unknownCalls} 次 · 仍在途 {cost.inFlightCalls} 次</p><small>{cost.limit===null?'未设费用停止阈值':`已知金额停止阈值 ${money(cost.limit,cost.currency)}`}。金额依据接口报告用量与单价计算：手填单价优先，缺项按官方价目参考价估算并标注；服务商账单未核验。未知用量不按免费处理；在途请求可能使最终费用超过阈值。</small></>:<p className="muted">费用未记录，金额未知。</p>}</div>;
 }
 export function BudgetView({budget}:{budget:BudgetState}){return <><p>共享请求：已发送 {budget.requestsUsed} / {budget.maxRequests??'未设上限'} · 剩余 {budget.remaining??'未设上限'}</p><CostView cost={budget.cost}/></>;}
 export function BudgetEditor({scopeId,onUpdated,currentBudget}:{scopeId:string;onUpdated?:()=>void;currentBudget?:BudgetState}){

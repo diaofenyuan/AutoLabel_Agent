@@ -43,11 +43,13 @@ function EvaluationPanel({initialEvaluationId,project,sets,runs,evaluations,busy
 function schemeCostLabel(scheme:EvaluationScheme){
   if(isLocalCost(scheme.cost)||scheme.runKind==='local'){
     const per=scheme.averageImageMs===undefined?'耗时未记录':`本机 ${Math.round(scheme.averageImageMs)} ms/张`;
-    return `¥0 · ${per}`;
+    return `¥0 · 本机 · ${per}`;
   }
   if(!scheme.cost)return '未记录';
-  const known=money(scheme.cost.knownCost,scheme.cost.currency);
-  return scheme.cost.unknownCalls>0?`${known} · 另有 ${scheme.cost.unknownCalls} 次金额未知`:known;
+  const known=money(scheme.cost.knownCost,scheme.cost.currency),reference=scheme.cost.referenceCalls??0;
+  // 参考价与实付必须分开说：参考价只是预估（官方价目整理），实付是按用户手填单价计得，账单都以服务商为准。
+  const label=reference===0?`实付 ${known}`:reference>=scheme.cost.knownCalls?`参考价 ${known}`:`${known}（其中 ${reference} 次按参考价估算）`;
+  return scheme.cost.unknownCalls>0?`${label} · 另有 ${scheme.cost.unknownCalls} 次金额未知`:label;
 }
 
 function displayMetric(metrics:QualityMetrics,key:keyof QualityMetrics,kind:'count'|'decimal'|'percent'='count'){

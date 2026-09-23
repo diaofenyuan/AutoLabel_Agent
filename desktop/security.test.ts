@@ -316,9 +316,12 @@ test('价格与预算估算保留显式假设，拒绝伪造费用结果和越�
   const estimate = { providerId: 'p', model: 'model', requests: 2, inputTokensPerRequest: 100, outputTokensPerRequest: 20 };
   assert.equal(Object.hasOwn(validateCommand('budget.estimate', estimate).payload, 'cachedInputTokensPerRequest'), false);
   assert.doesNotThrow(() => validateCommand('budget.estimate', { ...estimate, cachedInputTokensPerRequest: 100 }));
-  for (const change of [{ requests: 0 }, { requests: 1000001 }, { inputTokensPerRequest: 1000000001 }, { outputTokensPerRequest: 0.5 }, { cachedInputTokensPerRequest: 101 }, { inputTokensPerRequest: undefined }, { cost: 0 }, { hardLimit: true }]) {
+  for (const change of [{ requests: 0 }, { requests: 1000001 }, { inputTokensPerRequest: 1000000001 }, { outputTokensPerRequest: 0.5 }, { cachedInputTokensPerRequest: 101 }, { cost: 0 }, { hardLimit: true }]) {
     assert.throws(() => validateCommand('budget.estimate', { ...estimate, ...change }), /格式不正确/);
   }
+  // token 假设可整组省略（引擎按历史实际用量均值自动填、可改）：显式 undefined 与缺省等价，不再拒绝；越界值仍然拒绝。
+  assert.doesNotThrow(() => validateCommand('budget.estimate', { providerId: 'p', model: 'model', requests: 1 }));
+  assert.doesNotThrow(() => validateCommand('budget.estimate', { ...estimate, inputTokensPerRequest: undefined }));
 });
 test('重新评测要求明确请求上限，允许重复实验且参考素材严格去重', () => {
   const scheme = { providerId: 'p', model: 'model', prompt: '仅返回标注', referenceAssetIds: ['ref1'], concurrency: 1, maxRetries: 0 };
