@@ -83,7 +83,7 @@ export default function ModelLibrary() {
         <span style={{ width: `${Math.round(progress!.receivedBytes / progress!.totalBytes * 100)}%` }}/>
         <small>{formatModelBytes(progress!.receivedBytes)} / {formatModelBytes(progress!.totalBytes)}</small></div>}
       <div className="model-card-actions">
-        <Button className={entry.state === 'ready' ? '' : 'primary'} busy={downloading} disabled={isDemo || Boolean(busyId)}
+        <Button className={entry.state === 'ready' ? '' : 'primary'} busy={downloading} disabled={isDemo || Boolean(busyId)} title={busyId && busyId !== entry.id ? '另一个模型正在下载，完成后可继续' : undefined}
           onClick={() => void enable(entry, entry.state === 'corrupt')}>{entry.state === 'corrupt' ? '重新下载并修复'
             : entry.state !== 'ready' ? (entry.taskType === null ? '下载' : '启用（需要时先下载）') : registered ? '重新下载' : '启用'}</Button>
         {entry.location === 'storage' && <Button disabled={isDemo || Boolean(busyId)} onClick={() => void remove(entry)}><Trash2 size={13}/>删除本机副本</Button>}
