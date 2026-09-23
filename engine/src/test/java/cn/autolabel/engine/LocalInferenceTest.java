@@ -22,9 +22,29 @@ public final class LocalInferenceTest {
         if(args.length!=1&&args.length!=4&&args.length!=5)throw new IllegalArgumentException("pythonExe [workerScript modelPath imagePath [taskType]]");
         python=Path.of(args[0]).toAbsolutePath();root=Files.createTempDirectory("autolabel-local-inference-");script=root.resolve("fake_worker.py");model=root.resolve("fixture.pt");input=root.resolve("input.png");
         Files.writeString(script,WORKER,StandardCharsets.UTF_8);Files.writeString(model,"isolated model fixture");image(input);asset=Json.obj("id","asset-local","width",64,"height",48,"contentHash",Media.hash(input));project=project("detect");
-        if(args.length==1){basic();validation();protocol();lifecycle();}
+        if(args.length==1){basic();validation();protocol();lifecycle();batch();}
         else real(Path.of(args[1]),Path.of(args[2]),Path.of(args[3]),args.length==5?args[4]:"segment");
         System.out.println("Local inference: "+checks+" checks passed; isolated fixtures: "+root);
+    }
+
+    private static void batch()throws Exception{
+        try(LocalInference bridge=bridge()){
+            // 哈希短路反例：只翻转一个字节（体积不变）也必须被识破，且恢复字节后继续可用。
+            byte[] original=Files.readAllBytes(model);original[0]=(byte)(original[0]^1);Files.write(model,original);
+            rejects("local_model_changed",()->predict(bridge,"one-byte-change"));
+            original[0]=(byte)(original[0]^1);Files.write(model,original);
+            check(predict(bridge,"after-byte-restore").adoptable(),"restored model bytes resume inference");
+            LocalInference.BatchItem ok=new LocalInference.BatchItem(request("batch-ok"),asset),stale=new LocalInference.BatchItem(request("batch-stale"),asset);
+            stale.request.addProperty("expectedInputHash","0".repeat(64));
+            JsonObject markerAsset=asset.deepCopy();markerAsset.addProperty("id","batch-fail");
+            JsonObject markerRequest=request("batch-marker");markerRequest.addProperty("assetId","batch-fail");
+            List<LocalInference.BatchItem> items=new ArrayList<>();items.add(ok);items.add(stale);items.add(new LocalInference.BatchItem(markerRequest,markerAsset));
+            check(bridge.predictBatch(items,project,10000,null)==items,"batch returns per-item outcomes aligned to the request order");
+            check(ok.prediction!=null&&ok.failure==null&&ok.prediction.adoptable()&&ok.prediction.annotations().size()==1,"batch sibling with valid input succeeds");
+            check("batch-ok".equals(Json.required(ok.prediction.provenance(),"requestId")),"batch result keeps its own request identity");
+            check(stale.prediction==null&&stale.failure!=null&&"local_input_changed".equals(stale.failure.code),"stale input hash fails alone inside a batch");
+            check(items.get(2).prediction==null&&items.get(2).failure!=null&&"input_changed".equals(items.get(2).failure.code),"worker failed entry becomes per-item batch failure");
+        }
     }
 
     private static JsonObject project(String task){return Json.obj("id","project-local","taskType",task,"classes",Json.arr(Json.obj("id","target","name","目标")),"settings",Json.obj("keypointNames",Json.arr("点一","点二")));}
@@ -153,6 +173,21 @@ public final class LocalInferenceTest {
                 assert digest(payload['modelPath'])==payload['expectedModelHash']
                 loaded={'taskType':payload['taskType'],'modelHash':digest(payload['modelPath']),'requestedDevice':payload['device']}
                 data=dict(loaded,loaded=True,classes=[{'id':'0','name':'object'},{'id':'1','name':'ignored'}],observedBackend=None)
+            elif command=='batch_predict':
+                mode=pathlib.Path(__file__).with_suffix('.mode').read_text() if pathlib.Path(__file__).with_suffix('.mode').exists() else 'normal'
+                results=[]
+                for index,item in enumerate(payload.get('inputs',[])):
+                    item=dict(item);item.setdefault('assetId','batch-%d'%index)
+                    if item.get('assetId')=='batch-fail':
+                        results.append({'assetId':item.get('assetId'),'status':'failed','errorCode':'input_changed','message':'fixture batch item failed'});continue
+                    emit(dict(type='event',id=rid,assetId=item['assetId'],stage='local_inference'))
+                    if mode=='hang':time.sleep(30)
+                    if mode=='delay':time.sleep(0.5)
+                    input_hash=digest(item['imagePath']);assert input_hash==item['expectedInputHash']
+                    annotation={'id':'object-1','classId':'target','type':loaded['taskType'],'confidence':0.9,'bbox':{'x':2,'y':3,'width':10,'height':12}}
+                    if mode=='geometry':annotation['bbox']['x']=-2
+                    results.append(dict(loaded,assetId=item['assetId'],source='local_yolo',inputHash=input_hash,width=64,height=48,annotations=[] if mode=='zero' else [annotation],elapsedMs=1.5,excludedByClassMap=0,observedBackend={'kind':'pytorch','device':'cpu','providers':None},geometryIssues=[],requiresGeometryReview=False))
+                data={'results':results,'count':len(results)}
             else:
                 event={'type':'event','id':rid,'assetId':payload['assetId'],'stage':'local_inference'}
                 if rid=='hang-child':

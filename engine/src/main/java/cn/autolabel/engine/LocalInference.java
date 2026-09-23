@@ -36,8 +36,8 @@ final class LocalInference implements AutoCloseable {
         Operation(String id,long timeout){this.id=id;deadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(timeout);}
     }
     private static final class Pending {
-        final String id,command,assetId;final Consumer<JsonObject> events;final CompletableFuture<JsonObject> response=new CompletableFuture<>();int eventCount;
-        Pending(String id,String command,String assetId,Consumer<JsonObject> events){this.id=id;this.command=command;this.assetId=assetId;this.events=events;}
+        final String id,command;final Set<String> assetIds;final Consumer<JsonObject> events;final CompletableFuture<JsonObject> response=new CompletableFuture<>();int eventCount;
+        Pending(String id,String command,Set<String> assetIds,Consumer<JsonObject> events){this.id=id;this.command=command;this.assetIds=assetIds;this.events=events;}
     }
     private record Observation(Consumer<JsonObject> callback,JsonObject event){}
     private static final class Session {
@@ -85,40 +85,85 @@ final class LocalInference implements AutoCloseable {
         try{
             check(operation);
             JsonObject model;synchronized(gate){if(loaded==null)throw error(409,"model_required","请先成功载入本地模型。");model=loaded.deepCopy();}
-            String assetId=Json.required(frozenAsset,"id"),task=Json.required(frozenProject,"taskType"),modelHash=hashField(model,"modelHash"),inputHash=hashField(frozenAsset,"contentHash");
-            if(!assetId.equals(Json.required(request,"assetId"))||!task.equals(Json.required(model,"taskType")))throw error(409,"local_input_mismatch","本地模型或素材与冻结任务不一致。");
-            if(request.has("expectedInputHash")&&!inputHash.equals(hashField(request,"expectedInputHash")))throw error(409,"local_input_changed","输入图片与运行快照不一致。");
-            if(request.has("expectedModelHash")&&!modelHash.equals(hashField(request,"expectedModelHash")))throw error(409,"local_model_changed","已载入模型与运行快照不一致。");
-            Path modelPath=Path.of(Json.required(model,"modelPath")),imagePath=file(request,"imagePath",Set.of("png","jpg","jpeg"));verifyModel(modelPath,modelHash);verifyImage(imagePath,inputHash,frozenAsset);
-            JsonArray textClasses=request.has("textClasses")?Json.array(request,"textClasses").deepCopy():null;
-            JsonObject mapping=mapping(request,model,frozenProject,textClasses),payload=Json.obj("assetId",assetId,"imagePath",imagePath.toString(),"expectedInputHash",inputHash,"classMap",mapping,
-                "confidence",number(request,"confidence",0.25,0,1,false),"iou",number(request,"iou",0.7,0,1,false),"imageSize",number(request,"imageSize",640,32,4096,true),"maxDetections",number(request,"maxDetections",300,1,10000,true));
-            if(textClasses!=null)payload.add("textClasses",textClasses);
-            JsonArray pointNames=Json.array(Json.object(frozenProject,"settings"),"keypointNames");
-            if(task.equals("pose")){
-                Set<String> names=new HashSet<>();for(JsonElement name:pointNames)if(!name.isJsonPrimitive()||!name.getAsJsonPrimitive().isString()||name.getAsString().isBlank()||!names.add(name.getAsString()))throw error(400,"keypoints_required","关键点名称必须非空且不重复。");
-                if(pointNames.isEmpty()||request.has("keypointNames")&&!request.get("keypointNames").equals(pointNames))throw error(409,"keypoint_template_mismatch","本地点序必须与冻结项目模板一致。");payload.add("keypointNames",pointNames.deepCopy());
-            }
-            long started=System.nanoTime();JsonObject result=call(operation,"predict",payload,events);
-            verifyModel(modelPath,modelHash);verifyImage(imagePath,inputHash,frozenAsset);check(operation);
-            if(!assetId.equals(Json.str(result,"assetId",""))||!task.equals(Json.str(result,"taskType",""))||!modelHash.equals(Json.str(result,"modelHash",""))||!inputHash.equals(Json.str(result,"inputHash",""))||!Json.required(model,"requestedDevice").equals(requestedDevice(result))||integer(result,"width")!=Json.integer(frozenAsset,"width",0)||integer(result,"height")!=Json.integer(frozenAsset,"height",0))throw error(502,"local_result_invalid","本地推理结果与请求标识、文件、尺寸或模型不一致。");
-            if(!result.has("annotations")||!result.get("annotations").isJsonArray()||Json.array(result,"annotations").size()>10000)throw error(502,"local_result_invalid","本地推理未返回合法标注数组。");
-            JsonArray annotations=Json.array(result,"annotations"),issues=new JsonArray();
-            if(result.has("geometryIssues")){if(!result.get("geometryIssues").isJsonArray())throw error(502,"local_result_invalid","几何问题清单格式无效。");issues=result.getAsJsonArray("geometryIssues").deepCopy();}
-            boolean review=result.has("requiresGeometryReview")&&strictBoolean(result,"requiresGeometryReview");JsonArray validated=null;
-            int excluded=integer(result,"excludedByClassMap");if(excluded<0||excluded>10000||task.equals("classify")&&annotations.size()!=1)throw error(502,"local_result_invalid","分类结果或类别排除数量无效。");
-            double elapsed=number(result,"elapsedMs",-1,0,Double.MAX_VALUE,false);
-            try{validated=Annotations.validate(annotations,frozenAsset,frozenProject);}
-            catch(Exception geometry){review=true;issues.add(Json.obj("code",geometry instanceof ApiError a?a.code:"annotation_invalid","severity","error","message","本地候选未通过当前结构与几何校验，原始对象已保留。"));}
-            boolean adoptable=!review&&issues.isEmpty();if(!adoptable)validated=null;
-            JsonObject provenance=Json.obj("requestId",operation.id,"source","local_yolo","modelHash",modelHash,"modelPath",modelPath.toString(),"inputHash",inputHash,"requestedDevice",model.get("requestedDevice"),"observedBackend",observed(result),
-                "taskType",task,"parameters",payload,"workerHash",model.get("workerHash"),"protocolVersion",PROTOCOL,"elapsedMs",elapsed,"wallElapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started),"excludedByClassMap",excluded,"adoptable",adoptable);
-            synchronized(gate){provenance.add("environment",runtime==null?JsonNull.INSTANCE:runtime.deepCopy());}
-            if(annotations.isEmpty()&&adoptable)provenance.addProperty("emptyReason",excluded>0?"all_classes_excluded":"model_no_targets");
-            synchronized(gate){check(operation);return new Prediction(result.deepCopy(),validated,issues,adoptable,provenance);}
+            Prepared prepared=prepareItem(request,frozenAsset,frozenProject,model,Json.required(frozenProject,"taskType"));
+            long started=System.nanoTime();JsonObject result=call(operation,"predict",prepared.payload(),events);
+            verifyModel(prepared.modelPath(),prepared.modelHash());verifyImage(prepared.imagePath(),prepared.inputHash(),frozenAsset);check(operation);
+            return assemble(operation,operation.id,result,model,prepared,frozenAsset,frozenProject,started);
         }catch(ApiError e){throw e;}
         catch(Exception e){throw error(500,"local_inference_failed","本地推理未完成，请核对输入和运行环境。");}
         finally{finish(operation);}
+    }
+
+    static final class BatchItem {
+        final JsonObject request,frozenAsset;final String requestId;
+        Prediction prediction;ApiError failure;
+        BatchItem(JsonObject request,JsonObject frozenAsset){this.request=request;this.frozenAsset=frozenAsset;requestId=Json.required(request,"requestId");}
+    }
+    /** 批量推理：一次 worker 调用处理多张固定输入（模型指纹整批核验），逐项独立校验与判定，单项失败不拖累同批其他输入。 */
+    List<BatchItem> predictBatch(List<BatchItem> items,JsonObject frozenProject,long timeoutMs,Consumer<JsonObject> events){
+        frozenProject=frozenProject.deepCopy();
+        if(items.isEmpty()||items.size()>64)throw error(400,"local_batch_invalid","批量推理一次需要 1 至 64 个输入。");
+        Operation operation=begin(Json.id(),timeoutMs);
+        try{
+            check(operation);
+            JsonObject model;synchronized(gate){if(loaded==null)throw error(409,"model_required","请先成功载入本地模型。");model=loaded.deepCopy();}
+            String task=Json.required(frozenProject,"taskType");if(!task.equals(Json.required(model,"taskType")))throw error(409,"local_input_mismatch","本地模型或素材与冻结任务不一致。");
+            Path modelPath=Path.of(Json.required(model,"modelPath"));String modelHash=hashField(model,"modelHash");verifyModel(modelPath,modelHash);
+            JsonArray inputs=new JsonArray();List<BatchItem> dispatched=new ArrayList<>();List<Prepared> preparedItems=new ArrayList<>();
+            for(BatchItem item:items){try{Prepared prepared=prepareItem(item.request.deepCopy(),item.frozenAsset.deepCopy(),frozenProject,model,task);inputs.add(prepared.payload());preparedItems.add(prepared);dispatched.add(item);}catch(ApiError bad){item.failure=bad;}catch(Exception bad){item.failure=error(500,"local_inference_failed","本地推理未完成，请核对输入和运行环境。");}}
+            if(!dispatched.isEmpty()){
+                long started=System.nanoTime();JsonObject result=call(operation,"batch_predict",Json.obj("inputs",inputs),events);JsonArray results=Json.array(result,"results");
+                if(Json.integer(result,"count",-1)!=results.size()||results.size()!=dispatched.size())throw error(502,"local_result_invalid","批量推理结果数量与请求输入不一致。");
+                verifyModel(modelPath,modelHash);check(operation);
+                for(int index=0;index<dispatched.size();index++){BatchItem item=dispatched.get(index);Prepared prepared=preparedItems.get(index);try{
+                        verifyImage(prepared.imagePath(),prepared.inputHash(),item.frozenAsset);
+                        JsonObject entry=results.get(index).getAsJsonObject();
+                        if(entry.has("status")&&"failed".equals(Json.str(entry,"status",""))){String code=Json.str(entry,"errorCode","local_worker_error"),message=Json.str(entry,"message","本地推理失败。");if(!code.matches("[a-z][a-z0-9_]{0,99}"))code="local_worker_error";if(message.length()>2000)message=message.substring(0,2000);throw error(422,code,message);}
+                        item.prediction=assemble(operation,item.requestId,entry,model,prepared,item.frozenAsset,frozenProject,started);
+                    }catch(ApiError bad){item.failure=bad;}catch(Exception bad){item.failure=error(502,"local_result_invalid","批量推理结果项与请求标识、文件、尺寸或模型不一致。");}}
+            }
+            for(BatchItem item:items)if(item.prediction==null&&item.failure==null)item.failure=error(502,"local_result_invalid","批量推理结果项缺失。");
+            return items;
+        }catch(ApiError whole){for(BatchItem item:items)if(item.prediction==null&&item.failure==null)item.failure=whole;return items;}
+        catch(Exception whole){ApiError failure=error(500,"local_inference_failed","本地推理未完成，请核对输入和运行环境。");for(BatchItem item:items)if(item.prediction==null&&item.failure==null)item.failure=failure;return items;}
+        finally{finish(operation);}
+    }
+
+    private record Prepared(JsonObject payload,Path modelPath,String modelHash,Path imagePath,String inputHash,String task){}
+    private Prepared prepareItem(JsonObject request,JsonObject frozenAsset,JsonObject frozenProject,JsonObject model,String task)throws Exception{
+        String assetId=Json.required(frozenAsset,"id"),modelHash=hashField(model,"modelHash"),inputHash=hashField(frozenAsset,"contentHash");
+        if(!assetId.equals(Json.required(request,"assetId"))||!task.equals(Json.required(model,"taskType")))throw error(409,"local_input_mismatch","本地模型或素材与冻结任务不一致。");
+        if(request.has("expectedInputHash")&&!inputHash.equals(hashField(request,"expectedInputHash")))throw error(409,"local_input_changed","输入图片与运行快照不一致。");
+        if(request.has("expectedModelHash")&&!modelHash.equals(hashField(request,"expectedModelHash")))throw error(409,"local_model_changed","已载入模型与运行快照不一致。");
+        Path modelPath=Path.of(Json.required(model,"modelPath")),imagePath=file(request,"imagePath",Set.of("png","jpg","jpeg"));verifyModel(modelPath,modelHash);verifyImage(imagePath,inputHash,frozenAsset);
+        JsonArray textClasses=request.has("textClasses")?Json.array(request,"textClasses").deepCopy():null;
+        JsonObject mapping=mapping(request,model,frozenProject,textClasses),payload=Json.obj("assetId",assetId,"imagePath",imagePath.toString(),"expectedInputHash",inputHash,"classMap",mapping,
+            "confidence",number(request,"confidence",0.25,0,1,false),"iou",number(request,"iou",0.7,0,1,false),"imageSize",number(request,"imageSize",640,32,4096,true),"maxDetections",number(request,"maxDetections",300,1,10000,true));
+        if(textClasses!=null)payload.add("textClasses",textClasses);
+        JsonArray pointNames=Json.array(Json.object(frozenProject,"settings"),"keypointNames");
+        if(task.equals("pose")){
+            Set<String> names=new HashSet<>();for(JsonElement name:pointNames)if(!name.isJsonPrimitive()||!name.getAsJsonPrimitive().isString()||name.getAsString().isBlank()||!names.add(name.getAsString()))throw error(400,"keypoints_required","关键点名称必须非空且不重复。");
+            if(pointNames.isEmpty()||request.has("keypointNames")&&!request.get("keypointNames").equals(pointNames))throw error(409,"keypoint_template_mismatch","本地点序必须与冻结项目模板一致。");payload.add("keypointNames",pointNames.deepCopy());
+        }
+        return new Prepared(payload,modelPath,modelHash,imagePath,inputHash,task);
+    }
+    private Prediction assemble(Operation operation,String requestId,JsonObject result,JsonObject model,Prepared prepared,JsonObject frozenAsset,JsonObject frozenProject,long started){
+        String assetId=Json.required(frozenAsset,"id"),task=prepared.task(),modelHash=prepared.modelHash(),inputHash=prepared.inputHash();Path modelPath=prepared.modelPath();JsonObject payload=prepared.payload();
+        if(!assetId.equals(Json.str(result,"assetId",""))||!task.equals(Json.str(result,"taskType",""))||!modelHash.equals(Json.str(result,"modelHash",""))||!inputHash.equals(Json.str(result,"inputHash",""))||!Json.required(model,"requestedDevice").equals(requestedDevice(result))||integer(result,"width")!=Json.integer(frozenAsset,"width",0)||integer(result,"height")!=Json.integer(frozenAsset,"height",0))throw error(502,"local_result_invalid","本地推理结果与请求标识、文件、尺寸或模型不一致。");
+        if(!result.has("annotations")||!result.get("annotations").isJsonArray()||Json.array(result,"annotations").size()>10000)throw error(502,"local_result_invalid","本地推理未返回合法标注数组。");
+        JsonArray annotations=Json.array(result,"annotations"),issues=new JsonArray();
+        if(result.has("geometryIssues")){if(!result.get("geometryIssues").isJsonArray())throw error(502,"local_result_invalid","几何问题清单格式无效。");issues=result.getAsJsonArray("geometryIssues").deepCopy();}
+        boolean review=result.has("requiresGeometryReview")&&strictBoolean(result,"requiresGeometryReview");JsonArray validated=null;
+        int excluded=integer(result,"excludedByClassMap");if(excluded<0||excluded>10000||task.equals("classify")&&annotations.size()!=1)throw error(502,"local_result_invalid","分类结果或类别排除数量无效。");
+        double elapsed=number(result,"elapsedMs",-1,0,Double.MAX_VALUE,false);
+        try{validated=Annotations.validate(annotations,frozenAsset,frozenProject);}
+        catch(Exception geometry){review=true;issues.add(Json.obj("code",geometry instanceof ApiError a?a.code:"annotation_invalid","severity","error","message","本地候选未通过当前结构与几何校验，原始对象已保留。"));}
+        boolean adoptable=!review&&issues.isEmpty();if(!adoptable)validated=null;
+        JsonObject provenance=Json.obj("requestId",requestId,"source","local_yolo","modelHash",modelHash,"modelPath",modelPath.toString(),"inputHash",inputHash,"requestedDevice",model.get("requestedDevice"),"observedBackend",observed(result),
+            "taskType",task,"parameters",payload,"workerHash",model.get("workerHash"),"protocolVersion",PROTOCOL,"elapsedMs",elapsed,"wallElapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started),"excludedByClassMap",excluded,"adoptable",adoptable);
+        synchronized(gate){provenance.add("environment",runtime==null?JsonNull.INSTANCE:runtime.deepCopy());}
+        if(annotations.isEmpty()&&adoptable)provenance.addProperty("emptyReason",excluded>0?"all_classes_excluded":"model_no_targets");
+        synchronized(gate){check(operation);return new Prediction(result.deepCopy(),validated,issues,adoptable,provenance);}
     }
 
     /** 调用 worker 的严格 track_sequence 协议；仅接受 Detect 模型和带完整指纹的真实帧序列。 */
@@ -174,8 +219,10 @@ final class LocalInference implements AutoCloseable {
 
     private JsonObject call(Operation operation,String command,JsonObject payload,Consumer<JsonObject> events){
         Session current=ensureProcess(operation);await(current.ready,operation);
-        try{if(!Media.hash(script).equals(current.workerHash))throw new IOException("worker changed");}catch(Exception changed){ApiError failure=error(409,"local_worker_changed","推理脚本已变更，请重新载入模型以固定执行版本。");stop(current,failure);throw failure;}
-        Pending pending=new Pending(operation.id,command,Json.str(payload,"assetId",null),events);
+        try{if(!Media.hashQuick(script).equals(current.workerHash))throw new IOException("worker changed");}catch(Exception changed){ApiError failure=error(409,"local_worker_changed","推理脚本已变更，请重新载入模型以固定执行版本。");stop(current,failure);throw failure;}
+        Set<String> assetIds=new LinkedHashSet<>();String single=Json.str(payload,"assetId",null);if(single!=null)assetIds.add(single);
+        for(JsonElement element:Json.array(payload,"inputs")){if(element.isJsonObject()){String id=Json.str(element.getAsJsonObject(),"assetId",null);if(id!=null)assetIds.add(id);}}
+        Pending pending=new Pending(operation.id,command,assetIds,events);
         byte[] bytes=(Json.obj("id",operation.id,"command",command,"payload",payload).toString()+"\n").getBytes(StandardCharsets.UTF_8);
         if(bytes.length>REQUEST_LIMIT)throw error(413,"local_request_too_large","本地推理请求超过 1 MiB 限制。");
         synchronized(gate){check(operation);if(session!=current||current.stopped)throw error(503,"local_worker_exited","本地推理进程已经退出。");
@@ -215,7 +262,8 @@ final class LocalInference implements AutoCloseable {
             if(type.equals("ready")){if(current.ready.isDone()||integer(message,"protocolVersion")!=PROTOCOL)throw error(502,"local_protocol_invalid","本地推理协议版本不匹配或重复就绪。");current.ready.complete(null);return;}
             if(!current.ready.isDone()||(pending=current.pending)==null||!pending.id.equals(Json.str(message,"id",""))||pending.response.isDone())throw error(502,"local_protocol_invalid","推理响应标识错配、重复或已经过期。");
             if(type.equals("event")){
-                boolean tracking=pending.command.equals("track_sequence");if((!tracking&&!pending.command.equals("predict"))||(!tracking&&!Objects.equals(pending.assetId,Json.str(message,"assetId",null))||!Json.str(message,"stage","").equals(tracking?"local_tracking":"local_inference"))||++pending.eventCount>256)throw error(502,"local_protocol_invalid","推理事件与当前请求不一致。");event=message.deepCopy();
+                boolean tracking=pending.command.equals("track_sequence"),batch=pending.command.equals("batch_predict");String eventAsset=Json.str(message,"assetId",null);boolean known=pending.assetIds.isEmpty()?eventAsset==null:pending.assetIds.contains(eventAsset);
+                if((!tracking&&!batch&&!pending.command.equals("predict"))||(!tracking&&!known||!Json.str(message,"stage","").equals(tracking?"local_tracking":"local_inference"))||++pending.eventCount>256)throw error(502,"local_protocol_invalid","推理事件与当前请求不一致。");event=message.deepCopy();
             }else if(type.equals("response")){
                 boolean ok=strictBoolean(message,"ok");if(ok&&(!message.has("data")||!message.get("data").isJsonObject())||!ok&&(!message.has("error")||!message.get("error").isJsonObject()))throw error(502,"local_protocol_invalid","推理响应缺少结果或错误对象。");pending.response.complete(message.deepCopy());return;
             }else throw error(502,"local_protocol_invalid","本地推理返回了未知协议消息。");
@@ -249,9 +297,9 @@ final class LocalInference implements AutoCloseable {
         Path path=Path.of(Json.required(value,key));String name=path.getFileName()==null?"":path.getFileName().toString(),extension=name.contains(".")?name.substring(name.lastIndexOf('.')+1).toLowerCase(Locale.ROOT):"";
         if(!path.isAbsolute()||!Files.isRegularFile(path)||!suffixes.contains(extension))throw error(404,"local_file_invalid","所选文件不存在、不是绝对路径或格式不支持。");return path.toRealPath();
     }
-    private static void verifyModel(Path path,String expected)throws Exception{if(!Files.isRegularFile(path)||!Media.hash(path).equals(expected))throw error(409,"local_model_changed","模型文件在执行期间发生变化，未采用结果。");}
+    private static void verifyModel(Path path,String expected)throws Exception{if(!Files.isRegularFile(path)||!Media.hashQuick(path).equals(expected))throw error(409,"local_model_changed","模型文件在执行期间发生变化，未采用结果。");}
     private static void verifyImage(Path path,String expected,JsonObject asset)throws Exception{
-        if(!Files.isRegularFile(path)||Files.size(path)>Media.MAX_FILE||!Media.hash(path).equals(expected))throw error(409,"local_input_changed","输入图片缺失或在执行期间发生变化，未采用结果。");
+        if(!Files.isRegularFile(path)||Files.size(path)>Media.MAX_FILE||!Media.hashQuick(path).equals(expected))throw error(409,"local_input_changed","输入图片缺失或在执行期间发生变化，未采用结果。");
         try(ImageInputStream input=ImageIO.createImageInputStream(path.toFile())){Iterator<ImageReader> readers=ImageIO.getImageReaders(input);if(!readers.hasNext())throw error(409,"local_input_changed","输入图片无法解码。");ImageReader reader=readers.next();try{reader.setInput(input);if(!Set.of("png","jpeg").contains(reader.getFormatName().toLowerCase(Locale.ROOT))||reader.getWidth(0)!=Json.integer(asset,"width",0)||reader.getHeight(0)!=Json.integer(asset,"height",0))throw error(409,"local_input_mismatch","输入图片尺寸与冻结基准图不一致。");}finally{reader.dispose();}}
     }
     private static Set<String> classes(JsonObject model){

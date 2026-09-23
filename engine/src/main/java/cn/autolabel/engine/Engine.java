@@ -81,7 +81,7 @@ final class Engine implements AutoCloseable {
         case "dataset.version.get"->datasetVersions.get(p);case "dataset.version.list"->datasetVersions.list(p);case "dataset.version.items"->datasetVersions.items(p);
         case "dataset.version.cancel"->datasetVersions.cancel(p);case "dataset.version.delete"->datasetVersions.delete(p);
         case "dataset.version.compare"->datasetVersions.compare(p);case "dataset.version.verify"->datasetVersions.verify(p);
-        case "provider.list"->providers.list();case "provider.save"->providers.save(p);case "provider.delete"->providers.delete(p);case "provider.models"->providers.models(Json.required(p,"providerId"));case "provider.test"->providers.test(p);case "provider.capabilities"->providers.capabilities(p);case "credential.set"->providers.credential(p);
+        case "provider.list"->providers.list();case "provider.save"->providers.save(p);case "provider.delete"->providers.delete(p);case "provider.models"->providers.models(Json.required(p,"providerId"));case "provider.test"->providers.test(p);case "provider.testAll"->providers.testAll(p);case "provider.capabilities"->providers.capabilities(p);case "credential.set"->providers.credential(p);
         case "chat.send"->providers.chat(p);
         case "chat.cancel"->providers.cancel(Json.required(p,"sessionId"));
         case "run.create"->runs.create(p);case "run.list"->runs.list(Json.str(p,"projectId",null));case "run.get"->runs.get(p);case "run.attempts"->runs.attempts(p);

@@ -269,15 +269,26 @@ def segment_topology(raw_mask, original_shape) -> dict:
             "requiresGeometryReview": outer_count != 1 or hole_count > 0 or bool(degenerate) or bool(outside)}
 
 
-def file_hash(path: Path, expected=None) -> str:
+def file_hash(path: Path, expected=None, *, quick=True) -> str:
+    """文件指纹。quick=True 走 size+mtime 短路（推理热路径）；载入与授权等显式校验传 quick=False 全量重算。
+
+    改一个字节就会因 mtime 变化被重新全量计算并识破，不会被短路缓存掩盖。
+    """
     if expected is not None and (not isinstance(expected, str) or len(expected) != 64 or
                                  any(char not in "0123456789abcdef" for char in expected)):
         raise InferenceError("fingerprint_invalid", "文件指纹格式不正确")
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    value = digest.hexdigest()
+    stat = path.stat()
+    key = str(path)
+    cached = _HASH_CACHE.get(key)
+    if quick and cached is not None and cached[0] == stat.st_size and cached[1] == stat.st_mtime_ns:
+        value = cached[2]
+    else:
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for block in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(block)
+        value = digest.hexdigest()
+        _HASH_CACHE[key] = (stat.st_size, stat.st_mtime_ns, value)
     if expected is not None and value != expected:
         raise InferenceError("input_changed", "本次固定的模型或图片内容已变化")
     return value
@@ -293,6 +304,10 @@ def tracking_fingerprint(value, label):
     if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
         raise InferenceError("fingerprint_invalid", f"{label}应为完整 SHA-256")
     return value
+
+
+# 指纹短路缓存：key=文件路径，值=(size, mtime_ns, sha256)。只存少量热点文件（模型/当前批次图片）。
+_HASH_CACHE: dict[str, tuple[int, int, str]] = {}
 
 
 def tracking_integer(value):
@@ -511,12 +526,18 @@ class Worker:
             return {"available": False, "code": "inference_environment_missing", "message": "当前 Python 缺少兼容的 Ultralytics 或 PyTorch"}
 
     def set_vocabulary(self, names: list[str]) -> str:
-        """按「缓存 → 内置词表 → CLIP」解析本次类别名的文本向量，并把它写回模型。
+        """按「内置词表 → 缓存 → CLIP」解析本次类别名的文本向量，并把它写回模型。
 
-        返回来源（cache / builtin / encoded）供调用方与核对流程使用；三级都不会联网。
+        返回来源（builtin / cache / encoded）供调用方与核对流程使用；三级都不会联网。
         中文名一律先按别名表翻成英文规范名再取向量：CLIP 只认英文，直接编码中文会得到没有意义的向量
         （实测「人」一个目标都查不到，「person」能查到 5 个）。
+        内置词表最先且不写缓存：命中内置必须稳定回报 builtin，不受历次运行的缓存残留影响；
+        缓存只留昂贵的 CLIP 编码结果（cache 来源即「编码器产物」，跨运行可复现）。
         """
+        hit = self.resolve_builtin(names)
+        if hit is not None:
+            apply_vocabulary(self.model, hit[0], hit[1])
+            return "builtin"
         cache = environment_directory(VOCABULARY_CACHE_ENV)
         key = vocabulary_key(names)
         if cache is not None:
@@ -532,6 +553,18 @@ class Worker:
             except OSError:
                 pass  # 缓存写不进去不影响本次推理结果。
         return source[0]
+
+    def resolve_builtin(self, names: list[str]):
+        """内置词表（含别名表翻译）命中即返回（应用名, 向量）；没有命中返回 None，交给缓存与编码器。"""
+        builtin = builtin_vocabulary(names)
+        if builtin is not None:
+            return names, builtin
+        translated = [ALIAS_TABLE.get(name, name) for name in names]
+        if translated != names:
+            builtin = builtin_vocabulary(translated)
+            if builtin is not None:
+                return translated, builtin
+        return None
 
     def resolve_vocabulary(self, names: list[str]):
         """先查内置词表，再按别名表翻成英文查一次；仍未命中就只剩 CLIP。
@@ -560,7 +593,7 @@ class Worker:
         # 加载失败后不沿用上一模型，防止下一条请求误用旧任务或旧权重。
         self.model, self.model_hash, self.model_path, self.task, self.open_vocabulary = None, None, None, None, False
         path = local_file(payload.get("modelPath"), {".pt", ".onnx"})
-        model_hash = file_hash(path, payload.get("expectedModelHash"))
+        model_hash = file_hash(path, payload.get("expectedModelHash"), quick=False)
         task = payload.get("taskType")
         if task not in TASKS:
             raise InferenceError("task_invalid", "请选择支持的标注任务类型")
@@ -602,7 +635,7 @@ class Worker:
                 names = backend.names
             else:
                 names = model.names
-        file_hash(path, model_hash)
+        file_hash(path, model_hash, quick=False)
         self.model, self.model_hash, self.model_path, self.task, self.device, self.open_vocabulary = model, model_hash, path, task, device, open_vocabulary
         result = {"loaded": True, "taskType": task, "device": device, "modelHash": self.model_hash,
                   "requestedDevice": device, "observedBackend": self.observed_backend(),
@@ -625,12 +658,12 @@ class Worker:
                 return {"kind": "pytorch", "device": str(weight.device), "providers": None}
         return None
 
-    def predict(self, payload: dict, request_id: str, *, _capture=None) -> dict:
+    def predict(self, payload: dict, request_id: str, *, _capture=None, _model_verified=False) -> dict:
         if self.model is None:
             raise InferenceError("model_required", "请先加载本地模型")
         path = local_file(payload.get("imagePath"), {".png", ".jpg", ".jpeg"})
         input_hash = file_hash(path, payload.get("expectedInputHash"))
-        if self.model_path is not None:
+        if self.model_path is not None and not _model_verified:
             file_hash(self.model_path, self.model_hash)
         asset_id = payload.get("assetId")
         if not isinstance(asset_id, str) or not asset_id or len(asset_id) > 160:
@@ -676,7 +709,7 @@ class Worker:
             if edge <= 0 or edge != int(edge):
                 raise InferenceError("result_invalid", "模型实际图片尺寸必须为有限正整数")
         file_hash(path, input_hash)
-        if self.model_path is not None:
+        if self.model_path is not None and not _model_verified:
             file_hash(self.model_path, self.model_hash)
         observed = self.observed_backend()
         if self.device != "cpu" and observed is not None and (
@@ -1035,6 +1068,33 @@ class Worker:
                                                      "tracks": len(tracks), "overlapPairChecks": pair_checks,
                                                      "elapsedMs": round((time.perf_counter() - started) * 1000, 2)}}
 
+    def batch_predict(self, payload: dict, request_id: str) -> dict:
+        """单请求多输入：模型指纹整批只核验一次（开始/结束各一次），逐输入推理并按输入顺序带回身份供调用方对齐。
+
+        单项失败以 failed 条目回带，不拖累同批其他输入；事件仍逐输入发出，标识沿用整批请求号。
+        """
+        items = payload.get("inputs")
+        if not isinstance(items, list) or not 1 <= len(items) <= 64:
+            raise InferenceError("parameter_invalid", "batch_predict 一次需要 1 至 64 个输入对象")
+        if self.model is None:
+            raise InferenceError("model_required", "请先加载本地模型")
+        if self.model_path is not None:
+            file_hash(self.model_path, self.model_hash)
+        results = []
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise InferenceError("parameter_invalid", "批量输入必须是对象")
+            entry = dict(item)
+            entry.setdefault("assetId", "batch-%d" % index)
+            try:
+                results.append(self.predict(entry, request_id, _model_verified=True))
+            except InferenceError as error:
+                results.append({"assetId": entry.get("assetId"), "inputId": entry.get("inputId"),
+                                "status": "failed", "errorCode": error.code, "message": str(error)})
+        if self.model_path is not None:
+            file_hash(self.model_path, self.model_hash)
+        return {"results": results, "count": len(results)}
+
     def dispatch(self, request: dict) -> dict:
         command = request.get("command")
         payload = request.get("payload", {})
@@ -1046,6 +1106,8 @@ class Worker:
             return self.load(payload)
         if command == "predict":
             return self.predict(payload, request["id"])
+        if command == "batch_predict":
+            return self.batch_predict(payload, request["id"])
         if command == "track_sequence":
             return self.track_sequence(payload, request["id"])
         raise InferenceError("command_unsupported", "本地推理进程不支持该命令")

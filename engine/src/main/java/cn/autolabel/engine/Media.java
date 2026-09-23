@@ -86,6 +86,13 @@ final class Media {
     // 标注使用像素边界坐标，仿射平移取宽高；像素中心索引映射使用宽高减一。
     static JsonArray matrix(int o,int w,int h){return switch(o){case 2->Json.arr(-1,0,w,0,1,0);case 3->Json.arr(-1,0,w,0,-1,h);case 4->Json.arr(1,0,0,0,-1,h);case 5->Json.arr(0,1,0,1,0,0);case 6->Json.arr(0,-1,h,1,0,0);case 7->Json.arr(0,-1,h,-1,0,w);case 8->Json.arr(0,1,0,-1,0,w);default->Json.arr(1,0,0,0,1,0);};}
     static String hash(Path path)throws Exception{MessageDigest digest=MessageDigest.getInstance("SHA-256");try(InputStream in=Files.newInputStream(path)){byte[] b=new byte[65536];int n;while((n=in.read(b))!=-1)digest.update(b,0,n);}return HexFormat.of().formatHex(digest.digest());}
+    private static final java.util.LinkedHashMap<String,Object[]> HASH_CACHE=new java.util.LinkedHashMap<>(64,0.75f,true){@Override protected boolean removeEldestEntry(java.util.Map.Entry<String,Object[]> eldest){return size()>256;}};
+    /** 哈希短路：size+mtime 命中即复用上次 sha256，推理热路径不再每次全量重算；载入与授权等显式校验仍用 hash() 全量。改一个字节就会因 mtime 变化被重新全量计算并识破。 */
+    static String hashQuick(Path path)throws Exception{
+        java.nio.file.attribute.FileTime modified=Files.getLastModifiedTime(path);long size=Files.size(path);String key=path.toAbsolutePath().normalize().toString();
+        synchronized(HASH_CACHE){Object[] entry=HASH_CACHE.get(key);if(entry!=null&&((Long)entry[0]).longValue()==size&&entry[1].equals(modified))return (String)entry[2];}
+        String computed=hash(path);synchronized(HASH_CACHE){HASH_CACHE.put(key,new Object[]{size,modified,computed});}return computed;
+    }
     static void sample(Path target,int index)throws IOException{
         BufferedImage image=new BufferedImage(960,640,BufferedImage.TYPE_INT_RGB);Graphics2D g=image.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);

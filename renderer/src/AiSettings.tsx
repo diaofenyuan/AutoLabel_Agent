@@ -93,10 +93,12 @@ export default function AiSettings({initialKind='api'}:{initialKind?:'api'|'loca
     if(!form.id||!form.model.trim()){setError('请先保存接口并填写用于测试的模型名称。');return;}
     setBusy('all');setError('');
     try{
+      // 一次合并请求拿回六项结论：连接走不计费的模型列表，其余五项合并为 3 次并发真实调用，六项能力不再花六次钱。
+      const data=await request<{tests:Record<string,Test>;billedCalls:number}>('provider.testAll',{providerId:form.id,model:form.model});
       const results:Record<string,Test>={};
       for(const cap of capabilityOrder){
-        const result=await request<Test>('provider.test',{providerId:form.id,model:form.model,capability:cap});
-        results[cap]=result;setTests(data=>({...data,[cap]:result}));
+        const result=data.tests?.[cap]??{status:'unverified',message:'引擎未返回该项结论，能力仍未验证。'};
+        results[cap]=result;setTests(previous=>({...previous,[cap]:result}));
       }
       const blocking=describeFailures(results,true);
       if(blocking){setError(`必需能力未通过：${blocking}。默认模型未改动，请修正后重试。`);return;}

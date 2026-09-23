@@ -441,6 +441,8 @@ const schemas: Record<string, z.ZodType> = {
   // 能力名取自共享常量，与引擎 Providers.test 的支持集同源：
   // 这里曾写成 multi-image，导致「多图输入」的测试按钮被校验拒绝、永远无法验证。
   'provider.test': z.strictObject({ providerId: id, model: name, capability: z.enum(providerCapabilities) }),
+  // 一键验证：引擎侧并发 3 次计费调用覆盖六项能力，界面不再逐项串行六次真实请求。
+  'provider.testAll': z.strictObject({ providerId: id, model: name }),
   'credential.set': z.strictObject({ providerId: id, key: z.string().min(1).max(16384) }),
   'credential.get': z.strictObject({ providerId: id }),
   'local.runtime.configure': z.strictObject({ pythonPath: z.string().min(1).max(32767).nullable() }),

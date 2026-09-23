@@ -196,7 +196,14 @@ final class CandidateReuse {
                     JsonObject ref=state.expectedImages.get(state.references++).getAsJsonObject();
                     if(!same(structured.get("assetId"),ref.get("id"))||!same(structured.get("width"),ref.get("width"))||!same(structured.get("height"),ref.get("height"))||!same(structured.get("annotations"),ref.get("annotations"))||!Json.str(structured,"note","").equals(Json.str(ref,"note",""))||!same(structured.get("resourceId"),ref.get("resourceId"))||!same(structured.get("resourceVersion"),ref.get("resourceVersion")))throw new ApiError(409,"reuse_request_invalid","请求参考标注或说明与运行快照不一致。");out.add(key,structured);
                 }else if(structured!=null&&structured.has("instructions")&&structured.has("template")){
-                    if(!Json.str(state.run,"reuseScope","template").equals("hint")&&(!same(structured.get("template"),TaskTemplates.semantic(Json.object(Json.object(state.run,"snapshot"),"project")))||!Objects.equals(structured.get("instructions"),state.run.get("prompt"))))throw new ApiError(409,"reuse_request_invalid","请求提示词或完整模板与运行快照不一致。");state.templates++;out.add(key,structured);
+                    // 宽松口径（reuseScope=hint）：提示词与模板提示只记录不比对——连请求哈希也要剔除它们，
+                    // 否则改一个字的提示词照样失配（step 12 的「改提示词不再全额重发」只在 context 里剔了，requestHash 漏了）。
+                    // 类别口径不在此列：它由 context 的 classConvention 绑定，变化仍然失配。
+                    boolean hint=Json.str(state.run,"reuseScope","template").equals("hint");
+                    if(!hint&&(!same(structured.get("template"),TaskTemplates.semantic(Json.object(Json.object(state.run,"snapshot"),"project")))||!Objects.equals(structured.get("instructions"),state.run.get("prompt"))))throw new ApiError(409,"reuse_request_invalid","请求提示词或完整模板与运行快照不一致。");
+                    state.templates++;
+                    if(hint){JsonObject recorded=structured.deepCopy();recorded.remove("instructions");recorded.remove("template");recorded.addProperty("instructions","$hint-not-compared");recorded.addProperty("template","$hint-not-compared");out.add(key,recorded);}
+                    else out.add(key,structured);
                 }else out.add(key,child.deepCopy());
             }else out.add(key,normalizeBody(child,state));
         }

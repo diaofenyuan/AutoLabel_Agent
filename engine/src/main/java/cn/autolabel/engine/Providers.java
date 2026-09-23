@@ -11,6 +11,7 @@ import java.security.MessageDigest;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
 
 final class Providers {
@@ -81,7 +82,9 @@ final class Providers {
         if(!base.equals(Json.str(old,"baseUrl",""))||!protocol.equals(Json.str(old,"protocol",""))
             ||!String.valueOf(value.get("headers")).equals(String.valueOf(old.get("headers")))){value.remove("models");value.remove("modelsFetchedAt");}value.addProperty("concurrency",Json.bounded(value,"concurrency",4,1,32));value.addProperty("requestsPerMinute",Json.bounded(value,"requestsPerMinute",60,1,60000));
         value.addProperty("timeoutMs",Json.bounded(value,"timeoutMs",120000,1000,600000));value.addProperty("maxRetries",Json.bounded(value,"maxRetries",2,0,6));value.addProperty("maxImages",Json.bounded(value,"maxImages",12,1,64));
-        value.addProperty("revision",Json.integer(old,"revision",0)+1);value.add("capabilities",new JsonObject());value.addProperty("updatedAt",Json.now());
+        // 能力结论的缓存键是「接口地址+模型+协议」：改名字、调限额等普通配置修改保留既有结论；换接口地址或协议后结论属于另一个端点，才整体清空。
+        value.add("capabilities",base.equals(Json.str(old,"baseUrl",""))&&protocol.equals(Json.str(old,"protocol",""))?Json.object(old,"capabilities"):new JsonObject());
+        value.addProperty("revision",Json.integer(old,"revision",0)+1);value.addProperty("updatedAt",Json.now());
         try{HttpRequest.Builder validator=HttpRequest.newBuilder(uri);for(var header:Json.object(value,"headers").entrySet()){if(Set.of("host","content-length","connection","authorization","cookie").contains(header.getKey().toLowerCase()))throw new IllegalArgumentException();validator.header(header.getKey(),header.getValue().getAsString());}}
         catch(IllegalArgumentException e){throw new ApiError(400,"header_invalid","请求头名称或值无效，或尝试覆盖受保护请求头。");}
         return store.tx(c->{Store.update(c,"INSERT INTO providers(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",id,value);Store.event(c,"provider.saved",null,null,null,Json.obj("providerId",id));return value;});
@@ -251,8 +254,13 @@ final class Providers {
         boolean stream=Json.bool(p,"stream",false);
         JsonObject body=body(provider,model,messages,Json.array(p,"tools"),Json.bool(p,"structured",false),stream);store.requireSpace(0);
         store.tx(c->{Store.event(c,"call.queued",Json.str(p,"runId",null),null,null,Json.obj("purpose","chat","sessionId",p.get("sessionId"),"providerId",provider.get("id")));return null;});
-        Permit permit;try{permit=awaitPermit(provider,capturedCredential);}catch(ApiError e){store.tx(c->{Store.event(c,"call.not_sent",Json.str(p,"runId",null),null,null,Json.obj("sessionId",p.get("sessionId"),"code",e.code,"requestsReserved",0));return null;});throw e;}
-        String attempt=Json.id(),runId=Json.str(p,"runId",null);String scope=runId==null?Budgets.scope(p,"chat-"+attempt):store.read(c->Json.str(Store.document(c,"runs",runId),"budgetScopeId",runId));JsonObject data=Json.obj("id",attempt,"sessionId",p.get("sessionId"),"budgetScopeId",scope,"providerId",provider.get("id"),"model",model,"status","sent","sentAt",Json.now(),"usage",JsonNull.INSTANCE,"purpose","chat");
+        String attempt=Json.id(),runId=Json.str(p,"runId",null);String scope=runId==null?Budgets.scope(p,"chat-"+attempt):store.read(c->Json.str(Store.document(c,"runs",runId),"budgetScopeId",runId));
+        Permit permit;try{permit=awaitPermit(provider,capturedCredential);}catch(ApiError e){
+            // 等待接口额度期间预算已耗尽时如实报「预算已用尽」：容量超时的「稍后重试」在预算耗尽下是误导
+            // （与运行路径「预算耗尽必须在占用 RPM 许可之前出结论」同一口径，这里补上等待侧的判定）。
+            ApiError failure=e.code.equals("provider_capacity_timeout")&&store.read(c->Budgets.exhausted(c,scope))?new ApiError(409,"budget_exhausted","共享请求预算已用尽，请调整上限后恢复。"):e;
+            store.tx(c->{Store.event(c,"call.not_sent",Json.str(p,"runId",null),null,null,Json.obj("sessionId",p.get("sessionId"),"code",failure.code,"requestsReserved",0));return null;});throw failure;}
+        JsonObject data=Json.obj("id",attempt,"sessionId",p.get("sessionId"),"budgetScopeId",scope,"providerId",provider.get("id"),"model",model,"status","sent","sentAt",Json.now(),"usage",JsonNull.INSTANCE,"purpose","chat");
         data.add("priceSnapshot",Costs.snapshot(provider,model));Costs.attach(data);
         try{
             store.tx(c->{Budgets.ensure(c,scope,Json.number(p,"maxRequests",Long.MAX_VALUE),false);Costs.reserve(c,scope,Json.object(data,"priceSnapshot"));Budgets.reserve(c,scope);if(runId!=null){JsonObject run=Store.document(c,"runs",runId);long used=Json.number(run,"requestsUsed",0),max=Json.number(run,"maxRequests",Long.MAX_VALUE);if(used>=max)throw new ApiError(409,"budget_exhausted","关联任务请求预算已用尽。");run.addProperty("requestsUsed",used+1);Store.update(c,"UPDATE runs SET data=? WHERE id=?",run,runId);}
@@ -292,7 +300,12 @@ final class Providers {
         throw new ApiError(409,"models_conflict","接口配置在读取模型列表期间被修改，清单未登记，请重试一次。");
     }
     JsonObject capabilities(JsonObject p){JsonObject provider=get(Json.required(p,"providerId"));JsonObject result=Json.obj("text","unverified","tools","unverified","image","unverified","multiImage","unverified","structured","unverified","connection","unverified","revision",provider.get("revision"));
-        JsonObject saved=Json.object(Json.object(provider,"capabilities"),Json.required(p,"model"));for(var e:saved.entrySet()){result.add(e.getKey(),Json.object(saved,e.getKey()).get("status"));}result.add("tests",saved);return result;}
+        // 结论按「接口地址+协议」校验归属：与当前端点不一致（伪造、错配或旧端点残留）的记录按未验证处理，不返回给前端。
+        String baseUrl=Json.str(provider,"baseUrl",""),protocol=Json.str(provider,"protocol","");JsonObject saved=new JsonObject();
+        for(var e:Json.object(Json.object(provider,"capabilities"),Json.required(p,"model")).entrySet()){if(!(e.getValue() instanceof JsonObject entry))continue;
+            if(!baseUrl.equals(Json.str(entry,"baseUrl",""))||!protocol.equals(Json.str(entry,"protocol","")))continue;
+            saved.add(e.getKey(),entry);result.add(e.getKey(),entry.get("status"));}
+        result.add("tests",saved);return result;}
     static String capabilityImage(int index)throws Exception{
         // 由编码器产生完整 PNG，避免手抄 Base64 的 CRC 错误被误判为远端不支持图片。
         var picture=new java.awt.image.BufferedImage(64,64,java.awt.image.BufferedImage.TYPE_INT_RGB);var graphics=picture.createGraphics();
@@ -315,8 +328,53 @@ final class Providers {
                 result.addProperty("status","verified");result.addProperty("message",cap.equals("image")||cap.equals("multiImage")?"图片请求被接口接受并返回文本；这不代表定位质量已验证。":"本次能力测试通过。");
             }
         }catch(Exception e){result.addProperty("message",e instanceof ApiError a?a.getMessage():e instanceof RemoteError r?r.getMessage():"响应未符合测试结构，能力仍未验证。");}
-        store.tx(c->{JsonObject current=Store.document(c,"providers",id);if(Json.integer(current,"revision",0)==Json.integer(provider,"revision",0)){JsonObject caps=Json.object(current,"capabilities"),byModel=Json.object(caps,model);byModel.add(cap,result);caps.add(model,byModel);current.add("capabilities",caps);Store.update(c,"UPDATE providers SET data=? WHERE id=?",current,id);}return null;});return result;
+        persist(id,provider,model,Json.obj(cap,result));return result;
     }
+    /** 能力结论落库（test() 与 testAll() 共用）：每条结果记录结论成立时的接口地址与协议，读取口据此拒绝错配或伪造的结果；revision 冲突静默跳过。 */
+    private void persist(String id,JsonObject provider,String model,JsonObject results){String baseUrl=Json.str(provider,"baseUrl",""),protocol=Json.str(provider,"protocol","");
+        store.tx(c->{JsonObject current=Store.document(c,"providers",id);if(Json.integer(current,"revision",0)==Json.integer(provider,"revision",0)){JsonObject caps=Json.object(current,"capabilities"),byModel=Json.object(caps,model);
+            for(var e:results.entrySet()){JsonObject entry=e.getValue().getAsJsonObject().deepCopy();entry.addProperty("baseUrl",baseUrl);entry.addProperty("protocol",protocol);byModel.add(e.getKey(),entry);}
+            caps.add(model,byModel);current.add("capabilities",caps);Store.update(c,"UPDATE providers SET data=? WHERE id=?",current,id);}return null;});}
+    private static void pass(JsonObject tests,String cap,String message){JsonObject result=tests.getAsJsonObject(cap);result.addProperty("status","verified");result.addProperty("message",message);}
+    private static void fail(JsonObject tests,String cap,String message){tests.getAsJsonObject(cap).addProperty("message",message);}
+    private static void fail(JsonObject tests,String cap,Exception e){fail(tests,cap,e instanceof ApiError a?a.getMessage():e instanceof RemoteError r?r.getMessage():"响应未符合测试结构，能力仍未验证。");}
+    /** 合并探针的请求构造：提示词、图片（capabilityImage(0/1)）与 report_status 工具定义均沿用单能力 test()，只走既有 chat 通道。 */
+    private JsonObject probe(String id,String model,int images,boolean tool,boolean structured,AtomicInteger billed,String... prompts)throws Exception{
+        JsonArray tools=new JsonArray(),content=new JsonArray();for(String prompt:prompts)content.add(Json.obj("type","text","text",prompt));
+        if(images>0){content.add(Json.obj("type","image_url","image_url",Json.obj("url",capabilityImage(0))));if(images>1)content.add(Json.obj("type","image_url","image_url",Json.obj("url",capabilityImage(1))));}
+        if(tool)tools.add(Json.obj("type","function","function",Json.obj("name","report_status","description","Report test status","parameters",Json.obj("type","object","properties",Json.obj("status",Json.obj("type","string")),"required",Json.arr("status")))));
+        JsonArray messages=Json.arr(Json.obj("role","user","content",content));billed.incrementAndGet();
+        return chat(Json.obj("providerId",id,"model",model,"messages",messages,"tools",tools,"structured",structured));}
+    /**
+     * 一键验证六项能力：连接走不计费的 models(id)，其余五项合并为 3 次并发真实调用（虚拟线程并行、复用 chat 通道）。
+     * 探针 A「文本+1 图」同时验 text/image，探针 B「文本+2 图+report_status」同时验 multiImage/tools（同一响应内独立判定），探针 C 验 structured。
+     * 每项结论形状与 test() 完全一致并共用落库；billedCalls 为实际发起的 chat 调用次数（验收「一键验证真实计费次数从 6 降到 ≤3」）。
+     */
+    JsonObject testAll(JsonObject p){String id=Json.required(p,"providerId"),model=Json.required(p,"model");
+        JsonObject provider=get(id);JsonObject tests=new JsonObject();
+        for(String cap:List.of("connection","text","image","multiImage","structured","tools"))tests.add(cap,Json.obj("status","unverified","testedAt",Json.now(),"revision",provider.get("revision"),"model",model));
+        try{models(id);pass(tests,"connection","模型列表接口可连接；不代表模型可调用。");}catch(Exception e){fail(tests,"connection",e);}
+        AtomicInteger billed=new AtomicInteger();
+        // 探针 A：文本+1 图，一次调用同时验证 text 与 image；无文本即两项都未验证。
+        Runnable a=()->{try{JsonObject response=probe(id,model,1,false,false,billed,"Reply OK. If images are attached, state their count.");
+            if(Json.str(response,"content","").isBlank()){fail(tests,"text","本次响应没有可用文本，能力仍未验证。");fail(tests,"image","本次响应没有可用文本，能力仍未验证。");return;}
+            pass(tests,"text","本次能力测试通过。");pass(tests,"image","图片请求被接口接受并返回文本；这不代表定位质量已验证。");}catch(Exception e){fail(tests,"text",e);fail(tests,"image",e);}};
+        // 探针 B：文本+2 图+report_status 工具，multiImage 与 tools 在同一次响应里独立判定：有非空文本即多图通过，工具不按约定调用只落 tools 未验证。
+        Runnable b=()->{JsonObject response;
+            try{response=probe(id,model,2,true,false,billed,"Reply OK. If images are attached, state their count.","Call the report_status tool once with status='ok'.");}catch(Exception e){fail(tests,"multiImage",e);fail(tests,"tools",e);return;}
+            if(Json.str(response,"content","").isBlank())fail(tests,"multiImage","本次响应没有可用文本，能力仍未验证。");else pass(tests,"multiImage","图片请求被接口接受并返回文本；这不代表定位质量已验证。");
+            try{JsonArray calls=Json.array(response,"toolCalls");if(calls.size()!=1)throw new ApiError(422,"tools_not_demonstrated","本次响应未按约定调用一次 report_status，能力仍未验证。");
+                JsonObject call=calls.get(0).getAsJsonObject(),arguments=Json.parse(Json.required(call,"arguments"));if(!Json.str(call,"name","").equals("report_status")||!Json.str(arguments,"status","").equals("ok"))throw new ApiError(422,"tools_not_demonstrated","工具名称或 status 参数不符合能力测试约定。");
+                pass(tests,"tools","本次能力测试通过。");}catch(Exception e){fail(tests,"tools",e);}};
+        // 探针 C：结构化判定与单能力 test() 的 structured 完全一致（空文本→text_not_demonstrated，非布尔 ok=true→structured_not_demonstrated）。
+        Runnable c=()->{try{JsonObject response=probe(id,model,0,false,true,billed,"Return exactly a JSON object with ok=true.");
+            if(Json.str(response,"content","").isBlank())throw new ApiError(422,"text_not_demonstrated","本次响应没有可用文本，能力仍未验证。");
+            JsonElement ok=Json.parse(Json.required(response,"content")).get("ok");if(ok==null||!ok.isJsonPrimitive()||!ok.getAsJsonPrimitive().isBoolean()||!ok.getAsBoolean())throw new ApiError(422,"structured_not_demonstrated","结构化响应未返回布尔 ok=true，能力仍未验证。");
+            pass(tests,"structured","本次能力测试通过。");}catch(Exception e){fail(tests,"structured",e);}};
+        try(var pool=Executors.newVirtualThreadPerTaskExecutor()){List<Future<?>> pending=new ArrayList<>();pending.add(pool.submit(a));pending.add(pool.submit(b));pending.add(pool.submit(c));
+            for(Future<?> call:pending)try{call.get();}catch(InterruptedException e){Thread.currentThread().interrupt();break;}catch(Exception ignored){}}
+        persist(id,provider,model,tests);
+        return Json.obj("revision",provider.get("revision"),"tests",tests,"billedCalls",billed.get());}
     static boolean sensitiveName(String name){String n=name.toLowerCase(Locale.ROOT).replace("-","").replace("_","");return n.matches(".*(authorization|apikey|secret|password|cookie).*|key|token|accesstoken|refreshtoken|xauthtoken");}
     JsonElement redact(JsonElement value){return redact(value,null);}
     JsonElement redact(JsonElement value,Credential sentCredential){if(value==null)return JsonNull.INSTANCE;if(value.isJsonObject()){JsonObject o=new JsonObject();for(var e:value.getAsJsonObject().entrySet())o.add(e.getKey(),sensitiveName(e.getKey())?Json.element("[redacted]"):redact(e.getValue(),sentCredential));return o;}
