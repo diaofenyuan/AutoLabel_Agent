@@ -360,6 +360,10 @@ if (composerOnly) {
   assert.equal(byCheck.get('composer-expands-tools')?.choices, 2);
   assert.equal(byCheck.get('composer-expands-tools')?.billing, true);
   assert.equal(byCheck.get('composer-expands-tools')?.flow, true);
+  const localModelMenu = byCheck.get('local-model-picker-opens');
+  assert.equal(localModelMenu?.visible, true, `内置模型菜单没有显示：${JSON.stringify(localModelMenu)}`);
+  assert.ok(localModelMenu?.width > 0 && localModelMenu?.top >= 0 && localModelMenu?.right <= localModelMenu?.viewport,
+    `内置模型菜单没有在输入卡附近展开：${JSON.stringify(localModelMenu)}`);
   // 改选择后摘要跟着改。
   assert.ok(String(byCheck.get('composer-summary-follows-choice')?.summary ?? '').includes('先看方案'));
   // 主操作一眼可读：发送按钮不被挤成两行。

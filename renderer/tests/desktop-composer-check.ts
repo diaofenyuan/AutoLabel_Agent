@@ -69,6 +69,18 @@ export async function checkDesktopComposer(window: BrowserWindow, output: string
     assert.equal(expanded.flow, true, '任务流程入口应跟着工具行一起收到弹层里');
     checks.push({ check: 'composer-expands-tools', ...expanded });
 
+    // 内置模型菜单是输入卡里的嵌套弹层：必须相对自己的按钮展开，不能跑到页面左上角之外。
+    await js(`document.querySelector('.chat-panel .local-model-picker > button')?.click()`);
+    await waitFor(`!!document.querySelector('.chat-panel .local-model-menu')`);
+    const localModelMenu = await js<{ visible: boolean; width: number; top: number; right: number; viewport: number }>(
+      `(()=>{const menu=document.querySelector('.chat-panel .local-model-menu');const rect=menu?.getBoundingClientRect();return {visible:!!menu&&getComputedStyle(menu).visibility==='visible',width:Math.round(rect?.width??0),top:Math.round(rect?.top??-1),right:Math.round(rect?.right??-1),viewport:innerWidth};})()`);
+    assert.equal(localModelMenu.visible, true, '点击内置模型后应显示菜单');
+    assert.ok(localModelMenu.width > 0 && localModelMenu.top >= 0 && localModelMenu.right <= localModelMenu.viewport,
+      `内置模型菜单应在视口内展开：${json(localModelMenu)}`);
+    checks.push({ check: 'local-model-picker-opens', ...localModelMenu });
+    await js(`document.querySelector('.chat-panel .local-model-picker > button')?.click()`);
+    await waitFor(`!document.querySelector('.chat-panel .local-model-menu')`);
+
     // ===== 改执行方式，摘要跟着改 =====
     await js(`([...document.querySelectorAll('.chat-panel .composer-popover .composer-choices button')].find(node=>node.innerText.trim()==='先看方案')).click()`);
     await waitFor(`document.querySelector('.chat-panel .composer-summary')?.innerText.includes('先看方案')`);
