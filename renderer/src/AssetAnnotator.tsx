@@ -9,6 +9,31 @@ import QualityCanvas from './QualityCanvas';
 import ResultViewer from './ResultViewer';
 import { readRegion, type AnnotationRegion } from './DirectRun';
 import { annotationAttributeIssues } from './templateAttributes';
+import type { VideoContinuityIssue } from './videoContinuity';
+
+/** 候选框的几何问题留在人工复核入口展示，避免用户只看到框却漏掉风险原因。 */
+function CandidateGeometryReview({ asset }: { asset: Asset }) {
+  if (asset.status !== 'candidate' || asset.metadata?.requiresGeometryReview !== true) return null;
+  const values = asset.metadata.geometryIssues;
+  const issues = Array.isArray(values)
+    ? values.filter((value): value is { message: string } => Boolean(value) && typeof value === 'object'
+      && typeof (value as { message?: unknown }).message === 'string')
+    : [];
+  const visible = issues.slice(0, 5);
+  return <section className="candidate-geometry-review" aria-label="候选框几何复核">
+    <Notice>这是模型候选框，需要人工核对目标边界；系统没有自动裁剪或修补框。</Notice>
+    {visible.length > 0 && <ul>{visible.map((issue, index) => <li key={index}>{issue.message}</li>)}</ul>}
+    {issues.length > visible.length && <p className="muted tiny">另有 {issues.length - visible.length} 条复核提示，可在任务结果详情中查看。</p>}
+  </section>;
+}
+
+function VideoContinuityReview({ issues }: { issues: VideoContinuityIssue[] }) {
+  if (!issues.length) return null;
+  return <section className="candidate-geometry-review" aria-label="视频帧连续性复核">
+    <Notice>系统发现同一视频的相邻已加载帧可能存在连续性异常；以下内容只作人工复核提示，不会改动候选框或确认状态。</Notice>
+    <ul>{issues.map(issue => <li key={issue.code}>{issue.message}</li>)}</ul>
+  </section>;
+}
 
 /**
  * 素材标注编辑器：把画布接到真实的 `annotation.save` 上。
@@ -20,9 +45,10 @@ import { annotationAttributeIssues } from './templateAttributes';
  * 保存走乐观锁，冲突时不静默重试覆盖——覆盖等于丢别人的结果；改为载入最新版本并提示核对，
  * 把决定权交回人。
  */
-export default function AssetAnnotator({ asset, classes, taskType, templateSettings, connectionTemplate, maxHeight, initialAnnotations, onClose, onSaved }: {
+export default function AssetAnnotator({ asset, classes, taskType, templateSettings, connectionTemplate, maxHeight, initialAnnotations, continuityIssues = [], onClose, onSaved }: {
   asset: Asset; classes: LabelClass[]; taskType: TaskType; templateSettings?: Record<string, unknown>;
-  connectionTemplate?: unknown; maxHeight?: string; initialAnnotations?: Annotation[]; onClose: () => void; onSaved: (asset: Asset) => void;
+  connectionTemplate?: unknown; maxHeight?: string; initialAnnotations?: Annotation[]; continuityIssues?: VideoContinuityIssue[];
+  onClose: () => void; onSaved: (asset: Asset) => void;
 }) {
   const { notify, syncWindowDirtySource, project, setProject } = useApp();
   const [mode, setMode] = useState<'view' | 'edit'>(initialAnnotations ? 'edit' : 'view');
@@ -101,7 +127,7 @@ export default function AssetAnnotator({ asset, classes, taskType, templateSetti
   }
 
   if (mode === 'view') return <div className="asset-annotator">
-    {loading ? <Loading label="正在读取最新标注…" /> : <ResultViewer asset={current} classes={classes} connectionTemplate={connectionTemplate} maxHeight={maxHeight} />}
+    {loading ? <Loading label="正在读取最新标注…" /> : <><CandidateGeometryReview asset={current}/><VideoContinuityReview issues={continuityIssues}/><ResultViewer asset={current} classes={classes} connectionTemplate={connectionTemplate} maxHeight={maxHeight} /></>}
     <p className="muted tiny">只读预览。要改标注就点下面的「编辑标注」直接改，也可以在对话里说明，例如「把第 2 个框改成行人」。</p>
     {error && <p role="alert" className="inline-error">{error}</p>}
     <div className="modal-actions">
@@ -116,6 +142,8 @@ export default function AssetAnnotator({ asset, classes, taskType, templateSetti
       <span className="muted tiny">{current.name} · 当前版本 {current.version} · {current.annotations.length} 个对象{dirty ? ' · 有未保存改动' : ''}</span>
       <Button disabled={busy} onClick={async () => { if (dirty && !(await confirmDialog('有未保存的改动，确定返回预览？'))) return; setDirty(false); setAnnotations(structuredClone(current.annotations)); setMode('view'); }}><Eye size={14} />返回预览</Button>
     </div>
+    <CandidateGeometryReview asset={current}/>
+    <VideoContinuityReview issues={continuityIssues}/>
     <QualityCanvas mediaUrl={current.mediaUrl ?? ''} width={current.width} height={current.height} annotations={annotations}
       classes={classes} taskType={taskType} purpose="asset" keypointNames={templateSettings?.keypointNames as string[] | undefined}
       keypointConnections={templateSettings?.keypointConnections} templateSettings={templateSettings}

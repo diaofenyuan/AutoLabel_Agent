@@ -54,7 +54,11 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     const defaultDensity = await js<string>(`document.querySelector('[aria-label="视频采样密度"]').value`);
     assert.equal(defaultDensity, 'scene', `抽帧面板应默认给「场景变化（推荐）」，实际 ${defaultDensity}`);
     assert.equal(await js<boolean>(`[...document.querySelectorAll('.modal-actions button')].some(b=>b.innerText.trim()==='开始抽帧'&&!b.disabled)`), true, '拖入视频后主按钮应直接可点「开始抽帧」');
-    checks.push({ check: 'video-drop-default-scene', defaultDensity, primaryReady: true });
+    const initialEstimate = await js<string>(`document.querySelector('.video-scene-estimate')?.innerText??''`);
+    const initialStorageEstimate = await js<string>(`document.querySelector('.video-output-estimate')?.innerText??''`);
+    assert.match(initialEstimate, /最多约 80 个候选帧/, `场景采样要按视频时长显示候选帧上界：${initialEstimate}`);
+    assert.match(initialStorageEstimate, /PNG/, `空间估算应说明当前输出格式：${initialStorageEstimate}`);
+    checks.push({ check: 'video-drop-default-scene', defaultDensity, primaryReady: true, candidateEstimateVisible: true });
     // 关掉「抽帧完成后自动导入项目」，才能验证「产物就绪但尚未入库」这一段；它是偏好设置，界面开关在应用层进度条上。
     const settings = await api<Record<string, unknown>>('settings.get'); await api('settings.save', { settings: { ...settings, frameAutoImport: false } });
     await select('[aria-label="视频采样密度"]', 'custom'); await select('[aria-label="视频采样方式"]', 'interval'); await fill('[aria-label="视频采样值"]', '1');
@@ -62,11 +66,17 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     await click('.video-advanced>summary');
     await js(`(()=>{const l=[...document.querySelectorAll('.checkbox-row')].find(e=>e.innerText.includes('使用整段已知时长'));if(l.querySelector('input').checked)l.querySelector('input').click();})()`);
     await wait(`!!document.querySelector('[aria-label="视频时间段 1 终点"]')`);
-    await fill('[aria-label="视频时间段 1 终点"]', '2'); await button('添加时间段'); await fill('[aria-label="视频时间段 2 起点"]', '1'); await fill('[aria-label="视频时间段 2 终点"]', '6'); await button('开始抽帧'); await wait(`document.querySelector('.video-import .media-error')?.textContent.includes('时间段')`); assert.equal((await api('media.job.list', { projectId: project.id })).total, 0);
+    await fill('[aria-label="视频时间段 1 终点"]', '2'); await button('添加时间段'); await fill('[aria-label="视频时间段 2 起点"]', '1'); await fill('[aria-label="视频时间段 2 终点"]', '6');
+    assert.equal(await js<boolean>(`!!document.querySelector('.video-output-estimate')`), false, '范围重叠时应隐藏空间估算，避免展示错误总量');
+    await button('开始抽帧'); await wait(`document.querySelector('.video-import .media-error')?.textContent.includes('时间段')`); assert.equal((await api('media.job.list', { projectId: project.id })).total, 0);
     await fill('[aria-label="视频时间段 2 起点"]', '4');
     await js(`(()=>{const l=[...document.querySelectorAll('.checkbox-row')].find(e=>e.innerText.trim()==='指定输出尺寸');if(!l.querySelector('input').checked)l.querySelector('input').click();})()`);
     await wait(`!!document.querySelector('[aria-label="视频输出宽度"]')`);
     await fill('[aria-label="视频输出宽度"]', '384'); await fill('[aria-label="视频输出高度"]', '288'); await select('[aria-label="视频尺寸适配"]', 'contain'); await select('[aria-label="视频输出格式"]', 'jpg'); assert.equal(await js(`document.querySelector('[aria-label="视频JPEG质量"]').value`), '3'); await select('[aria-label="视频输出格式"]', 'png');
+    await wait(`document.querySelector('.video-output-estimate')?.innerText.includes('4 帧 × 384 × 288，PNG')`);
+    const partialEstimate = await js<string>(`document.querySelector('.video-output-estimate').innerText`);
+    assert.match(partialEstimate, /产物空间粗估：约 .+–.+（4 帧 × 384 × 288，PNG）/);
+    checks.push({ check: 'video-range-and-storage-estimate', selectedRanges: [{ start: 0, end: 2 }, { start: 4, end: 6 }], estimate: partialEstimate });
     await capture('-parameters.png', 'dialog[open] .modal-inner>header'); await button('开始抽帧'); await wait(`!document.querySelector('dialog[open]')`);
 
     // ===== 任务详情：抽帧产物与逐帧记录在「任务 · 素材任务」里回看 =====
@@ -99,9 +109,16 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     assert.ok(thumbnailCache, `找不到缩略图缓存目录，实际试过：${json(candidates)}`);
     await rm(thumbnailCache, { recursive: true, force: true });
     assert.ok(!(await stat(thumbnailCache).catch(() => null)), '缩略图缓存应能整目录删除（可重建缓存）');
-    const rebuilt = new Uint8Array(await (await net.fetch(thumbs[0])).arrayBuffer());
+    const concurrentRebuilds = await Promise.all(Array.from({ length: 4 }, async () => {
+      // 自定义媒体协议不接受查询串；复用同一地址即可真实覆盖同一缓存键的并发重建。
+      const response = await net.fetch(thumbs[0]);
+      assert.ok(response.ok, `并发重建缩略图应成功，实际 ${response.status}`);
+      return new Uint8Array(await response.arrayBuffer());
+    }));
+    const rebuilt = concurrentRebuilds[0];
     assert.equal(rebuilt.length, thumbBytes.length, `删掉缓存后应按基准图重建出同样大小的缩略图（${rebuilt.length} vs ${thumbBytes.length}）`);
-    checks.push({ check: 'thumbnail-served-and-rebuildable', thumbBytes: thumbBytes.length, fullBytes: fullBytes.length, rebuiltBytes: rebuilt.length });
+    assert.ok(concurrentRebuilds.every(bytes => Buffer.from(bytes).equals(Buffer.from(rebuilt))), '并发重建应返回相同的完整缩略图');
+    checks.push({ check: 'thumbnail-served-and-rebuildable', thumbBytes: thumbBytes.length, fullBytes: fullBytes.length, rebuiltBytes: rebuilt.length, concurrentRebuilds: concurrentRebuilds.length });
     // 标准答案集入口：界面重构移除旧页面后它一直没有新落点，评测因此没法给新项目建真值；这里守一条「概览页能打开它」。
     await js(`([...document.querySelectorAll('.overview-page button')].find(node=>node.innerText.trim()==='标准答案集')).click()`);
     await wait(`!!document.querySelector('dialog[open]')&&document.querySelector('dialog[open]').innerText.includes('独立标准答案集')`);

@@ -48,6 +48,7 @@ public final class EngineTest {
         if(args.length>0&&args[0].equals("materials-root")){MaterialsRootTest.run(root);System.out.println("PASS "+assertions+" materials root assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("training-root")){TrainingRootTest.run(root);System.out.println("PASS "+assertions+" training root assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("dataset-versions")){DatasetVersionsTest.run(root);System.out.println("PASS "+assertions+" dataset version assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
+        if(args.length>0&&args[0].equals("asset-overview")){AssetOverviewTest.run(root);System.out.println("PASS "+assertions+" asset overview assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("media-recipes")){MediaRecipesTest.run(root);System.out.println("PASS "+assertions+" media recipe assertions; local fixtures only. VERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("view-integration")){ViewRunIntegrationTest.run(root);System.out.println("PASS "+assertions+" view integration assertions.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("local-integration")){LocalRunIntegrationTest.run(root);System.out.println("PASS "+assertions+" local run integration assertions.\nVERIFICATION_DIR="+root);return;}

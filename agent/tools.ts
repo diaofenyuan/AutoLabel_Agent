@@ -47,6 +47,29 @@ function annotationConfiguration(p: Project, env: ToolEnvironment) {
   if (result.issues.length) throw new AgentError('INVALID_CONFIGURATION', result.issues[0].message);
   return result;
 }
+type AnnotationRegion = { left: number; top: number; right: number; bottom: number };
+
+/**
+ * 对话式标注与直达标注共用项目级区域。区域来自画布设置，先在 Agent 边界复核，
+ * 避免坏配置绕到引擎才失败；配置有效时同时启用 1920 长边副本，减少 4K 视频帧的
+ * 传输与接口超时，并让区域内的小目标在模型输入中占更大比例。
+ */
+function annotationPayload(p: Project): Record<string, unknown> | undefined {
+  const raw = p.settings?.annotationRegion;
+  if (raw == null) return undefined;
+  if (typeof raw !== 'object' || Array.isArray(raw))
+    throw new AgentError('INVALID_CONFIGURATION', '项目标注区域格式无效，请在画布上重新框选。');
+  const value = raw as Record<string, unknown>;
+  const region = {
+    left: value.left, top: value.top, right: value.right, bottom: value.bottom,
+  } as AnnotationRegion;
+  const values = [region.left, region.top, region.right, region.bottom];
+  if (!values.every(item => typeof item === 'number' && Number.isFinite(item) && item >= 0 && item <= 1) ||
+    region.right <= region.left || region.bottom <= region.top ||
+    region.right - region.left < 0.02 || region.bottom - region.top < 0.02)
+    throw new AgentError('INVALID_CONFIGURATION', '项目标注区域无效或过小，请在画布上重新框选。');
+  return { maxEdge: 1920, quality: 92, region };
+}
 async function selectedReferences(environment: ToolEnvironment, targets?: string[]) {
   const references = environment.context.referenceAssetIds ?? [];
   if (references.length && !targets)
@@ -321,6 +344,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         }
       }
       const referenceAssetIds = await selectedReferences(env, selected);
+      const payload = annotationPayload(p);
       ensureActive(env);
       return env.engine.request('run.create', {
         ...reusePolicy,
@@ -329,6 +353,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         prompt: text(prompt, '标注提示词', 16000), ...(selected ? { assetIds: selected } : {}),
         ...(referenceAssetIds.length ? { referenceAssetIds } : {}),
         ...(env.context.referenceResources?.length ? { referenceResources: env.context.referenceResources } : {}),
+        ...(payload ? { payload } : {}),
         ...(args.concurrency != null || configuration.concurrency != null
           ? { concurrency: integer(args.concurrency ?? configuration.concurrency, '并发数', 1, 32) } : {}),
         ...(configuration.maxRequests != null ? { maxRequests: integer(configuration.maxRequests, '请求上限', 1, 1_000_000) } : {}),

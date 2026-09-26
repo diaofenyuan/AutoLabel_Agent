@@ -8,7 +8,7 @@ final class InputAggregationTest {
     private static int checks;
     public static void main(String[] args) { run(); System.out.println("InputAggregationTest passed: " + checks + " assertions"); }
     static void run() {
-        coverageAndEmpty(); identifiersAndHash(); duplicates(); inheritedReview(); classification(); invalidMapping(); limits();
+        coverageAndEmpty(); identifiersAndHash(); duplicates(); suspiciousBboxes(); smallAndEdgeBboxes(); inheritedReview(); classification(); invalidMapping(); limits();
     }
     private static void check(boolean value, String message) { checks++; if (!value) throw new AssertionError(message); }
     private static void near(double actual, double expected, String message) { check(Math.abs(actual - expected) < 1e-8, message + " actual=" + actual); }
@@ -105,6 +105,45 @@ final class InputAggregationTest {
         JsonObject vertical = horizontal.deepCopy(); vertical.addProperty("id", "vertical"); vertical.addProperty("rotation", 90);
         JsonObject crossing = aggregate(obb, Json.arr(expected("a", full()), expected("b", full())), result("a", "succeeded", mapping(obb, full(), Json.arr(horizontal))), result("b", "succeeded", mapping(obb, full(), Json.arr(vertical))));
         check(!issue(crossing, "possible_duplicate_object") && !Json.bool(crossing, "requiresGeometryReview", true), "rotated rectangle IoU is not stored-axis bbox overlap");
+    }
+    private static void suspiciousBboxes() {
+        JsonObject project = project("detect");
+        JsonObject ordinary = aggregate(project, Json.arr(expected("small", full())),
+            result("small", "succeeded", mapping(project, full(), Json.arr(box("small-box", 20, 20, 40, 40)))));
+        check(!issue(ordinary, "bbox_coverage_suspicious") && !Json.bool(ordinary, "requiresGeometryReview", true),
+            "ordinary detection box does not require geometry review");
+
+        JsonObject large = aggregate(project, Json.arr(expected("large", full())),
+            result("large", "succeeded", mapping(project, full(), Json.arr(box("large-box", 4, 4, 92, 60)))));
+        review(large, "bbox_coverage_suspicious");
+        check(Json.array(large, "annotations").size() == 1, "suspicious box remains available as a candidate");
+        JsonObject issue = Json.array(large, "geometryIssues").asList().stream()
+            .map(JsonElement::getAsJsonObject).filter(item -> "bbox_coverage_suspicious".equals(Json.str(item, "code", ""))).findFirst().orElseThrow();
+        check("error".equals(Json.str(issue, "severity", "")) && Json.str(issue, "message", "").contains("人工核对"),
+            "suspicious box issue explains the manual review gate");
+    }
+    private static void smallAndEdgeBboxes() {
+        JsonObject project = project("detect");
+        JsonObject small = aggregate(project, Json.arr(expected("small", full())),
+            result("small", "succeeded", mapping(project, full(), Json.arr(box("small-box", 20, 20, 8, 8)))));
+        review(small, "bbox_small_target");
+        check(Json.array(small, "annotations").size() == 1, "small box remains available as a candidate");
+        JsonObject smallIssue = Json.array(small, "geometryIssues").asList().stream()
+            .map(JsonElement::getAsJsonObject).filter(item -> "bbox_small_target".equals(Json.str(item, "code", ""))).findFirst().orElseThrow();
+        near(Json.decimal(Json.object(smallIssue, "coverage"), "areaRatio", -1), 0.0064, "small-box issue records normalized image coverage");
+
+        JsonObject edge = aggregate(project, Json.arr(expected("edge", full())),
+            result("edge", "succeeded", mapping(project, full(), Json.arr(box("edge-box", 0, 20, 10, 20)))));
+        review(edge, "bbox_touches_image_edge");
+        check(Json.array(edge, "annotations").size() == 1, "edge-touching box remains available as a candidate");
+        JsonObject edgeIssue = Json.array(edge, "geometryIssues").asList().stream()
+            .map(JsonElement::getAsJsonObject).filter(item -> "bbox_touches_image_edge".equals(Json.str(item, "code", ""))).findFirst().orElseThrow();
+        check(Json.array(edgeIssue, "edges").equals(Json.arr("left")), "edge issue identifies which image border is touched");
+
+        JsonObject clean = aggregate(project, Json.arr(expected("clean", full())),
+            result("clean", "succeeded", mapping(project, full(), Json.arr(box("clean-box", 20, 20, 40, 40)))));
+        check(!issue(clean, "bbox_small_target") && !issue(clean, "bbox_touches_image_edge")
+            && !Json.bool(clean, "requiresGeometryReview", true), "ordinary centered box has no size or edge review");
     }
     private static void inheritedReview() {
         JsonObject project = project("detect"), base = mapping(project, full(), Json.arr(box("one", 20, 20, 10, 10)));

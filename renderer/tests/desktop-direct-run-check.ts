@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { gotoWelcome, openFirstAssetCanvas, openProjectChat, openSelectedProjectOverview } from './desktop-navigation';
+import { gotoWelcome, openFirstAssetCanvas, openProjectChat, openProjectOverview, openSelectedProjectOverview } from './desktop-navigation';
 
 /**
  * 直达标注验收：不依赖对话模型也能开始标注。
@@ -15,7 +15,7 @@ import { gotoWelcome, openFirstAssetCanvas, openProjectChat, openSelectedProject
  * 3. 结果落成候选（candidate），人工已确认的内容不受影响；
  * 4. 项目没有类别时，弹层给出原因并禁用开始按钮，而不是让用户点了才发现。
  * 5. 画布精修可用：方向键 1px / Shift 10px 微调、滚轮缩放、中键拖拽平移。
- * 6. 结果筛选芯片（全部/有候选/无目标/失败/已确认/未处理）计数与网格一致，筛选态下全选只选筛选结果。
+ * 6. 结果筛选计数覆盖整个项目、网格按页加载，筛选态下全选会选中完整筛选结果。
  *
  * 夹具是一个回环服务商：只回一份合法标注 JSON，classId 用项目里真实存在的类别。
  */
@@ -113,6 +113,10 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
       return { text: p.innerText.replace(/\\s+/g,' ').slice(0,240), startDisabled: Boolean(start?.disabled) };})()`);
     assert.ok(panel.text.includes('fixture-direct'), `弹层应显示当前标注模型，实际：${panel.text}`);
     assert.equal(panel.startDisabled, false, '前置齐全时开始按钮应可用');
+    const oneOffInstruction = '只标画面中间的粉发手办，包含自身底座，忽略背景大型摆件。';
+    await js(`(()=>{const e=document.querySelector('.direct-run .picker-popover textarea');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,${json(oneOffInstruction)});
+      e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     await button('开始标注', `document.querySelector('.direct-run .picker-popover')`);
     await waitFor(`!document.querySelector('.direct-run .picker-popover')`);
     // 运行必须有真实请求发生：夹具服务只回合法 JSON，不依赖调度时机。
@@ -128,6 +132,10 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     assert.ok(direct, `应创建使用标注模型的运行，实际：${json(runs.map(item => item.model))}`);
     const settled = await runStatus(direct!.id, ['completed', 'completed_with_errors', 'needs_attention', 'cancelled']);
     assert.equal(settled.statistics.succeeded, 1, `直达标注应成功一张，实际：${json(settled.statistics)}`);
+    const directDetail = await api<{ prompt: string }>('run.get', { runId: direct!.id });
+    assert.ok(directDetail.prompt.includes(oneOffInstruction), '本次补充要求必须写入运行提示词');
+    assert.ok(directDetail.prompt.includes('贴合目标可见外缘'), '直接标注提示词必须明确框贴目标外缘');
+    assert.ok(directDetail.prompt.includes('底座、支架、坐垫或托架'), '直接标注提示词必须说明目标自身支撑结构应一并包含');
     assert.ok(calls > before, '夹具服务应收到真实请求');
     const projectId = (await api<Array<{ id: string }>>('project.list', {}))[0].id;
     const assets = await api<{ items: Array<{ id: string; status: string; annotations?: unknown[] }> }>('asset.list', { projectId, limit: 100 });
@@ -136,6 +144,7 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     assert.ok(history.some(item => item.source === 'api'), `应写入候选版本，实际版本来源：${json(history.map(item => item.source))}`);
     assert.ok((assets.items[0].annotations?.length ?? 0) >= 2, `人工预置标注不应被覆盖，实际：${json(assets.items[0].annotations?.length)}`);
     checks.push({ check: 'direct-run-creates-run-without-chat', runId: direct!.id, model: direct!.model, status: settled.status,
+      oneOffInstruction, tightBoxGuidance: directDetail.prompt.includes('贴合目标可见外缘'),
       versionSources: history.map(item => item.source), humanAnnotations: assets.items[0].annotations?.length ?? 0 });
 
     // ===== 发送副本：默认长边 1920，「原图」能明确关掉；实发尺寸与体积记在运行上 =====
@@ -228,7 +237,7 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     // ===== 批量确认：勾选多张一次确认，已确认的跳过、人工内容不被改写 =====
     await openSelectedProjectOverview(driver);
     await js(`(()=>{window.confirm=()=>true;return true;})()`);
-    await js(`([...document.querySelectorAll('.asset-selection button')].find(node=>node.innerText.trim()==='全选已加载')).click()`);
+    await js(`([...document.querySelectorAll('.asset-selection button')].find(node=>node.innerText.trim().startsWith('全选项目素材'))).click()`);
     await waitFor(`[...document.querySelectorAll('.asset-selection button')].some(node=>node.innerText.trim()==='接受候选并确认'&&!node.disabled)`);
     await js(`([...document.querySelectorAll('.asset-selection button')].find(node=>node.innerText.trim()==='接受候选并确认')).click()`);
     await waitFor(`[...document.querySelectorAll('dialog[open] button')].some(node=>node.innerText.trim()==='确定')`);
@@ -255,8 +264,12 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
       await js(`document.querySelector('.result-filter[data-result-filter=${json(chip.key)}]').click()`);
       await new Promise(resolve => setTimeout(resolve, 150));
       const shown = await js<number>(`document.querySelectorAll('.result-grid .result-thumb-wrap').length`);
-      assert.equal(shown, chip.count, `筛选「${chip.key}」应显示 ${chip.count} 张，实际 ${shown}`);
-      filterShown[chip.key] = shown;
+      assert.equal(shown, Math.min(chip.count, 100), `筛选「${chip.key}」首屏应显示至多 100 张，筛选总数 ${chip.count}，实际 ${shown}`);
+      if (shown < chip.count) {
+        await js(`([...document.querySelectorAll('.result-card > button')].find(node=>node.innerText.includes('加载更多'))).click()`);
+        await waitFor(`document.querySelectorAll('.result-grid .result-thumb-wrap').length===${chip.count}`);
+      }
+      filterShown[chip.key] = await js<number>(`document.querySelectorAll('.result-grid .result-thumb-wrap').length`);
     }
     const nonAll = chips.find(chip => chip.key !== 'all' && chip.count > 0);
     assert.ok(nonAll, `批量确认后应至少有一个非「全部」芯片有计数，实际：${json(chips)}`);
@@ -267,6 +280,17 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     await js(`([...document.querySelectorAll('.asset-selection button')].find(node=>node.innerText.includes('全选筛选结果'))).click()`);
     const picked = await js<number>(`document.querySelectorAll('.result-grid .result-thumb-wrap.selected').length`);
     assert.equal(picked, nonAll!.count, `全选筛选结果应只选中筛选出的 ${nonAll!.count} 张，实际 ${picked}`);
+    await button('在对话里处理这些素材', "document.querySelector('.asset-selection')");
+    await waitFor(`!!document.querySelector('.chat-panel .composer-summary')`);
+    await js(`document.querySelector('.chat-panel .composer-summary').click()`);
+    await waitFor(`!!document.querySelector('.chat-panel .composer-popover')`);
+    const selectedScope = await js<string>(`[...document.querySelectorAll('.chat-panel .composer-popover .composer-choices button')].map(node=>node.innerText.trim()).find(text=>text.startsWith('已勾选（跨页）'))??''`);
+    assert.equal(selectedScope, `已勾选（跨页）· ${picked} 张`, `进入对话后应保留筛选选中的 ${picked} 张素材，实际：${selectedScope}`);
+    await js(`([...document.querySelectorAll('.chat-panel .composer-popover .composer-choices button')].find(node=>node.innerText.trim()===${json(selectedScope)})).click()`);
+    await waitFor(`document.querySelector('.chat-panel .composer-summary').innerText.includes(${json(`已勾选（跨页）· ${picked} 张`)})`);
+    checks.push({ check: 'selected-assets-preserved-in-chat', count: picked, scope: selectedScope });
+    await openProjectOverview(driver, projectName!);
+    await waitFor(`!!document.querySelector('.asset-selection button')`);
     await js(`([...document.querySelectorAll('.asset-selection button')].find(node=>node.innerText.trim()==='清空选择')).click()`);
     await js(`document.querySelector('.result-filter[data-result-filter="all"]').click()`);
     checks.push({ check: 'result-filter-chips', shown: filterShown, selectedFilter: nonAll!.key });

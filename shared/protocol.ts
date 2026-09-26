@@ -34,6 +34,8 @@ export interface Asset {
   id: string; projectId: string; name: string; width: number; height: number;
   mediaUrl?: string; thumbnailUrl?: string; contentHash: string;
   status: 'unlabeled' | 'candidate' | 'modified' | 'confirmed' | 'invalid' | 'missing';
+  /** 项目概览的全局审核分类；与原始标注状态分开，失败来自最近运行样本。 */
+  resultState?: 'candidate' | 'empty' | 'failed' | 'confirmed' | 'unlabeled' | 'other';
   annotations: Annotation[]; version: number; source: string;
   draft?: Annotation[]; metadata?: Record<string, unknown>;
   reused?: boolean; reusedFrom?: CandidateReuseProvenance;

@@ -5,6 +5,7 @@ const entries = [['desktop/security.test.ts', 'desktop/dist/security.test.cjs'],
   ['renderer/tests/drop-messages.test.ts', 'desktop/dist/drop-messages.test.cjs'],
   ['renderer/tests/tool-labels.test.ts', 'desktop/dist/tool-labels.test.cjs'],
   ['renderer/tests/glossary.test.ts', 'desktop/dist/glossary.test.cjs'],
+  ['renderer/tests/video-continuity.test.ts', 'desktop/dist/video-continuity.test.cjs'],
   // 这五套原先是孤儿 runner（没有 npm 脚本、无人登记），回归等于没跑；并进来才算数。
   ['desktop/storage.test.ts', 'desktop/dist/storage.test.cjs'],
   ['desktop/flow.test.ts', 'desktop/dist/flow.test.cjs'],

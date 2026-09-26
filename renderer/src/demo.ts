@@ -73,6 +73,15 @@ let queue = Promise.resolve();
 const files = new Map<string, File>();
 /** 演示模式的对话记录只留在当前浏览器内存，不落盘；桌面版本才写入 chats 目录。 */
 const demoChatSessions: ChatSessionSummary[] = [];
+function demoResultState(asset: Asset): NonNullable<Asset['resultState']> {
+  if (asset.status === 'confirmed') return 'confirmed';
+  if (asset.status === 'candidate') return asset.annotations.length ? 'candidate' : 'empty';
+  if (asset.status === 'unlabeled') return 'unlabeled';
+  return 'other';
+}
+function demoProjectAssets(data: DemoData, projectId: unknown) {
+  return data.assets.filter(item => item.projectId === projectId);
+}
 function chooseImages(): Promise<string[]> {
   return new Promise(resolve => {
     const input = document.createElement('input');
@@ -108,7 +117,29 @@ async function dispatch(command: string, p: Record<string, unknown>): Promise<un
       if (p.settings) project.settings = { ...project.settings, ...(p.settings as Record<string, unknown>) };
       project.updatedAt = now(); result = project; break;
     }
-    case 'asset.list': { const list = data.assets.filter(item => item.projectId === p.projectId && (!p.status || item.status === p.status)); return { items: list.slice(Number(p.offset ?? 0), Number(p.offset ?? 0) + Number(p.limit ?? 500)), total: list.length }; }
+    case 'asset.list': {
+      const projectAssets = demoProjectAssets(data, p.projectId);
+      const counts = { all: projectAssets.length, candidate: 0, empty: 0, failed: 0, confirmed: 0, unlabeled: 0, other: 0 };
+      const statusCounts: Record<string, number> = {};
+      for (const item of projectAssets) {
+        const state = demoResultState(item);
+        counts[state]++;
+        statusCounts[item.status] = (statusCounts[item.status] ?? 0) + 1;
+      }
+      const requestedIds = Array.isArray(p.assetIds) ? new Set(p.assetIds as string[]) : null;
+      const all = projectAssets.filter(item => (!p.status || item.status === p.status) && (!requestedIds || requestedIds.has(item.id)));
+      const resultFilter = String(p.resultFilter ?? 'all');
+      const list = resultFilter === 'all' ? all : all.filter(item => demoResultState(item) === resultFilter);
+      const offset = Number(p.offset ?? 0), limit = Number(p.limit ?? 500);
+      return { items: list.slice(offset, offset + limit).map(item => ({ ...item, resultState: demoResultState(item) })), total: list.length, filterCounts: counts, statusCounts };
+    }
+    case 'asset.listIds': {
+      const all = demoProjectAssets(data, p.projectId);
+      const resultFilter = String(p.resultFilter ?? 'all');
+      const list = resultFilter === 'all' ? all : all.filter(item => demoResultState(item) === resultFilter);
+      const offset = Number(p.offset ?? 0), limit = Number(p.limit ?? 500);
+      return { ids: list.slice(offset, offset + limit).map(item => item.id), total: list.length };
+    }
     case 'asset.get': if (!asset) throw new Error('素材不存在。'); return asset;
     case 'asset.import': {
       if (!project) throw new Error('请先打开项目。');

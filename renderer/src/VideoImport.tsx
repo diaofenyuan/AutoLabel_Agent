@@ -32,6 +32,13 @@ function parseRate(reported: string | null | undefined): number | null {
 
 function durationLabel(duration: number | null) { return duration === null ? '时长未知' : `${duration.toFixed(2)} 秒`; }
 
+function storageLabel(bytes: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes, unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
 /** 转码兜底用：把几何与色彩恒定的副本交给引擎，绕开「不猜测」的严格校验；命令同时可复制到终端执行。 */
 function transcodeCommand(sourcePath: string, targetPath: string) {
   return `ffmpeg -y -i "${sourcePath}" -map 0:v:0 -c:v libx264 -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1" -an -sn "${targetPath}"`;
@@ -129,25 +136,76 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
   }
   const mode = density === 'custom' ? customMode : density === 'scene' ? 'scene' : 'interval';
   const sampling = density === 'custom' ? customValue : density === 'scene' ? '' : String(VIDEO_DENSITY_SECONDS[density as Exclude<VideoDensity, 'custom' | 'scene'>]);
-  /** 估算帧数取区间上界，宁可高估也不放过超限。 */
+  /** 估算只使用当前有效区间；编辑出重叠或越界范围时暂不展示，避免给出误导数字。 */
+  function selectedDurations(): number[] | null {
+    if (!inspection) return null;
+    const selected = whole && duration !== null ? [{ start: 0, end: duration }] : ranges;
+    if (!selected.length || selected.length > 32) return null;
+    let previousEnd = -1;
+    const lengths: number[] = [];
+    for (const range of selected) {
+      if (!Number.isFinite(range.start) || !Number.isFinite(range.end) || range.start < 0 || range.end <= range.start || range.end > 604800 || (duration !== null && range.end > duration) || range.start < previousEnd) return null;
+      lengths.push(range.end - range.start);
+      previousEnd = range.end;
+    }
+    return lengths;
+  }
+  function selectedSeconds(): number | null {
+    const lengths = selectedDurations();
+    return lengths ? lengths.reduce((sum, length) => sum + length, 0) : null;
+  }
+  /** 确定性采样按每个区间分别向上取整，作为帧数上界。 */
   function estimateFrames(): number | null {
     if (mode === 'scene') return null;
-    if (duration === null) return null;
+    const lengths = selectedDurations();
+    if (!lengths) return null;
     const value = Number(sampling);
     if (!Number.isFinite(value) || value <= 0) return null;
-    if (mode === 'interval') return Math.ceil(duration / value);
-    if (mode === 'fps') return Math.ceil(duration * value);
+    if (mode === 'interval') return lengths.reduce((sum, length) => sum + Math.ceil(length / value), 0);
+    if (mode === 'fps') return lengths.reduce((sum, length) => sum + Math.ceil(length * value), 0);
     const fps = parseRate(inspection?.reportedFrameRate);
-    return fps === null ? null : Math.ceil(duration * fps / value);
+    if (fps === null || !Number.isFinite(fps) || fps <= 0) return null;
+    return lengths.reduce((sum, length) => sum + Math.ceil(length * fps / value), 0);
   }
-  /** 超限时给出一个必定跑得完的间隔秒数，把「失败」变成「点一下就好」。 */
+  /** 场景模式候选帧最多按每个时间段的采样桶计算；相似帧过滤后实际产物会更少。 */
+  function estimateSceneCandidates(): number | null {
+    if (mode !== 'scene') return null;
+    const lengths = selectedDurations();
+    return lengths ? lengths.reduce((sum, length) => sum + Math.ceil(length / VIDEO_SCENE_MIN_INTERVAL_SECONDS), 0) : null;
+  }
+  /** 超限时按所选总时长给出留有区间取整余量的采样间隔。 */
   function suggestedSeconds(): number | null {
-    if (duration === null || duration <= 0) return null;
-    const estimatedFrames = estimateFrames();
+    const lengths = selectedDurations();
+    if (!lengths) return null;
+    const estimatedFrames = mode === 'scene' ? estimateSceneCandidates() : estimateFrames();
     if (estimatedFrames === null || estimatedFrames <= MAX_FRAMES) return null;
-    return Math.max(1, Math.ceil(duration / MAX_FRAMES));
+    const total = lengths.reduce((sum, length) => sum + length, 0);
+    return Math.max(1, Math.ceil(total / Math.max(1, MAX_FRAMES - lengths.length)));
   }
-  const estimated = estimateFrames(), suggested = suggestedSeconds();
+  /** 仅用于规划磁盘空间的范围估算；图像压缩率受内容影响，完成任务后以实际字节数为准。 */
+  function estimateOutputBytes(frameCount: number | null): [number, number] | null {
+    if (frameCount === null || !inspection) return null;
+    const outputWidth = resize ? Number(width) : inspection.width;
+    const outputHeight = resize ? Number(height) : inspection.height;
+    if (!Number.isSafeInteger(outputWidth) || !Number.isSafeInteger(outputHeight) || outputWidth < 1 || outputHeight < 1 || outputWidth > 20000 || outputHeight > 20000 || outputWidth * outputHeight > 40000000) return null;
+    let lowBytesPerPixel = format === 'png' ? 0.05 : 0.02;
+    let highBytesPerPixel = format === 'png' ? 2 : 0.8;
+    if (format === 'jpg') {
+      const jpegQuality = Number(quality);
+      if (!Number.isInteger(jpegQuality) || jpegQuality < 2 || jpegQuality > 31) return null;
+      const qualityScale = 0.7 + 0.6 * ((33 - jpegQuality) / 31);
+      lowBytesPerPixel *= qualityScale;
+      highBytesPerPixel *= qualityScale;
+    }
+    const pixels = outputWidth * outputHeight * frameCount;
+    const low = pixels * lowBytesPerPixel, high = pixels * highBytesPerPixel;
+    return Number.isFinite(low) && Number.isFinite(high) ? [low, high] : null;
+  }
+  const estimated = estimateFrames(), sceneCandidates = estimateSceneCandidates();
+  const estimateCount = mode === 'scene' ? sceneCandidates : estimated;
+  const selectedDuration = selectedSeconds();
+  const outputBytesEstimate = estimateOutputBytes(estimateCount);
+  const suggested = suggestedSeconds();
   function applySuggestion() {
     if (suggested === null) return;
     if (suggested <= VIDEO_DENSITY_SECONDS.dense) setDensity('dense');
@@ -267,9 +325,10 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
         </div>
         {density === 'custom' && <Field label={customMode === 'interval' ? '间隔（秒）' : customMode === 'every_n' ? '源帧间隔 N' : '目标帧率（帧/秒）'}><input aria-label="视频采样值" type="number" min={customMode === 'every_n' ? 1 : 0.001} step={customMode === 'every_n' ? 1 : 'any'} disabled={busy} value={customValue} onChange={e => setCustomValue(e.target.value)} /></Field>}
         {mode === 'scene'
-          ? <p className="muted tiny">「场景变化」每 {VIDEO_SCENE_MIN_INTERVAL_SECONDS} 秒取一个候选帧，与上一张保留帧相比灰度差异达到 {VIDEO_SCENE_THRESHOLD} 才留下（首帧必留）；相近的帧自动跳过，实际帧数取决于画面变化（上限 {MAX_FRAMES} 帧）。</p>
-          : estimated !== null && <p className="muted tiny">按当前密度预计抽出约 {estimated} 帧{duration !== null && `，视频时长 ${duration.toFixed(2)} 秒`}。</p>}
-        {suggested !== null && <Notice>按当前密度预计 {estimated} 帧，超过引擎单次上限 {MAX_FRAMES} 帧，整单会失败。建议改为每 {suggested} 秒一帧，或只抽其中一段。<div className="notice-actions"><Button onClick={applySuggestion}>改为每 {suggested} 秒一帧</Button></div></Notice>}
+          ? <p className="muted tiny video-scene-estimate">「场景变化」每 {VIDEO_SCENE_MIN_INTERVAL_SECONDS} 秒取一个候选帧，与上一张保留帧相比灰度差异达到 {VIDEO_SCENE_THRESHOLD} 才留下（首帧必留）；相近的帧自动跳过，实际帧数取决于画面变化（上限 {MAX_FRAMES} 帧）。{sceneCandidates !== null && ` 当前所选时间段最多约 ${sceneCandidates} 个候选帧。`}</p>
+          : estimated !== null && <p className="muted tiny">按当前时间段预计抽出约 {estimated} 帧{selectedDuration !== null && `，选中时长 ${selectedDuration.toFixed(2)} 秒`}。</p>}
+        {outputBytesEstimate && estimateCount !== null && <p className="muted tiny video-output-estimate" aria-live="polite">产物空间粗估：约 {storageLabel(outputBytesEstimate[0])}–{storageLabel(outputBytesEstimate[1])}（{estimateCount} 帧 × {resize ? `${Number(width)} × ${Number(height)}` : `${inspection.width} × ${inspection.height}`}，{format === 'jpg' ? 'JPEG' : 'PNG'}）。实际大小受画面内容和压缩影响{mode === 'scene' ? '，场景过滤后通常会更小' : ''}；完成后以任务记录的实际大小为准。</p>}
+        {suggested !== null && <Notice>{mode === 'scene' ? `当前区间最多约 ${sceneCandidates} 个候选帧，可能超过` : `按当前时间段预计 ${estimated} 帧，超过`}引擎单次上限 {MAX_FRAMES} 帧，整单会失败。建议改为每 {suggested} 秒一帧，或缩小时间范围。<div className="notice-actions"><Button onClick={applySuggestion}>改为每 {suggested} 秒一帧</Button></div></Notice>}
         <details className="video-advanced" open={advanced || durationUnknown} onToggle={e => setAdvanced((e.target as HTMLDetailsElement).open)}><summary>高级设置 · 时间范围与输出尺寸</summary>
           <label className="checkbox-row"><input type="checkbox" disabled={busy || duration === null} checked={whole} onChange={e => setWhole(e.target.checked)} />使用整段已知时长</label>
           {durationUnknown && <Notice>视频时长未知，请明确填写抽帧时间范围。</Notice>}

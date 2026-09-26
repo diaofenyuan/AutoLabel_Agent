@@ -7,11 +7,11 @@ import type { AgentContext, EngineClient } from '../types.ts';
 const project = { id: 'project', classes: [{ id: 'object' }], assetCount: 2,
   settings: { annotationProviderId: 'configured', annotationModel: 'vision', prompt: '项目规则', concurrency: 2, maxRequests: 20 } };
 const args = { assetIds: ['target'], prompt: null, concurrency: null };
-function fixture(context: AgentContext = {}) {
+function fixture(context: AgentContext = {}, settings: Record<string, unknown> = project.settings) {
   const submissions: Record<string, unknown>[] = [];
   const state = { reference: { id: 'reference', projectId: 'project', status: 'modified', source: 'manual' } };
   const engine: EngineClient = { async request<T>(command: string, payload: Record<string, unknown> = {}) {
-    if (command === 'project.open') return project as T;
+    if (command === 'project.open') return { ...project, settings } as T;
     if (command === 'asset.get') return (payload.assetId === 'reference' ? state.reference : { id: payload.assetId, projectId: 'project' }) as T;
     if (command === 'run.create') { submissions.push(payload); return { id: 'created' } as T; }
     throw new Error(command);
@@ -33,6 +33,17 @@ test('助手使用项目角色模型和并发，显式无上限不会退回项�
   const changed = fixture({ annotationProviderId: 'another' });
   await assert.rejects(findTool('run_annotation').execute(args, changed.environment), /当前接口选择模型/);
   assert.equal(changed.submissions.length, 0);
+});
+
+test('助手标注沿用项目区域并发送缩小副本，坏区域在提交前拒绝', async () => {
+  const region = { left: 0.08, top: 0.12, right: 0.92, bottom: 0.88 };
+  const f = fixture({}, { ...project.settings, annotationRegion: region });
+  await findTool('run_annotation').execute(args, f.environment);
+  assert.deepEqual(f.submissions[0].payload, { maxEdge: 1920, quality: 92, region });
+
+  const invalid = fixture({}, { ...project.settings, annotationRegion: { left: 0.5, top: 0.1, right: 0.51, bottom: 0.9 } });
+  await assert.rejects(findTool('run_annotation').execute(args, invalid.environment), /区域无效或过小/);
+  assert.equal(invalid.submissions.length, 0);
 });
 
 test('明确人工参考可送入任务，跨项目、候选及目标重叠均在提交前阻断', async () => {

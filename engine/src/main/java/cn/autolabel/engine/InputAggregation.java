@@ -11,9 +11,16 @@ import java.util.*;
 
 /** 汇总固定输入结果；保留候选和来源，不承担执行、人工确认或 NMS。 */
 final class InputAggregation {
-    static final String VERSION = "input-aggregation-v1";
+    static final String VERSION = "input-aggregation-v3";
     static final int MAX_OBJECTS = 10000, MAX_POINTS = 65536;
     static final int MAX_PAIR_CHECKS = 20000, MAX_GEOMETRY_COST = 250000, MAX_DUPLICATE_ISSUES = 1000;
+    private static final double SUSPICIOUS_BBOX_EDGE_RATIO = 0.92;
+    private static final double SUSPICIOUS_BBOX_AREA_RATIO = 0.45;
+    private static final double SUSPICIOUS_BBOX_LARGE_EDGE_RATIO = 0.75;
+    private static final double SMALL_BBOX_EDGE_RATIO = 0.12;
+    private static final double SMALL_BBOX_AREA_RATIO = 0.01;
+    private static final double BBOX_IMAGE_EDGE_MARGIN_RATIO = 0.005;
+    private static final double BBOX_IMAGE_EDGE_MIN_MARGIN_PX = 2;
     private static final Set<String> STATUSES = Set.of("succeeded", "failed", "unknown", "cancelled", "needs_attention");
 
     private record Rect(double x, double y, double width, double height) {
@@ -99,6 +106,16 @@ final class InputAggregation {
                     strictNumbers(original);
                     JsonObject annotation = Annotations.validate(Json.arr(original), baseline, project).get(0).getAsJsonObject();
                     String id = "agg-" + digest(Json.arr(input.id, originalId)); annotation.addProperty("id", id);
+                    if (suspiciousBbox(annotation, width, height)) {
+                        suspiciousBboxIssue(issues, input.id, resultId, id, annotation, width, height);
+                    }
+                    if (smallBbox(annotation, width, height)) {
+                        smallBboxIssue(issues, input.id, resultId, id, annotation, width, height);
+                    }
+                    List<String> imageEdges = touchedImageEdges(annotation, width, height);
+                    if (!imageEdges.isEmpty()) {
+                        imageEdgeIssue(issues, input.id, resultId, id, annotation, width, height, imageEdges);
+                    }
                     JsonObject source = Json.obj("annotationId", id, "inputId", input.id, "resultId", resultId,
                         "sourceAnnotationId", originalId, "classId", annotation.get("classId"), "included", true);
                     candidates.add(new Candidate(input.id, resultId, originalId, annotation, source,
@@ -131,7 +148,11 @@ final class InputAggregation {
             "baseline", Json.obj("id", baselineId, "contentHash", baselineHash, "width", width, "height", height, "version", baselineVersion),
             "template", TaskTemplates.semantic(project), "inputs", identity,
             "policy", Json.obj("duplicateIoU", 0.5, "pairLimit", MAX_PAIR_CHECKS, "geometryCostLimit", MAX_GEOMETRY_COST,
-                "duplicateIssueLimit", MAX_DUPLICATE_ISSUES, "coverage", "usable-success-rectangle-union-v1", "classification", "full-image-consensus-v1"));
+                "duplicateIssueLimit", MAX_DUPLICATE_ISSUES, "coverage", "usable-success-rectangle-union-v1", "classification", "full-image-consensus-v1",
+                "suspiciousBbox", Json.obj("edgeRatio", SUSPICIOUS_BBOX_EDGE_RATIO, "areaRatio", SUSPICIOUS_BBOX_AREA_RATIO,
+                    "largeEdgeRatio", SUSPICIOUS_BBOX_LARGE_EDGE_RATIO),
+                "smallBbox", Json.obj("edgeRatio", SMALL_BBOX_EDGE_RATIO, "areaRatio", SMALL_BBOX_AREA_RATIO),
+                "imageEdgeReview", Json.obj("marginRatio", BBOX_IMAGE_EDGE_MARGIN_RATIO, "minimumMarginPx", BBOX_IMAGE_EDGE_MIN_MARGIN_PX)));
         return Json.obj("resultSetHash", digest(hashInput), "annotations", annotations, "requiresGeometryReview", hasErrors(issues),
             "geometryIssues", issues, "coverage", Json.obj("area", coverage.area, "totalArea", (double)width * height, "complete", coverage.complete),
             "statistics", Json.obj("inputsTotal", fixed.size(), "succeeded", succeeded, "failed", failed, "unknown", unknown,
@@ -214,6 +235,77 @@ final class InputAggregation {
     }
     private static void duplicateLimit(JsonArray issues) {
         issue(issues, null, null, null, "duplicate_check_incomplete", "重叠检查达到计算上限，剩余对象尚未全部检查，需人工复核；未自动删除任何候选。");
+    }
+
+    /** 对检测/姿态框做保守的覆盖率复核，避免模型把背景误当成目标后静默进入结果。 */
+    private static boolean suspiciousBbox(JsonObject annotation, int width, int height) {
+        String type = Json.str(annotation, "type", "");
+        if (!(type.equals("detect") || type.equals("pose"))) return false;
+        JsonObject bbox = Json.object(annotation, "bbox");
+        double widthRatio = Annotations.num(bbox, "width") / width, heightRatio = Annotations.num(bbox, "height") / height;
+        return widthRatio > SUSPICIOUS_BBOX_EDGE_RATIO || heightRatio > SUSPICIOUS_BBOX_EDGE_RATIO
+            || widthRatio * heightRatio > SUSPICIOUS_BBOX_AREA_RATIO
+                && (widthRatio > SUSPICIOUS_BBOX_LARGE_EDGE_RATIO || heightRatio > SUSPICIOUS_BBOX_LARGE_EDGE_RATIO);
+    }
+
+    private static void suspiciousBboxIssue(JsonArray issues, String inputId, String resultId, String annotationId,
+                                             JsonObject annotation, int width, int height) {
+        JsonObject bbox = Json.object(annotation, "bbox");
+        double bboxWidth = Annotations.num(bbox, "width"), bboxHeight = Annotations.num(bbox, "height");
+        issues.add(Json.obj("inputId", inputId, "resultId", resultId, "annotationId", annotationId,
+            "code", "bbox_coverage_suspicious", "severity", "error",
+            "message", "检测框覆盖范围异常，可能包含大块背景或相邻物品，需要人工核对；候选已保留。",
+            "bbox", bbox.deepCopy(), "image", Json.obj("width", width, "height", height),
+            "coverage", Json.obj("widthRatio", bboxWidth / width, "heightRatio", bboxHeight / height,
+                "areaRatio", bboxWidth * bboxHeight / ((double)width * height))));
+    }
+
+    /** 对占画面很小的检测框提示复核，视频远景帧中遗漏和误框都更常见。 */
+    private static boolean smallBbox(JsonObject annotation, int width, int height) {
+        String type = Json.str(annotation, "type", "");
+        if (!(type.equals("detect") || type.equals("pose"))) return false;
+        JsonObject bbox = Json.object(annotation, "bbox");
+        double widthRatio = Annotations.num(bbox, "width") / width, heightRatio = Annotations.num(bbox, "height") / height;
+        return widthRatio < SMALL_BBOX_EDGE_RATIO && heightRatio < SMALL_BBOX_EDGE_RATIO
+            && widthRatio * heightRatio < SMALL_BBOX_AREA_RATIO;
+    }
+
+    private static void smallBboxIssue(JsonArray issues, String inputId, String resultId, String annotationId,
+                                       JsonObject annotation, int width, int height) {
+        JsonObject bbox = Json.object(annotation, "bbox");
+        double bboxWidth = Annotations.num(bbox, "width"), bboxHeight = Annotations.num(bbox, "height");
+        issues.add(Json.obj("inputId", inputId, "resultId", resultId, "annotationId", annotationId,
+            "code", "bbox_small_target", "severity", "error",
+            "message", "目标框相对画面较小，远景中容易漏标或框偏，请放大核对目标边界；候选已保留。",
+            "bbox", bbox.deepCopy(), "image", Json.obj("width", width, "height", height),
+            "coverage", Json.obj("widthRatio", bboxWidth / width, "heightRatio", bboxHeight / height,
+                "areaRatio", bboxWidth * bboxHeight / ((double)width * height))));
+    }
+
+    /** 画面边缘可能截断目标，容差随分辨率缩放并保留最小像素余量。 */
+    private static List<String> touchedImageEdges(JsonObject annotation, int width, int height) {
+        String type = Json.str(annotation, "type", "");
+        if (!(type.equals("detect") || type.equals("pose"))) return List.of();
+        JsonObject bbox = Json.object(annotation, "bbox");
+        double x = Annotations.num(bbox, "x"), y = Annotations.num(bbox, "y");
+        double right = x + Annotations.num(bbox, "width"), bottom = y + Annotations.num(bbox, "height");
+        double marginX = Math.max(BBOX_IMAGE_EDGE_MIN_MARGIN_PX, width * BBOX_IMAGE_EDGE_MARGIN_RATIO);
+        double marginY = Math.max(BBOX_IMAGE_EDGE_MIN_MARGIN_PX, height * BBOX_IMAGE_EDGE_MARGIN_RATIO);
+        List<String> edges = new ArrayList<>(4);
+        if (x <= marginX) edges.add("left");
+        if (y <= marginY) edges.add("top");
+        if (width - right <= marginX) edges.add("right");
+        if (height - bottom <= marginY) edges.add("bottom");
+        return edges;
+    }
+
+    private static void imageEdgeIssue(JsonArray issues, String inputId, String resultId, String annotationId,
+                                       JsonObject annotation, int width, int height, List<String> edges) {
+        issues.add(Json.obj("inputId", inputId, "resultId", resultId, "annotationId", annotationId,
+            "code", "bbox_touches_image_edge", "severity", "error",
+            "message", "目标框贴近画面边缘，目标可能被画面裁切，请核对可见边界；候选已保留。",
+            "bbox", Json.object(annotation, "bbox").deepCopy(), "image", Json.obj("width", width, "height", height),
+            "edges", Json.arr(edges.toArray())));
     }
 
     /** 扫描线维护真实 Y 区间并集；完整性独立于浮点面积，不能靠 X/Y 投影乘积推断。 */

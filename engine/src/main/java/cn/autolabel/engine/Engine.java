@@ -31,7 +31,7 @@ final class Engine implements AutoCloseable {
         case "project.list"->projects.list();case "project.create"->projects.create(p);case "project.update"->projects.update(p);case "project.open"->projects.get(Json.required(p,"projectId"));case "project.example"->projects.example();
         // 项目删除只接受显式用户操作，不进入 Agent 工具白名单。
         case "project.delete.preflight"->projectDeletion.preflight(p);case "project.delete"->projectDeletion.delete(p);
-        case "asset.list"->projects.listAssets(p);case "asset.get"->projects.asset(Json.required(p,"assetId"));case "asset.import"->projects.importAssets(p);
+        case "asset.list"->projects.listAssets(p);case "asset.listIds"->projects.listAssetIds(p);case "asset.get"->projects.asset(Json.required(p,"assetId"));case "asset.import"->projects.importAssets(p);
         case "track.timeline.create"->tracks.timelines.create(p);case "track.timeline.list"->tracks.timelines.list(p);case "track.timeline.get"->tracks.timelines.get(p);case "track.timeline.frames"->tracks.timelines.page(p);case "track.timeline.update"->tracks.timelines.update(p);
         case "track.create"->tracks.create(p);case "track.list"->tracks.list(p);case "track.get"->tracks.get(p);case "track.update"->tracks.update(p);case "track.delete"->tracks.delete(p);
         case "track.keyframe.list"->tracks.keys(p);case "track.keyframe.save"->tracks.saveKey(p);case "track.keyframe.delete"->tracks.deleteKey(p);case "track.split"->tracks.split(p);case "track.merge"->tracks.merge(p);

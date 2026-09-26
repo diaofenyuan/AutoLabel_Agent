@@ -39,21 +39,36 @@ final class Projects {
         if(draft!=null){a.add("draft",JsonParser.parseString(draft.get("data").getAsString()));JsonObject m=Json.object(a,"metadata");m.add("draftBaseVersion",draft.get("base_version"));m.add("draftSavedAt",draft.get("saved_at"));a.add("metadata",m);}return a;
     }
     JsonObject asset(String id){return store.read(c->asset(c,id));}
+    private static final List<String> RESULT_FILTERS=List.of("all","candidate","empty","failed","confirmed","unlabeled");
+    /** 素材筛选统一以整项目数据计算，失败状态沿用最近 20 次运行中每张图的最新样本结果。 */
+    private static String assetOverviewCte(){return "WITH recent_runs AS (SELECT id,json_extract(data,'$.createdAt') AS created_at,rowid AS run_order FROM runs WHERE project_id=? ORDER BY created_at DESC,rowid DESC LIMIT 20),"
+        +" ranked_samples AS (SELECT s.asset_id,s.status,ROW_NUMBER() OVER(PARTITION BY s.asset_id ORDER BY r.created_at DESC,r.run_order DESC,s.rowid ASC) AS sample_rank FROM recent_runs r JOIN samples s ON s.run_id=r.id),"
+        +" classified_assets AS (SELECT a.id,a.data,a.path,a.rowid AS asset_order,CASE WHEN a.status='confirmed' THEN 'confirmed' WHEN latest.status IN ('failed','unknown') THEN 'failed' WHEN a.status='candidate' THEN CASE WHEN json_array_length(a.data,'$.annotations')>0 THEN 'candidate' ELSE 'empty' END WHEN a.status='unlabeled' THEN 'unlabeled' ELSE 'other' END AS result_state FROM assets a LEFT JOIN ranked_samples latest ON latest.asset_id=a.id AND latest.sample_rank=1 WHERE a.project_id=?) ";}
+    private static String filterCondition(String filter){if(!RESULT_FILTERS.contains(filter))throw new ApiError(400,"asset_result_filter_invalid","素材结果筛选状态无效。");return filter.equals("all")?"":" AND result_state=?";}
+    private static List<Object> filterArgs(String projectId,String filter){List<Object> args=new ArrayList<>(List.of(projectId,projectId));if(!filter.equals("all"))args.add(filter);return args;}
     Path path(String id){return store.read(c->{JsonObject r=Store.one(c,"SELECT path FROM assets WHERE id=?",id);if(r==null)throw new ApiError(404,"asset_not_found","素材不存在。");return Path.of(r.get("path").getAsString());});}
-    JsonObject listAssets(JsonObject p){String id=Json.required(p,"projectId");int offset=Json.bounded(p,"offset",0,0,Integer.MAX_VALUE),limit=Json.bounded(p,"limit",100,1,500);
-        return store.read(c->{Store.document(c,"projects",id);String condition="project_id=?";List<Object> args=new ArrayList<>(List.of(id));
-            if(p.has("status")){condition+=" AND status=?";args.add(Json.required(p,"status"));}
-            long total=Store.one(c,"SELECT COUNT(*) AS n FROM assets WHERE "+condition,args.toArray()).get("n").getAsLong();
+    JsonObject listAssets(JsonObject p){String id=Json.required(p,"projectId"),filter=Json.str(p,"resultFilter","all");int offset=Json.bounded(p,"offset",0,0,Integer.MAX_VALUE),limit=Json.bounded(p,"limit",100,1,500);
+        return store.read(c->{Store.document(c,"projects",id);String cte=assetOverviewCte(),filterWhere=filterCondition(filter);List<Object> overviewArgs=filterArgs(id,filter);
+            JsonObject counts=Store.one(c,cte+"SELECT COUNT(*) AS all_count,COALESCE(SUM(result_state='candidate'),0) AS candidate,COALESCE(SUM(result_state='empty'),0) AS empty,COALESCE(SUM(result_state='failed'),0) AS failed,COALESCE(SUM(result_state='confirmed'),0) AS confirmed,COALESCE(SUM(result_state='unlabeled'),0) AS unlabeled,COALESCE(SUM(result_state='other'),0) AS other,COALESCE(SUM(json_extract(data,'$.status')='unlabeled'),0) AS status_unlabeled,COALESCE(SUM(json_extract(data,'$.status')='candidate'),0) AS status_candidate,COALESCE(SUM(json_extract(data,'$.status')='modified'),0) AS status_modified,COALESCE(SUM(json_extract(data,'$.status')='confirmed'),0) AS status_confirmed,COALESCE(SUM(json_extract(data,'$.status')='invalid'),0) AS status_invalid,COALESCE(SUM(json_extract(data,'$.status')='missing'),0) AS status_missing FROM classified_assets",id,id);
+            JsonObject filterCounts=Json.obj("all",counts.get("all_count"),"candidate",counts.get("candidate"),"empty",counts.get("empty"),"failed",counts.get("failed"),"confirmed",counts.get("confirmed"),"unlabeled",counts.get("unlabeled"),"other",counts.get("other"));
+            JsonObject statusCounts=Json.obj("unlabeled",counts.get("status_unlabeled"),"candidate",counts.get("status_candidate"),"modified",counts.get("status_modified"),"confirmed",counts.get("status_confirmed"),"invalid",counts.get("status_invalid"),"missing",counts.get("status_missing"));
+            String condition=" WHERE 1=1"+filterWhere;List<Object> args=new ArrayList<>(overviewArgs);
+            if(p.has("status")){condition+=" AND json_extract(data,'$.status')=?";args.add(Json.required(p,"status"));}
+            JsonArray requestedIds=Json.array(p,"assetIds");if(p.has("assetIds")){if(requestedIds.size()>500)throw new ApiError(400,"asset_selection_too_large","单次素材读取最多 500 张。");if(requestedIds.isEmpty())condition+=" AND 0";else{StringBuilder marks=new StringBuilder();for(JsonElement assetId:requestedIds){if(marks.length()>0)marks.append(',');marks.append('?');args.add(assetId.getAsString());}condition+=" AND id IN ("+marks+")";}}
+            long total=Store.one(c,cte+"SELECT COUNT(*) AS n FROM classified_assets"+condition,args.toArray()).get("n").getAsLong();
             args.add(limit);args.add(offset);JsonArray items=new JsonArray();
             // 一次取页内的素材 + 一次取这些素材的草稿：原来逐行各查两遍（N+1），上万素材时列表查询是主要卡顿源。
-            List<JsonObject> rows=Store.rows(c,"SELECT id,data,path FROM assets WHERE "+condition+" ORDER BY rowid LIMIT ? OFFSET ?",args.toArray());
+            List<JsonObject> rows=Store.rows(c,cte+"SELECT id,data,path,result_state FROM classified_assets"+condition+" ORDER BY asset_order LIMIT ? OFFSET ?",args.toArray());
             Map<String,JsonObject> drafts=new HashMap<>();if(!rows.isEmpty()){
                 List<Object> draftArgs=new ArrayList<>();StringBuilder marks=new StringBuilder();
                 for(JsonObject r:rows){if(marks.length()>0)marks.append(',');marks.append('?');draftArgs.add(Json.required(r,"id"));}
                 for(JsonObject d:Store.rows(c,"SELECT asset_id,data,base_version,saved_at FROM drafts WHERE asset_id IN ("+marks+")",draftArgs.toArray()))drafts.put(Json.required(d,"asset_id"),d);}
-            for(JsonObject r:rows){JsonObject item=Json.parse(r.get("data").getAsString());JsonObject draft=drafts.get(Json.required(r,"id"));
+            for(JsonObject r:rows){JsonObject item=Json.parse(r.get("data").getAsString());item.add("resultState",r.get("result_state"));JsonObject draft=drafts.get(Json.required(r,"id"));
                 if(draft!=null){item.add("draft",Json.parse(draft.get("data").getAsString()));JsonObject m=Json.object(item,"metadata");m.add("draftBaseVersion",draft.get("base_version"));m.add("draftSavedAt",draft.get("saved_at"));item.add("metadata",m);}items.add(item);}
-            return Json.obj("items",items,"total",total);});
+            return Json.obj("items",items,"total",total,"filterCounts",filterCounts,"statusCounts",statusCounts);});
+    }
+    JsonObject listAssetIds(JsonObject p){String id=Json.required(p,"projectId"),filter=Json.str(p,"resultFilter","all");int offset=Json.bounded(p,"offset",0,0,Integer.MAX_VALUE),limit=Json.bounded(p,"limit",500,1,500);String filterWhere=filterCondition(filter);List<Object> args=filterArgs(id,filter);args.add(limit);args.add(offset);
+        return store.read(c->{Store.document(c,"projects",id);String cte=assetOverviewCte();long total=Store.one(c,cte+"SELECT COUNT(*) AS n FROM classified_assets WHERE 1=1"+filterWhere,filterArgs(id,filter).toArray()).get("n").getAsLong();JsonArray ids=new JsonArray();for(JsonObject row:Store.rows(c,cte+"SELECT id FROM classified_assets WHERE 1=1"+filterWhere+" ORDER BY asset_order LIMIT ? OFFSET ?",args.toArray()))ids.add(row.get("id"));return Json.obj("ids",ids,"total",total);});
     }
     /** 逐张归一化的取消与进度口子：同步导入用空实现，后台任务接真实任务状态。 */
     interface ImportMeter{default void checkpoint(){}default void progress(int done,int total,int skipped,int errors){}}

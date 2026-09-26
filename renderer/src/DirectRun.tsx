@@ -11,10 +11,10 @@ import { Button, Field, Notice } from './ui';
 
 interface LocalChoice { entry: ModelLibraryEntry; model: LocalModel }
 
-/** 云端标注的提示词：类别写清楚，再把项目的标注规则（区分口径）接在后面。 */
-export function buildDirectPrompt(classes: Project['classes'], rules: string): string {
+/** 云端标注提示词：项目规则长期生效，单次说明只影响本次运行；框贴目标外缘以减少背景误框。 */
+export function buildDirectPrompt(classes: Project['classes'], rules: string, instructions = ''): string {
   const names = classes.map(item => item.name).join('、');
-  return `把图片里属于这些类别的目标都用矩形框标出来：${names}。没有目标的图片返回空数组。${rules ? `补充要求：${rules}` : ''}`;
+  return `把图片里属于这些类别的目标都用矩形框标出来：${names}。矩形框要贴合目标可见外缘，只包含目标本体及其自身组成；如果目标带有底座、支架、坐垫或托架，这些与目标固定相连的部分也要一并包含。不要包含大块背景、手、线缆、桌面物品或相邻物品；多个目标分别标注。没有目标的图片返回空数组。${rules ? `项目区分规则：${rules}` : ''}${instructions.trim() ? `本次补充要求：${instructions.trim()}` : ''}`;
 }
 
 export interface AnnotationRegion { left: number; top: number; right: number; bottom: number }
@@ -46,6 +46,7 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
   const [localAvailable, setLocalAvailable] = useState(false);
   const [loading, setLoading] = useState(false);
   const [target, setTarget] = useState<'cloud' | 'local'>('cloud');
+  const [instructions, setInstructions] = useState('');
   const [localId, setLocalId] = useState('');
   const [scope, setScope] = useState<'all' | 'selected'>('all');
   // 发送副本：默认长边 1920 的 JPEG。实测 4K 帧按原图发（3.4 MB）时某些接口会跑到超时，
@@ -108,6 +109,7 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
         .map(item => ({ id: item.id, name: item.name, objects: item.annotations.length }))))
       .catch(() => setReferences([]));
   }, [open, project?.id]);
+  useEffect(() => { setInstructions(''); }, [project.id]);
 
   /** 本机路径：先把模型载入（已经载入同一版本就跳过），再按开放词汇/固定类别两条口径生成映射。 */
   async function createLocalRun(choice: LocalChoice) {
@@ -169,7 +171,7 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
         ? (picked ? await createLocalRun(picked) : (() => { throw new Error('请先选择一个内置模型。'); })())
         : await request<{ id: string }>('run.create', {
             projectId: project.id, ...(resolved ? { assetIds: resolved } : {}), providerId: annotationConfig.providerId, model: annotationConfig.model,
-            prompt: buildDirectPrompt(classes, rules), concurrency: annotationConfig.concurrency, ...(payload ? { payload } : {}),
+            prompt: buildDirectPrompt(classes, rules, instructions), concurrency: annotationConfig.concurrency, ...(payload ? { payload } : {}),
             ...(referenceId ? { referenceAssetIds: [referenceId] } : {}),
           });
       setOpen(false);
@@ -230,6 +232,10 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
           </div>
         </>}
         {target === 'cloud' && <>
+          <Field label="本次补充要求（可选）" hint="只影响本次任务；项目区分规则会继续生效。">
+            <textarea rows={3} maxLength={4000} value={instructions} onChange={event => setInstructions(event.target.value)}
+              placeholder="例如：只标画面中间的粉发手办，包含自身底座，忽略背景大型摆件。" />
+          </Field>
           <p className="muted tiny">发送给模型</p>
           <div className="direct-run-options">
             {([['edge1920', '长边 1920（推荐）', '4K 帧约 3 MB → 约 0.3 MB'], ['edge1152', '长边 1152', '更省流量，小目标更依赖裁剪'],

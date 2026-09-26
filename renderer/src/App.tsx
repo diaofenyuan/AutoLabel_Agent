@@ -131,7 +131,8 @@ export default function App() {
       const opened = await request<Project>('project.open', { projectId: selected.id });
       const data = await request<{ items: Asset[]; total: number }>('asset.list', { projectId: selected.id, offset: 0, limit: assetPageSize });
       assetLocation.current = { projectId: selected.id, offset: 0 };
-      setSelectedAssetIds([]); setAssetOffset(0); setAssetTotal(data.total); setAssets(data.items);
+      if (project?.id !== opened.id) setSelectedAssetIds([]);
+      setAssetOffset(0); setAssetTotal(data.total); setAssets(data.items);
       // 换项目等同于换上下文：上一个项目的抽帧跟踪不能带进来。
       setMediaJob(null);
       clearTimeout(toastTimer.current); setToast(null); setProject(opened);
@@ -150,7 +151,7 @@ export default function App() {
       await refreshChatSessions();
       setPage('chat'); history.replaceState(null, '', '#chat');
     } finally { endTransition(token); setAssetsLoading(false); }
-  }, [chatSessions, refreshChatSessions, refreshProjects, beginTransition, endTransition]);
+  }, [project?.id, chatSessions, refreshChatSessions, refreshProjects, beginTransition, endTransition]);
   /**
    * 新建对话只能发生在项目内：这里只是把界面交回欢迎页，由用户描述要标注什么，
    * 再由欢迎页建好项目并开会话（会话不脱离项目存在）。
