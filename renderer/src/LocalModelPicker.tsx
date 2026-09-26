@@ -80,12 +80,12 @@ export default function LocalModelPicker({ project, disabled, onPick }: { projec
         ? `其中 ${mapping.filter(item => item.reason === 'alias').map(item => `「${item.text}」按同义词对上项目类别`).join('；')}${preview && preview.unmatched ? `；${preview.unmatched} 个类别名没有对上项目类别，先列为「忽略」等我确认` : ''}。`
         : '';
       onPick(`${head}：要识别的类别名是 ${names}。${explained}请在执行前把类别映射逐项列给我看，并给出预检结果与将处理的张数，我确认后再跑。`
-        + `（模型标识 ${model?.id ?? entry.id}，设备用 CPU；结果作为候选标注，不要覆盖我已人工确认的内容。）`);
+        + `（模型标识 ${model?.id ?? entry.id}，优先使用已准备好的 GPU，没有 GPU 时使用 CPU；结果作为候选标注，不要覆盖我已人工确认的内容。）`);
       setOpen(false);
       return;
     }
     onPick(`${head}：模型自带固定类别表，请先读出它的类别，逐项给出「模型类别 → 项目类别」的映射建议（对不上的明确标为忽略），`
-      + `把预检结果与将处理的张数一起列给我，我确认后再执行。（模型标识 ${model?.id ?? entry.id}，设备用 CPU；结果作为候选标注，不要覆盖我已人工确认的内容。）`);
+      + `把预检结果与将处理的张数一起列给我，我确认后再执行。（模型标识 ${model?.id ?? entry.id}，优先使用已准备好的 GPU，没有 GPU 时使用 CPU；结果作为候选标注，不要覆盖我已人工确认的内容。）`);
     setOpen(false);
   }
   const visible = expanded ? choices : choices.slice(0, VISIBLE_LIMIT);

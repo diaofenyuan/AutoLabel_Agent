@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Play } from 'lucide-react';
 import { deriveClassMap } from '../../shared/vocabulary';
 import { formatModelBytes, type ModelLibraryEntry, type ModelLibraryState } from '../../shared/model-library';
-import type { LocalModel } from '../../shared/inference';
+import type { LocalModel, LocalRuntimeState } from '../../shared/inference';
 import type { ResolvedConfiguration } from '../../shared/configuration';
 import type { Project } from './types';
 import { errorMessage, request } from './bridge';
@@ -10,6 +10,13 @@ import { useApp } from './context';
 import { Button, Field, Notice } from './ui';
 
 interface LocalChoice { entry: ModelLibraryEntry; model: LocalModel }
+
+/** 本地推理优先选空闲 GPU；没有可用 GPU 时才回退 CPU，避免高性能机器默认浪费在 CPU 上。 */
+function preferredLocalDevice(runtime: Pick<LocalRuntimeState, 'devices' | 'slots'>): string {
+  const idleGpu = runtime.slots.find(slot => !slot.busy && slot.device !== 'cpu')?.device;
+  if (idleGpu) return idleGpu;
+  return runtime.devices.find(device => device.id !== 'cpu')?.id ?? 'cpu';
+}
 
 /** 云端标注提示词：项目规则长期生效，单次说明只影响本次运行；框贴目标外缘以减少背景误框。 */
 export function buildDirectPrompt(classes: Project['classes'], rules: string, instructions = ''): string {
@@ -44,6 +51,7 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
   const [open, setOpen] = useState(false);
   const [locals, setLocals] = useState<LocalChoice[]>([]);
   const [localAvailable, setLocalAvailable] = useState(false);
+  const [localDevice, setLocalDevice] = useState('cpu');
   const [loading, setLoading] = useState(false);
   const [target, setTarget] = useState<'cloud' | 'local'>('cloud');
   const [instructions, setInstructions] = useState('');
@@ -87,9 +95,10 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
     void Promise.all([
       request<ModelLibraryState>('model.library.status'),
       request<{ items: LocalModel[] }>('local.model.list', { offset: 0, limit: 500 }),
-      request<{ available: boolean }>('local.runtime.get'),
+      request<LocalRuntimeState>('local.runtime.get'),
     ]).then(([library, models, runtime]) => {
       setLocalAvailable(Boolean(runtime.available));
+      setLocalDevice(preferredLocalDevice(runtime));
       const list: LocalChoice[] = [];
       for (const entry of library.entries) {
         if (entry.state !== 'ready' || entry.taskType === null) continue;
@@ -113,12 +122,15 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
 
   /** 本机路径：先把模型载入（已经载入同一版本就跳过），再按开放词汇/固定类别两条口径生成映射。 */
   async function createLocalRun(choice: LocalChoice) {
-    const runtime = await request<{ slots: Array<{ device: string; busy: boolean; modelId?: string; modelVersion?: number; classes?: Array<{ id: string; name: string }> }> }>('local.runtime.get');
-    const slot = runtime.slots.find(item => item.device === 'cpu');
+    // 重新读取设备状态，避免弹层打开后 GPU 被训练任务占用仍硬选旧设备。
+    const runtime = await request<LocalRuntimeState>('local.runtime.get');
+    const device = preferredLocalDevice(runtime);
+    setLocalDevice(device);
+    const slot = runtime.slots.find(item => item.device === device);
     let modelClasses = slot?.modelId === choice.model.id && slot.modelVersion === choice.model.version ? slot.classes ?? [] : [];
     if (!modelClasses.length) {
       const loaded = await request<{ classes: Array<{ id: string; name: string }> }>('local.model.load',
-        { modelId: choice.model.id, modelVersion: choice.model.version, device: 'cpu', timeoutMs: 300000 });
+        { modelId: choice.model.id, modelVersion: choice.model.version, device, timeoutMs: 300000 });
       modelClasses = loaded.classes;
     }
     if (choice.entry.openVocabulary) {
@@ -128,14 +140,14 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
       if (derived.unmatched) throw new Error('有类别名没有对上项目类别，映射会变成「忽略」；请在输入卡的「类别」里核对名称后重试。');
       return request<{ id: string }>('local.run.create', {
         projectId: project.id, ...(assetIds ? { assetIds } : {}), modelId: choice.model.id, modelVersion: choice.model.version,
-        device: 'cpu', textClasses, classMap: derived.classMap, ...localParameters, timeoutMs: 300000, forceRerun: true,
+        device, textClasses, classMap: derived.classMap, ...localParameters, timeoutMs: 300000, forceRerun: true,
       });
     }
     // 固定类别表：模型每个类别都要有明确映射（对不上的明确为忽略），否则引擎会拒绝。
     const derived = deriveClassMap(modelClasses.map(item => item.name), classes);
     return request<{ id: string }>('local.run.create', {
       projectId: project.id, ...(assetIds ? { assetIds } : {}), modelId: choice.model.id, modelVersion: choice.model.version,
-      device: 'cpu', classMap: derived.classMap, ...localParameters, timeoutMs: 300000, forceRerun: true,
+      device, classMap: derived.classMap, ...localParameters, timeoutMs: 300000, forceRerun: true,
     });
   }
   /**
@@ -200,7 +212,7 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
             云端标注模型<small>{cloudReady ? `${annotationConfig.model}` : '未配置'}</small>
           </button>
           <button type="button" className={target === 'local' ? 'selected' : ''} aria-pressed={target === 'local'} onClick={() => setTarget('local')}>
-            内置模型<small>{loading ? '正在读取模型库…' : locals.length ? '本机运行，不花钱' : '没有可用模型'}</small>
+            内置模型<small>{loading ? '正在读取模型库…' : locals.length ? `本机运行 · ${localDevice === 'cpu' ? 'CPU' : `GPU ${localDevice}`} · 不花钱` : '没有可用模型'}</small>
           </button>
         </div>
         {target === 'local' && Boolean(locals.length) && <Field label="内置模型">

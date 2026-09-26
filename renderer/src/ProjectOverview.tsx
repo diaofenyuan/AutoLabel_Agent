@@ -20,6 +20,9 @@ import { Term } from './Term';
 
 /** 概览素材按需分页读取；完整选择 ID 通过 asset.listIds 分批拉取。 */
 const PAGE_SIZE = 100;
+// 确认写入是每张素材独立的轻量事务；受控并发能明显减少视频帧批量确认的等待，
+// 同时避免一次性发起几百个请求把本地引擎的请求线程和 SQLite 写入队列压满。
+const CONFIRM_CONCURRENCY = 6;
 const versionStatusNames: Record<string, string> = { draft: '草稿', building: '生成中', ready: '已生成', failed: '生成失败', cancelled: '已取消' };
 
 /** 结果筛选：审核批量结果时先按状态把「要处理的」筛出来，再勾选一次确认。 */
@@ -34,6 +37,17 @@ const filterHints: Record<ResultFilter, string> = {
   confirmed: '已经人工确认的素材',
   unlabeled: '还没有任何标注结果的素材',
 };
+
+async function forEachConcurrent<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
+  let cursor = 0;
+  const workerCount = Math.min(Math.max(1, limit), items.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (cursor < items.length) {
+      const item = items[cursor++];
+      await worker(item);
+    }
+  }));
+}
 
 /**
  * 项目概览：一个项目的数据面（素材、数据集版本、导出记录）与只读抽查。
@@ -83,13 +97,13 @@ export default function ProjectOverview() {
       const warning = `将把选中的 ${pending.length} 张当前结果写成正式标注并确认${empty ? `，其中 ${empty} 张是「模型没有找到目标」，确认后记为已确认无目标` : ''}。`
         + '人工确认过的素材不会被改动；有未保存草稿或版本已变化的会跳过并单独报出。';
       if (!(await confirmDialog(warning))) return;
-      for (const asset of pending) {
+      await forEachConcurrent(pending, CONFIRM_CONCURRENCY, async asset => {
         try {
           const saved = await request<Asset>('annotation.save', { assetId: asset.id, baseVersion: asset.version, annotations: asset.annotations, confirm: true });
           setAssets(list => list.map(item => item.id === saved.id ? saved : item));
           confirmed++;
         } catch (e) { skipped.push(`${asset.name}：${errorMessage(e)}`); }
-      }
+      });
       await loadAssets(0);
       notify(confirmed
         ? `已确认 ${confirmed} 张${skipped.length ? `；${skipped.length} 张跳过（${skipped.slice(0, 2).join('；')}${skipped.length > 2 ? ' 等' : ''}）` : ''}。`

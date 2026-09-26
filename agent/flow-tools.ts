@@ -180,6 +180,13 @@ async function localParameters(value: Record<string, unknown>, env: ToolEnvironm
     result.modelVersion = registered.version;
     if (executing) {
       const runtime = await localRuntime(env);
+      // 未显式指定设备时，优先复用同一模型版本已加载的空闲 GPU；
+      // 没有 GPU 载入版本时保留 CPU 默认，避免为了提速偷偷触发模型加载。
+      if (result.device == null) {
+        const loadedGpu = runtime.slots.find(slot => !slot.busy && slot.device !== 'cpu'
+          && slot.modelId === registered.id && slot.modelVersion === registered.version && slot.classes?.length);
+        if (loadedGpu) result.device = loadedGpu.device;
+      }
       const slot = runtime.slots.find(slot => slot.device === (result.device ?? 'cpu') && slot.modelId === registered.id && slot.modelVersion === registered.version);
       // available 来自上次环境探测；已加载的固定版本仍以实际槽与引擎预检为准。
       if (requireReady && (!runtime.configured || !runtime.workerAvailable || !slot?.classes))
