@@ -162,6 +162,44 @@ export default function ChatHome() {
     <DropOverlay visible={drop.active} />
     <div className="chat-welcome">
       <h1>今天要标注什么？</h1>
+      <p className="chat-welcome-subtitle">导入图片或视频，也可以直接描述你想完成的标注。</p>
+      {/* 欢迎页输入框是首要入口：先描述任务，再按需选择素材或配置模型。 */}
+      <footer className="chat-dock">
+        <Composer value={input} onChange={setInput} onSend={() => {
+          const text = input.trim();
+          if ((!text && !attachments.length) || busy) return;
+          // 项目名不再自动取名：建议名取描述首行或首个附件的文件夹名，名称与归属在弹框里由用户确认。
+          setProjectPrompt({
+            title: '发送第一条消息', confirmLabel: '发送',
+            suggest: pendingName || folderName(attachments[0]?.path ?? ''),
+            run: async target => {
+              // 附件随首条消息一起落库：图片与目录进项目，视频交给会话页的抽帧面板。
+              if (attachments.length) {
+                const result = await importAttachments(target.id, attachments);
+                if (result.videos.length) setPendingVideoImports({ projectId: target.id, files: result.videos });
+                if (result.queued) notify(`这批有 ${result.total ?? 0} 张，导入量较大已转入后台任务：进度见「任务 · 素材任务」，可随时取消。`); else if (result.imported || result.skipped) notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`);
+                setAttachments([]);
+              }
+              await openProject(target, text || `刚添加了 ${attachments.length} 个文件，请核对项目素材。`);
+            }
+          });
+        }} placeholder="例如：标注工地照片里的安全帽和人员…" busy={busy}
+          attachments={attachments} onRemoveAttachment={id => setAttachments(list => list.filter(item => item.id !== id))}
+          onAttachFiles={files => void filesToAttachments(files).then(list => { if (list.length) setAttachments(previous => [...previous, ...list]); }).catch(e => notify(errorMessage(e), true))}>
+          <div className="chat-options">
+            <FlowPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
+            {/* 本机模型与云端接口并列在工具行：不配 API Key 也能开始标注。 */}
+            <LocalModelPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
+            {/* 模型选择收进输入卡的工具行；默认值语义挂在悬浮提示里。 */}
+            <span title="这里的默认值用于新建的对话与任务"><ModelPicker providers={providers} providerId={choice.providerId} model={choice.model} depth={choice.depth} disabled={busy}
+              onChange={next => void saveChoice(next)} onDepthChange={next => void saveChoice({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} /></span>
+          </div>
+          {/* 把落点写在发送之前：用户先知道这句话会落到哪个项目，而不是发完才发现又多了一个项目。 */}
+          <span className="composer-hint">{pendingName
+            ? pendingExisting ? `将并入已有项目「${pendingExisting.name}」` : `将新建项目「${pendingName}」（发送时可改名）`
+            : '发送时确认项目名称'}</span>
+        </Composer>
+      </footer>
       <OnboardingLanes busy={busy}
         onImportImages={() => void importImages()} onImportImageFolder={() => void importImageFolder()}
         onImportVideo={() => void selectVideo()} onImportVideoFolder={() => void selectVideoFolder()} />
@@ -172,45 +210,7 @@ export default function ChatHome() {
             onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><span>继续</span>{item.name}<small>{item.assetCount} 张素材</small></button>)}
         </div>
       </section>}
-      <p className="muted tiny chat-start-hint">选择素材 → 确认项目 → 描述标注要求。也可以把图片或视频直接拖进聊天框。</p>
     </div>
-    {/* 输入区同样固定在页面最下方：欢迎语与建议在上方，发送时先确认项目名称与归属，再开始对话。 */}
-    <footer className="chat-dock">
-      <Composer value={input} onChange={setInput} onSend={() => {
-        const text = input.trim();
-        if ((!text && !attachments.length) || busy) return;
-        // 项目名不再自动取名：建议名取描述首行或首个附件的文件夹名，名称与归属在弹框里由用户确认。
-        setProjectPrompt({
-          title: '发送第一条消息', confirmLabel: '发送',
-          suggest: pendingName || folderName(attachments[0]?.path ?? ''),
-          run: async target => {
-            // 附件随首条消息一起落库：图片与目录进项目，视频交给会话页的抽帧面板。
-            if (attachments.length) {
-              const result = await importAttachments(target.id, attachments);
-              if (result.videos.length) setPendingVideoImports({ projectId: target.id, files: result.videos });
-              if (result.queued) notify(`这批有 ${result.total ?? 0} 张，导入量较大已转入后台任务：进度见「任务 · 素材任务」，可随时取消。`); else if (result.imported || result.skipped) notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`);
-              setAttachments([]);
-            }
-            await openProject(target, text || `刚添加了 ${attachments.length} 个文件，请核对项目素材。`);
-          }
-        });
-      }} placeholder="例如：标注工地照片里的安全帽和人员…" busy={busy}
-        attachments={attachments} onRemoveAttachment={id => setAttachments(list => list.filter(item => item.id !== id))}
-        onAttachFiles={files => void filesToAttachments(files).then(list => { if (list.length) setAttachments(previous => [...previous, ...list]); }).catch(e => notify(errorMessage(e), true))}>
-        <div className="chat-options">
-          <FlowPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
-          {/* 本机模型与云端接口并列在工具行：不配 API Key 也能开始标注。 */}
-          <LocalModelPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
-          {/* 模型选择收进输入卡的工具行；默认值语义挂在悬浮提示里。 */}
-          <span title="这里的默认值用于新建的对话与任务"><ModelPicker providers={providers} providerId={choice.providerId} model={choice.model} depth={choice.depth} disabled={busy}
-            onChange={next => void saveChoice(next)} onDepthChange={next => void saveChoice({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} /></span>
-        </div>
-        {/* 把落点写在发送之前：用户先知道这句话会落到哪个项目，而不是发完才发现又多了一个项目。 */}
-        <span className="composer-hint">{pendingName
-          ? pendingExisting ? `将并入已有项目「${pendingExisting.name}」` : `将新建项目「${pendingName}」（发送时可改名）`
-          : '发送时确认项目名称'}</span>
-      </Composer>
-    </footer>
     {/* 多选视频或视频文件夹选出来的候选清单：与拖入多个视频共用同一个组件。 */}
     <VideoPickList picks={drop.picks} onChoose={path => { const target = drop.picks?.projectId; drop.closePicks(); if (target) setVideoStart({ projectId: target, path }); }} onClose={drop.closePicks} />
     {/* 发送 / 导入共用的项目归属确认框：用户在这里命名或选已有项目，确认后才执行真正的动作。 */}

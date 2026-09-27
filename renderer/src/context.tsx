@@ -28,6 +28,12 @@ export function navLabel(page: Page): string {
   return navAll.find(entry => entry.key === page)?.label ?? '';
 }
 
+/** 全局快捷键不劫持用户正在编辑的文本、弹窗表单或 IME 组合输入。 */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || Boolean(target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]'));
+}
+
 /** 拖进聊天框、等待随消息一起入库的文件：发送时才导入并确定项目归属。 */
 export interface ChatAttachment { id: string; path: string; kind: 'image' | 'video' | 'directory'; name: string }
 

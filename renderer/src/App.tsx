@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { PanelLeftClose, PanelLeftOpen, CircleHelp, ChevronRight, X, Minus, Square, Check, AlertCircle, Keyboard, LoaderCircle, Search, ArrowRight } from 'lucide-react';
-import { Context, blankChatSession, navAll, navLabel, type Page, type ChatSession, type SettingsSection } from './context';
+import { Context, blankChatSession, isEditableTarget, navAll, navLabel, type Page, type ChatSession, type SettingsSection } from './context';
 import { getBridge, isDemo, request, errorMessage } from './bridge';
 import type { Project, Asset, Preferences, Provider, EngineEvent, EngineStatus } from './types';
 import { defaultPreferences } from './types';
@@ -49,7 +49,53 @@ export default function App() {
   const [reconnecting, setReconnecting] = useState(false);
   const [events, setEvents] = useState<EngineEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => window.innerWidth <= 1000);
+  const [mobileLayout, setMobileLayout] = useState(() => window.innerWidth <= 760);
+  const setSidebarOpen = useCallback((open: boolean) => {
+    setCollapsed(!open);
+    if (window.innerWidth > 760) return;
+    window.requestAnimationFrame(() => {
+      if (open) document.querySelector<HTMLButtonElement>('.sidebar nav .nav-item')?.focus();
+      else document.querySelector<HTMLButtonElement>('.breadcrumb .icon-button')?.focus();
+    });
+  }, []);
+  useEffect(() => {
+    const breakpoint = window.matchMedia('(max-width: 1000px)');
+    const syncSidebar = () => setCollapsed(breakpoint.matches);
+    breakpoint.addEventListener('change', syncSidebar);
+    return () => breakpoint.removeEventListener('change', syncSidebar);
+  }, []);
+  useEffect(() => {
+    const breakpoint = window.matchMedia('(max-width: 760px)');
+    const syncMobileLayout = () => setMobileLayout(breakpoint.matches);
+    breakpoint.addEventListener('change', syncMobileLayout);
+    return () => breakpoint.removeEventListener('change', syncMobileLayout);
+  }, []);
+  useEffect(() => {
+    if (collapsed || !mobileLayout) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector('dialog[open]')) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setSidebarOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const sidebar = document.querySelector<HTMLElement>('#app-sidebar');
+      const focusable = [...(sidebar?.querySelectorAll<HTMLElement>('a[href],button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),summary,[tabindex]:not([tabindex="-1"])') ?? [])]
+        .filter(element => element.getClientRects().length > 0);
+      if (!sidebar || !focusable.length) return;
+      const first = focusable[0];
+      const last = focusable.at(-1)!;
+      const active = document.activeElement;
+      if (!sidebar.contains(active) || event.shiftKey && active === first || !event.shiftKey && active === last) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [collapsed, mobileLayout, setSidebarOpen]);
   const [help, setHelp] = useState(false);
   const [commandPalette, setCommandPalette] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
@@ -208,6 +254,7 @@ export default function App() {
   }, [prefs.theme, prefs.reducedMotion]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || isEditableTarget(event.target) || document.querySelector('dialog[open]')) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault(); setCommandQuery(''); setCommandSelection(0); setCommandPalette(true);
       }
@@ -236,11 +283,15 @@ export default function App() {
     finally { setReconnecting(false); }
   }
   return <Context.Provider value={{ page, navigate, settingsSection, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, mediaJob, setMediaJob, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, pendingVideoImports, setPendingVideoImports, openJumper, openHelp, requestDeleteProject }}>
-    <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
-      <Sidebar />
+    <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`} onClickCapture={event => {
+      const target = event.target;
+      if (mobileLayout && !collapsed && target instanceof Element && target.closest('.sidebar .nav-item, .sidebar .sidebar-row')) setSidebarOpen(false);
+    }}>
+      <Sidebar inert={collapsed && mobileLayout} drawer={mobileLayout} />
+      {!collapsed && <button className="sidebar-backdrop" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} />}
       {deletion && <ProjectDeletionDialog project={deletion} onClose={() => setDeletion(null)} onDeleted={projectId => void projectDeleted(projectId)} />}
       <ConfirmHost />
-      <section className="app-main"><header className="topbar" onDoubleClick={e => { if (!isDemo && !(e.target as HTMLElement).closest('button,input,select,textarea')) void getBridge().then(b => b.windowAction('maximize')); }}><div className="breadcrumb"><IconButton label={collapsed ? '展开侧栏' : '收起侧栏'} onClick={() => setCollapsed(v => !v)}>{collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</IconButton><span>{navLabel(page)}</span>{project && page !== 'chat' && <><ChevronRight size={13} /><span className="muted truncate">{project.name}</span></>}</div><div className="topbar-actions">{isDemo && <span className="demo-indicator">演示模式</span>}{!isDemo && <span className={`engine-chip ${engine.state}`} role={engine.state === 'error' ? 'alert' : 'status'} title={engine.message || '本地引擎状态'}><span className="status-dot" />{engine.state === 'ready' ? '引擎已连接' : engine.state === 'starting' ? '引擎启动中' : engine.state === 'disconnected' ? '引擎已中断' : engine.state === 'stopped' ? '引擎已停止' : '引擎异常'}</span>}<button className="command-trigger" onClick={openJumper}><Search size={14} /><span>快速跳转</span><kbd>Ctrl K</kbd></button><IconButton label="快捷键与帮助" onClick={openHelp}><CircleHelp size={17} /></IconButton>{!isDemo && <div className="window-actions">{(['minimize', 'maximize', 'close'] as const).map((action, index) => <button key={action} aria-label={['最小化窗口', '最大化窗口', '关闭窗口'][index]} onClick={() => void getBridge().then(b => b.windowAction(action)).catch(e => notify(errorMessage(e), true))}>{index === 0 ? <Minus size={13} /> : index === 1 ? <Square size={11} /> : <X size={14} />}</button>)}</div>}</div></header>
+      <section className="app-main"><header className="topbar" onDoubleClick={e => { if (!isDemo && !(e.target as HTMLElement).closest('button,input,select,textarea')) void getBridge().then(b => b.windowAction('maximize')); }}><div className="breadcrumb"><IconButton label={collapsed ? '展开侧栏' : '收起侧栏'} aria-controls="app-sidebar" aria-expanded={!collapsed} onClick={() => setSidebarOpen(collapsed)}>{collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</IconButton><span>{navLabel(page)}</span>{project && page !== 'chat' && <><ChevronRight size={13} /><span className="muted truncate">{project.name}</span></>}</div><div className="topbar-actions">{isDemo && <span className="demo-indicator">演示模式</span>}{!isDemo && <span className={`engine-chip ${engine.state}`} role={engine.state === 'error' ? 'alert' : 'status'} title={engine.message || '本地引擎状态'}><span className="status-dot" />{engine.state === 'ready' ? '引擎已连接' : engine.state === 'starting' ? '引擎启动中' : engine.state === 'disconnected' ? '引擎已中断' : engine.state === 'stopped' ? '引擎已停止' : '引擎异常'}</span>}<button className="command-trigger" onClick={openJumper}><Search size={14} /><span>快速跳转</span><kbd>Ctrl K</kbd></button><IconButton label="快捷键与帮助" onClick={openHelp}><CircleHelp size={17} /></IconButton>{!isDemo && <div className="window-actions">{(['minimize', 'maximize', 'close'] as const).map((action, index) => <button key={action} aria-label={['最小化窗口', '最大化窗口', '关闭窗口'][index]} onClick={() => void getBridge().then(b => b.windowAction(action)).catch(e => notify(errorMessage(e), true))}>{index === 0 ? <Minus size={13} /> : index === 1 ? <Square size={11} /> : <X size={14} />}</button>)}</div>}</div></header>
         {/* 抽帧进度与自动导入挂在应用层：抽帧创建后会跳到概览页，进度条若只在对话页，
             用户一离开就没人推进自动导入了。 */}
         {!isDemo && <FrameJobStrip />}

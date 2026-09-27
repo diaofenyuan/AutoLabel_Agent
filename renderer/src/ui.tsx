@@ -6,7 +6,7 @@ export function Button({ children, className = '', busy, ...props }: ButtonHTMLA
   return <button className={`button ${className}`} {...props} disabled={props.disabled || busy}>{busy && <LoaderCircle className="spin" size={15} />}{children}</button>;
 }
 export function IconButton({ label, children, active, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; active?: boolean }) {
-  return <button className={`icon-button ${active ? 'active' : ''} ${props.className ?? ''}`} {...props} aria-label={label} title={label} aria-pressed={active}>{children}</button>;
+  return <button className={`icon-button ${active ? 'active' : ''} ${props.className ?? ''}`} {...props} aria-label={label} title={label} aria-pressed={active === undefined ? undefined : active}>{children}</button>;
 }
 export function PageHeader({ title, description, actions }: { title: string; description?: string; actions?: ReactNode }) {
   return <div className="page-heading"><div><h1>{title}</h1>{description && <p>{description}</p>}</div><div className="actions">{actions}</div></div>;

@@ -192,11 +192,13 @@ export default function ProjectOverview() {
   return <div className="content overview-page">
     <PageHeader title={`项目概览 · ${project.name}`} description={`${taskNames[project.taskType]} · ${project.classes.length} 个类别 · 建自 ${new Date(project.createdAt).toLocaleDateString('zh-CN')}`}
       actions={<><Button onClick={() => void openProject(project)}><MessageSquare size={14} />进入对话</Button>
-        <Button onClick={() => setDialog('template')}><ShieldCheck size={14} />类别与点位模板</Button>
-        <Button onClick={() => setDialog('resources')}><FolderOpen size={14} />资源</Button>
-        <Button onClick={() => setDialog('versions')}><Layers size={14} />数据集版本</Button>
-        {/* 标准答案集的人工答案与固定版本入口：界面重构移除旧页面后，它一直没有新落点，评测因此没法为新项目建真值。 */}
-        <Button onClick={() => setDialog('truth')}><ClipboardCheck size={14} />标准答案集</Button>
+        <details className="overview-more-actions"><summary className="button" aria-label="更多项目操作"><MoreHorizontal size={15} />更多</summary><div className="overview-more-menu">
+          <Button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); setDialog('template'); }}><ShieldCheck size={14} />类别与点位模板</Button>
+          <Button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); setDialog('resources'); }}><FolderOpen size={14} />资源</Button>
+          <Button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); setDialog('versions'); }}><Layers size={14} />数据集版本</Button>
+          {/* 标准答案集的人工答案与固定版本入口：界面重构移除旧页面后，它一直没有新落点，评测因此没法为新项目建真值。 */}
+          <Button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); setDialog('truth'); }}><ClipboardCheck size={14} />标准答案集</Button>
+        </div></details>
         <Button className="primary" disabled={isDemo} onClick={() => setDialog('export')}><Download size={14} />导出</Button></>} />
     {error && <p role="alert" className="inline-error">{error}</p>}
 

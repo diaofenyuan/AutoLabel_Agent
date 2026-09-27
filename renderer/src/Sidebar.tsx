@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import type { ChatSessionSummary } from '../../shared/chat';
 import type { Project } from './types';
-import { useApp } from './context';
+import { isEditableTarget, useApp } from './context';
 import { useActiveTaskCount } from './activeTasks';
 import { errorMessage, isDemo, request } from './bridge';
 import { Button, Field, IconButton, Modal } from './ui';
@@ -31,7 +31,7 @@ const ORPHANED_VISIBLE = 3;
 type RenameTarget = { kind: 'session' | 'project'; id: string; value: string };
 
 /** Codex 式侧栏：顶部 / 主入口 / 置顶 / 项目 / 最近 / 底部六段，会话来自 chat.history.list。 */
-export function Sidebar() {
+export function Sidebar({ inert = false, drawer = false }: { inert?: boolean; drawer?: boolean }) {
   const { page, navigate, project, projects, openProject, refreshProjects, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, openJumper, requestDeleteProject, notify, engine, setProject } = useApp();
   // 侧栏「任务」徽标：进行中的长任务数量，切页也能看见还有多少在跑。
   const activeTasks = useActiveTaskCount();
@@ -74,6 +74,7 @@ export function Sidebar() {
   }
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || isEditableTarget(event.target) || document.querySelector('dialog[open]')) return;
       if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
       const index = Number(event.key);
       if (!Number.isInteger(index) || index < 1 || index > 9) return;
@@ -126,7 +127,7 @@ export function Sidebar() {
   }
 
   const sessionRow = (session: ChatSessionSummary) => <div key={session.id} className={`sidebar-session ${activeSessionId === session.id ? 'selected' : ''}`}>
-    <button className="sidebar-row" title={session.title} onClick={() => void openSession(session.id)}>
+    <button className="sidebar-row" title={session.title} aria-current={page === 'chat' && activeSessionId === session.id ? 'page' : undefined} onClick={() => void openSession(session.id)}>
       <MessageSquare size={15} /><span className="sidebar-row-title truncate">{session.title}</span>
       {session.status === 'deleted-project' && <span className="sidebar-tag" title="来源项目已删除">项目已删除</span>}
     </button>
@@ -139,7 +140,8 @@ export function Sidebar() {
     </span>
   </div>;
 
-  return <aside className="sidebar">
+  const isMobileDrawer = !inert && drawer;
+  return <aside id="app-sidebar" className="sidebar" role={isMobileDrawer ? 'dialog' : undefined} aria-label={isMobileDrawer ? '侧边导航' : undefined} aria-modal={isMobileDrawer ? true : undefined} inert={inert ? true : undefined}>
     <div className="sidebar-top">
       {/* 顶部只留产品标识与搜索：原先的下拉菜单里两项（快速跳转、帮助）在顶栏都已有入口。 */}
       <div className="sidebar-workspace"><Scan size={20} strokeWidth={1.8} /><span>自动标注小助手</span></div>
@@ -163,7 +165,7 @@ export function Sidebar() {
             {(showAllProjects ? grouped : grouped.slice(0, PROJECTS_VISIBLE)).map(({ project: item, sessions, total }) => <div key={item.id} className="sidebar-project-group">
               <div className={`sidebar-project ${project?.id === item.id ? 'selected' : ''}`}>
                 {/* 素材数直接写在项目行上：同名项目靠它区分，否则用户只能逐个点开看哪个有素材。 */}
-                <button className="sidebar-row" title={`${item.name} · ${item.assetCount} 张素材`} onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><FolderOpen size={15} /><span className="sidebar-row-title truncate">{item.name}</span><span className="sidebar-project-count">{item.assetCount} 张</span></button>
+                <button className="sidebar-row" title={`${item.name} · ${item.assetCount} 张素材`} aria-pressed={project?.id === item.id} onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><FolderOpen size={15} /><span className="sidebar-row-title truncate">{item.name}</span><span className="sidebar-project-count">{item.assetCount} 张</span></button>
                 <span className="sidebar-actions">
                   {/* 进对话与看概览分开给图标：点项目名字虽然也能进，但界面上没有任何提示。 */}
                   <button title="进入对话" onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><MessageSquare size={13} /></button>

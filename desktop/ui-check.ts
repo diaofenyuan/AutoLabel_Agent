@@ -97,12 +97,13 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   window.show();
   await waitFor(`!!document.querySelector('.chat-home') && !document.querySelector('.skeleton-list')`);
   stage('ui:home');
-  // 欢迎页的输入区同样贴在页面最下方，并带上模型与任务流程入口。
+  // 欢迎页输入区应位于主内容区，同时保留模型与任务流程入口。
   const homeDock = await window.webContents.executeJavaScript(`(()=>{const node=document.querySelector('.chat-home .chat-dock');if(!node)return {missing:true};
     const box=node.getBoundingClientRect();return {missing:false,hasPicker:!!document.querySelector('.chat-home .model-picker-trigger'),
-      hasFlow:!!document.querySelector('.chat-home .flow-picker>button'),gapBottom:Math.round(innerHeight-box.bottom)};})()`);
-  if (homeDock.missing || !homeDock.hasPicker || !homeDock.hasFlow || homeDock.gapBottom > 24)
-    throw new Error(`欢迎页输入区没有贴在页面最下方：${JSON.stringify(homeDock)}`);
+      hasFlow:!!document.querySelector('.chat-home .flow-picker>button'),gapBottom:Math.round(innerHeight-box.bottom),
+      viewportHeight:innerHeight,centerOffset:Math.round(Math.abs((box.top+box.bottom)/2-innerHeight/2)),visible:box.width>0&&box.height>0};})()`);
+  if (homeDock.missing || !homeDock.hasPicker || !homeDock.hasFlow || !homeDock.visible || homeDock.gapBottom < 80 || homeDock.centerOffset > homeDock.viewportHeight * .35)
+    throw new Error(`欢迎页输入区没有显示在主要内容区：${JSON.stringify(homeDock)}`);
   results.push({ check: 'home-dock', ...homeDock });
   await waitFor(`!!document.querySelector('.sidebar-status .status-dot.ready') && !document.querySelector('.connection-banner')`);
   stage('ui:engine-ready');
