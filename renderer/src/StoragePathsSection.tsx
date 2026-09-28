@@ -138,7 +138,7 @@ export default function StoragePathsSection({ onBusyChange }: { onBusyChange: (b
       <div className="section-toolbar"><h2><Database size={17} />存储位置</h2>
         <Button disabled={busy} onClick={() => void run(async () => { await load(); await refreshMigration(); })}><RefreshCw size={13} />刷新</Button>
       </div>
-      <p className="muted">划分好的训练集、用户上传的训练集与对话记录默认保存在安装目录，安装目录不可写时自动回退到当前用户目录。</p>
+      <p className="muted">项目数据、配置与凭据默认保存在软件安装目录内；安装目录不可写时才回退到当前用户目录，并在这里显示原因。</p>
       <div className="setting-row">
         <div><h3>存储根目录</h3>
           <p className="break-word">当前：{state?.root ?? '正在读取…'}</p>

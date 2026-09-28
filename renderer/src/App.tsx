@@ -31,6 +31,7 @@ export default function App() {
   const [mediaJob, setMediaJob] = useState<{ id: string; temporarySource?: string } | null>(null);
   const assetLocation = useRef({ projectId: '', offset: 0 });
   const assetRevision = useRef(0);
+  const projectRefreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   /**
    * 页面切换 / 打开项目的互斥锁。用令牌而不是布尔值：只有持锁的那次操作才能释放它，
    * 否则「先发起、后结束」的导航会把另一次操作刚上的锁清掉，两条流程叠着跑，页面最终落在谁那里就不确定了。
@@ -229,7 +230,17 @@ export default function App() {
         const eventBuffer: EngineEvent[] = []; let eventScheduled = false;
         unsubscribe.push(bridge.onEvent(event => { if (seen.has(event.sequence)) return; seen.add(event.sequence); if (seen.size > 2000) seen.delete(seen.values().next().value!);
           // 进度类事件成串到达（导入/抽帧每 250ms 一条）：攒到下一帧一起应用，避免整树逐条重渲染。
-          eventBuffer.push(event); if (!eventScheduled) { eventScheduled = true; requestAnimationFrame(() => { eventScheduled = false; const batch = eventBuffer.splice(0, eventBuffer.length); if (batch.length) setEvents(list => [...list, ...batch].slice(-200)); }); } }));
+          eventBuffer.push(event); if (!eventScheduled) { eventScheduled = true; requestAnimationFrame(() => { eventScheduled = false; const batch = eventBuffer.splice(0, eventBuffer.length); if (batch.length) setEvents(list => [...list, ...batch].slice(-200)); }); }
+          // 大批量导入先返回 queued，项目列表不能停在导入前的 0 张；提交完成事件后重新读取数据库计数。
+          if (event.type === 'asset.imported' && typeof event.payload.projectId === 'string') {
+            clearTimeout(projectRefreshTimer.current);
+            projectRefreshTimer.current = setTimeout(() => {
+              projectRefreshTimer.current = undefined;
+              void refreshProjects().catch(error => notify(errorMessage(error), true));
+              if (event.payload.projectId === assetLocation.current.projectId) void refreshAssets().catch(() => {});
+            }, 80);
+          }
+        }));
         const initialRevision = statusRevision;
         const initial = await Promise.allSettled([bridge.engineStatus(), request<Project[]>('project.list'), request<Preferences>('settings.get'), request<Provider[]>('provider.list'), request<EngineEvent[]>('event.list', { after: 0 }), request<ChatHistoryList>('chat.history.list')]);
         if (disposed) return;
@@ -247,7 +258,7 @@ export default function App() {
       finally { if (!disposed) setLoading(false); }
     }
     void load();
-    return () => { disposed = true; unsubscribe.forEach(fn => fn()); };
+    return () => { disposed = true; clearTimeout(projectRefreshTimer.current); projectRefreshTimer.current = undefined; unsubscribe.forEach(fn => fn()); };
   }, [notify, refreshProjects, refreshProviders, refreshChatSessions]);
   useEffect(() => {
     const media = matchMedia('(prefers-color-scheme: dark)');

@@ -148,7 +148,12 @@ final class Providers {
         boolean responses=Json.str(provider,"protocol","").equals("responses");JsonObject body=Json.object(provider,"extraParameters").deepCopy();
         for(String key:List.of("model","messages","input","tools","stream","authorization"))body.remove(key);
         body.addProperty("model",model);body.addProperty("stream",stream);
-        if(!responses){body.add("messages",messages);if(!tools.isEmpty())body.add("tools",tools);if(structured)body.add("response_format",Json.obj("type","json_object"));}
+        if(!responses){
+            // GPT-6 在 Chat Completions 下只有 reasoning_effort=none 才接受函数调用；
+            // Responses 协议不走这里，其他模型也不强行注入服务商未必支持的字段。
+            if(!tools.isEmpty()&&model.toLowerCase(Locale.ROOT).startsWith("gpt-6"))body.addProperty("reasoning_effort","none");
+            body.add("messages",messages);if(!tools.isEmpty())body.add("tools",tools);if(structured)body.add("response_format",Json.obj("type","json_object"));
+        }
         else{
             JsonArray input=new JsonArray();for(JsonElement e:messages){JsonObject m=e.getAsJsonObject();String role=Json.required(m,"role");
                 if(role.equals("tool")){input.add(Json.obj("type","function_call_output","call_id",Json.required(m,"tool_call_id"),"output",Json.str(m,"content","")));continue;}
@@ -171,6 +176,27 @@ final class Providers {
         if(value.startsWith("data:image/")){int comma=value.indexOf(',');if(comma<0||comma>100||!value.substring(0,comma).endsWith(";base64"))throw new ApiError(400,"image_url_invalid","图片 data URL 必须使用 base64 编码。");long encoded=value.length()-comma-1L,padding=value.endsWith("==")?2:value.endsWith("=")?1:0;if(encoded==0||encoded%4!=0||encoded/4*3-padding>32L*1024*1024)throw new ApiError(413,"image_payload_too_large","单张图片数据不能超过 32 MiB。");return value;}
         return Json.required(image,"url");
     }
+    /** 服务商拒绝请求时保留其安全的错误字段，避免界面只显示无法定位的 HTTP 状态码。 */
+    static String providerErrorMessage(byte[] bytes,int status){
+        String fallback="接口返回 HTTP "+status+"，请核对接口、模型与权限。";
+        try{
+            JsonObject root=Json.parse(new String(bytes,StandardCharsets.UTF_8));
+            JsonObject error=root.has("error")&&root.get("error").isJsonObject()?root.getAsJsonObject("error"):root;
+            String message=Json.str(error,"message","").trim();
+            if(message.isBlank())message=Json.str(root,"message","").trim();
+            if(message.isBlank())message=Json.str(root,"detail","").trim();
+            if(message.isBlank())return fallback;
+            // 只回传服务商给出的短文本；请求头、凭据和大段响应不会进入界面错误。
+            message=message.replaceAll("\\s+"," ");
+            if(message.length()>1200)message=message.substring(0,1200)+"…";
+            String code=Json.str(error,"code","").trim(),type=Json.str(error,"type","").trim(),param=Json.str(error,"param","").trim();
+            StringBuilder detail=new StringBuilder(message);
+            if(!code.isBlank()&&!code.equals(message))detail.append("（code: ").append(code).append('）');
+            else if(!type.isBlank()&&!type.equals(message))detail.append("（type: ").append(type).append('）');
+            if(!param.isBlank())detail.append("（参数: ").append(param).append('）');
+            return "接口返回 HTTP "+status+(status==401||status==403?"（认证/权限错误）":"")+"："+detail;
+        }catch(Exception ignored){return fallback;}
+    }
     JsonObject request(JsonObject p,String suffix,JsonObject body){
         return request(p,suffix,body,credentialFor(p,new JsonObject()));
     }
@@ -186,7 +212,7 @@ final class Providers {
             HttpResponse<byte[]> response=pending.get(Json.integer(p,"timeoutMs",120000),TimeUnit.MILLISECONDS);byte[] bytes=response.body();
             int status=response.statusCode();if(status<200||status>=300){String code=switch(status){case 401,403->"provider_auth_failed";case 404->"provider_model_or_route_not_found";case 429->"provider_rate_limited";default->"provider_http_"+status;};
                 long retryAfter=0;String header=response.headers().firstValue("Retry-After").orElse("");try{retryAfter=Math.max(0,Long.parseLong(header)*1000);}catch(Exception e){try{retryAfter=Math.max(0,ZonedDateTime.parse(header,java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()-System.currentTimeMillis());}catch(Exception ignored){}}
-                RemoteError failure=new RemoteError(code,"接口返回 HTTP "+status+"，请核对接口、模型与权限。",status==429||status>=500,false,Math.min(retryAfter,3600000));try{JsonObject errorBody=Json.parse(new String(bytes,StandardCharsets.UTF_8));if(errorBody.has("usage"))failure.usage=errorBody.get("usage");}catch(Exception ignored){}throw failure;}
+                RemoteError failure=new RemoteError(code,providerErrorMessage(bytes,status),status==429||status>=500,false,Math.min(retryAfter,3600000));try{JsonObject errorBody=Json.parse(new String(bytes,StandardCharsets.UTF_8));if(errorBody.has("usage"))failure.usage=errorBody.get("usage");}catch(Exception ignored){}throw failure;}
             try{return Json.parse(new String(bytes,StandardCharsets.UTF_8));}catch(Exception e){throw new RemoteError("provider_response_invalid","接口没有返回有效 JSON。",false,false,0);}
         }catch(RemoteError e){throw e;}catch(TimeoutException e){throw new RemoteError("provider_timeout","请求超时，远端是否完成未知；不会自动重发。",false,true,0);}
         catch(InterruptedException e){Thread.currentThread().interrupt();throw new RemoteError("request_interrupted","调用中断，远端结果未知。",false,true,0);}
@@ -206,7 +232,7 @@ final class Providers {
             pending=client.sendAsync(builder.build(),HttpResponse.BodyHandlers.ofInputStream());
             HttpResponse<InputStream> response=pending.get(Json.integer(p,"timeoutMs",120000),TimeUnit.MILLISECONDS);
             int status=response.statusCode();
-            if(status<200||status>=300){byte[] bytes=response.body().readNBytes(8*1024*1024+1);String code=switch(status){case 401,403->"provider_auth_failed";case 404->"provider_model_or_route_not_found";case 429->"provider_rate_limited";default->"provider_http_"+status;};RemoteError failure=new RemoteError(code,"接口返回 HTTP "+status+"，请核对接口、模型与权限。",status==429||status>=500,false,0);try{JsonObject errorBody=Json.parse(new String(bytes,StandardCharsets.UTF_8));if(errorBody.has("usage"))failure.usage=errorBody.get("usage");}catch(Exception ignored){}throw failure;}
+            if(status<200||status>=300){byte[] bytes=response.body().readNBytes(8*1024*1024+1);String code=switch(status){case 401,403->"provider_auth_failed";case 404->"provider_model_or_route_not_found";case 429->"provider_rate_limited";default->"provider_http_"+status;};RemoteError failure=new RemoteError(code,providerErrorMessage(bytes,status),status==429||status>=500,false,0);try{JsonObject errorBody=Json.parse(new String(bytes,StandardCharsets.UTF_8));if(errorBody.has("usage"))failure.usage=errorBody.get("usage");}catch(Exception ignored){}throw failure;}
             String contentType=response.headers().firstValue("Content-Type").orElse("");if(!contentType.toLowerCase(Locale.ROOT).contains("text/event-stream"))throw new RemoteError("provider_response_invalid","流式请求未返回 text/event-stream。",false,false,0);
             try(InputStream input=response.body()){return new ProviderStreams(Json.str(p,"protocol","chat-completions"),onDelta).read(input);}
             catch(ProviderStreams.StreamError failure){throw new RemoteError(failure.code,failure.getMessage(),false,true,0);}

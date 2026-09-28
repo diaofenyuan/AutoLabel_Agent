@@ -1,7 +1,8 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage, protocol, session, powerMonitor, safeStorage } from 'electron';
 import type { IpcMainInvokeEvent, OpenDialogOptions } from 'electron';
 import path from 'node:path';
-import { readFile, writeFile, mkdir, stat, statfs, realpath, readdir } from 'node:fs/promises';
+import { accessSync, constants as fsConstants } from 'node:fs';
+import { readFile, writeFile, mkdir, stat, statfs, realpath, readdir, cp } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { EngineManager } from './engine';
 import { AgentManager } from './agent-manager';
@@ -16,7 +17,7 @@ import { RuntimeSetup } from './runtime-setup';
 import { MediaExecutionSettings } from './media-execution';
 import { VideoTranscoder } from './transcode';
 import { DataStorage, DesktopPreferences, initializeStorageLocation, scopedVaultPath, type StorageLocation } from './storage';
-import { StoragePathSettings, resolveStoragePaths, storagePathsState, validateTrainingRoot, type ResolvedPaths } from './storage-paths';
+import { ROOT_SUBDIRECTORY, StoragePathSettings, resolveStoragePaths, storagePathsState, userFallbackRoot, validateTrainingRoot, type ResolvedPaths } from './storage-paths';
 import { ChatStore } from './chat-store';
 import type { StoragePathsState } from '../shared/storage';
 import { PathGrants, authorizeCommandPaths, mediaTargetFromUrl, isTrustedUrl, normalizeMedia, publicInputResult, redact } from './security';
@@ -30,16 +31,28 @@ protocol.registerSchemesAsPrivileged([
 ]);
 app.setName('自动标注小助手');
 app.setAppUserModelId('com.autolabel.assistant');
-if (process.env.AUTOLABEL_TEST_USER_DATA && process.argv.includes('--desktop-smoke')) app.setPath('userData', path.resolve(process.env.AUTOLABEL_TEST_USER_DATA));
 const root = app.getAppPath();
+// 持久化目录统一放在安装目录：配置、凭据、数据库、更新包和 Electron 会话数据
+// 都跟随软件一起管理。桌面验收仍使用独立 userData，避免测试污染本机数据。
+const installDirectory = app.isPackaged ? path.dirname(process.execPath) : path.join(root, 'build', 'dev-install');
+const testUserData = process.env.AUTOLABEL_TEST_USER_DATA && process.argv.includes('--desktop-smoke')
+  ? path.resolve(process.env.AUTOLABEL_TEST_USER_DATA) : undefined;
+const legacyUserData = testUserData ? undefined : app.getPath('userData');
+const installDirectoryWritable = (directory: string): boolean => {
+  try { accessSync(directory, fsConstants.W_OK); return true; } catch { return false; }
+};
+// 选择 Program Files 等受保护安装目录时，配置仍需有可用落点；业务数据路径会继续走自己的回退检测。
+const persistentDirectory = testUserData ?? (installDirectoryWritable(installDirectory) ? installDirectory : legacyUserData!);
+app.setPath('userData', persistentDirectory);
+app.setPath('sessionData', path.join(persistentDirectory, 'session-data'));
+app.setPath('logs', path.join(persistentDirectory, 'logs'));
+app.setPath('crashDumps', path.join(persistentDirectory, 'crash-dumps'));
 const userData = app.getPath('userData');
-const manualCheck = !app.isPackaged && !!process.env.AUTOLABEL_TEST_USER_DATA && process.argv.includes('--desktop-smoke') && process.argv.includes('--desktop-manual-check');
+const manualCheck = !app.isPackaged && !!testUserData && process.argv.includes('--desktop-manual-check');
 const dialogFixtures = manualCheck ? new DialogFixtures(userData) : undefined;
 let dataDir = path.join(userData, 'data');
 const preferencesPath = path.join(userData, 'desktop-settings.json');
 const preferenceStore = new DesktopPreferences(preferencesPath);
-// 三类业务数据的默认根跟随安装目录；开发态使用仓库内独立目录，避免与打包产物混写。
-const installDirectory = app.isPackaged ? path.dirname(process.execPath) : path.join(root, 'build', 'dev-install');
 const storagePathSettings = new StoragePathSettings(preferenceStore, () => installDirectory, () => dataDir);
 let storagePaths: ResolvedPaths | undefined;
 // 对话记录目录取自解析后的三类路径，改路径后无需重启即可生效。
@@ -116,6 +129,88 @@ const providerCredentialMutations = new Set<string>();
 let publisher: string | undefined;
 let publisherChecked = !app.isPackaged;
 const allowLocalUpdateTest = !app.isPackaged && process.env.AUTOLABEL_UPDATE_TEST === '1';
+
+const samePersistentPath = (left: string, right: string) => path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+const isInsidePersistentPath = (child: string, parent: string) => {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+};
+const isLegacyDefaultDataPath = (value: string) => path.basename(value).toLowerCase() === 'data'
+  && path.basename(path.dirname(value)).toLowerCase() === app.getName().toLowerCase();
+async function persistentPathExists(target: string): Promise<boolean> {
+  try { await stat(target); return true; } catch { return false; }
+}
+/**
+ * 首次切换到安装目录时恢复旧版 userData，避免把数据库和凭据留在旧 AppData 后重新生成空工作区。
+ * 只在安装目录还没有配置文件时执行，升级不会覆盖用户在安装目录内已经产生的新数据。
+ */
+async function restoreLegacyUserData(): Promise<void> {
+  if (!legacyUserData || samePersistentPath(legacyUserData, userData) || await persistentPathExists(preferencesPath)) return;
+  const localRoot = process.env.LOCALAPPDATA || process.env.APPDATA;
+  const candidates = [...new Set([localRoot ? path.join(localRoot, '自动标注小助手') : undefined, legacyUserData].filter(Boolean) as string[])];
+  const legacyManagedRoot = userFallbackRoot();
+  const currentManagedRoot = path.join(installDirectory, ROOT_SUBDIRECTORY);
+  for (const source of candidates) {
+    if (samePersistentPath(source, userData)) continue;
+    const sourcePreferences = path.join(source, 'desktop-settings.json');
+    const sourceData = path.join(source, 'data');
+    const sourceCredentials = path.join(source, 'credentials');
+    const sourceUpdates = path.join(source, 'updates');
+    const sourceHasLegacyManagedData = samePersistentPath(source, path.dirname(legacyManagedRoot))
+      && await persistentPathExists(legacyManagedRoot);
+    if (!await persistentPathExists(sourcePreferences) && !await persistentPathExists(sourceData)
+      && !await persistentPathExists(sourceCredentials) && !sourceHasLegacyManagedData) continue;
+
+    let saved: Record<string, unknown> | undefined;
+    try {
+      const parsed = JSON.parse(await readFile(sourcePreferences, 'utf8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) saved = parsed as Record<string, unknown>;
+    } catch { /* 旧配置损坏时仍尽量恢复数据库和凭据，启动后由新配置重新建立。 */ }
+
+    const savedRoot = typeof saved?.storageRoot === 'string' ? saved.storageRoot : undefined;
+    const migrateManagedRoot = !savedRoot || samePersistentPath(savedRoot, legacyManagedRoot);
+    if (migrateManagedRoot && await persistentPathExists(legacyManagedRoot)) {
+      await cp(legacyManagedRoot, currentManagedRoot, { recursive: true, force: false });
+      if (saved) {
+        const rebaseManaged = (value: unknown): unknown => {
+          if (typeof value === 'string' && path.isAbsolute(value)
+            && (samePersistentPath(value, legacyManagedRoot) || isInsidePersistentPath(value, legacyManagedRoot))) {
+            return path.join(currentManagedRoot, path.relative(legacyManagedRoot, value));
+          }
+          if (Array.isArray(value)) return value.map(rebaseManaged);
+          if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, rebaseManaged(item)]));
+          return value;
+        };
+        saved = rebaseManaged(saved) as Record<string, unknown>;
+      }
+    }
+
+    const copyIfMissing = async (from: string, to: string) => {
+      if (await persistentPathExists(from) && !await persistentPathExists(to)) await cp(from, to, { recursive: true, force: false });
+    };
+    if (saved?.dataDir && typeof saved.dataDir === 'string' && path.isAbsolute(saved.dataDir)) {
+      const savedDataTarget = isInsidePersistentPath(saved.dataDir, source)
+        ? path.join(userData, path.relative(source, saved.dataDir))
+        : isLegacyDefaultDataPath(saved.dataDir) ? path.join(userData, 'data') : undefined;
+      if (savedDataTarget) await copyIfMissing(saved.dataDir, savedDataTarget);
+    }
+    await copyIfMissing(sourceData, path.join(userData, 'data'));
+    await copyIfMissing(sourceCredentials, path.join(userData, 'credentials'));
+    await copyIfMissing(sourceUpdates, path.join(userData, 'updates'));
+    if (saved && !await persistentPathExists(preferencesPath)) {
+      const rebase = (value: unknown): unknown => {
+        if (typeof value !== 'string' || !path.isAbsolute(value) || !isInsidePersistentPath(value, source)) return value;
+        return path.join(userData, path.relative(source, value));
+      };
+      if (saved.dataDir !== undefined && typeof saved.dataDir === 'string'
+        && (isLegacyDefaultDataPath(saved.dataDir) || (path.basename(saved.dataDir).toLowerCase() === 'data' && await persistentPathExists(sourceData)))) {
+        saved.dataDir = path.join(userData, 'data');
+      } else if (saved.dataDir !== undefined) saved.dataDir = rebase(saved.dataDir);
+      if (saved.trainingRoot !== undefined) saved.trainingRoot = rebase(saved.trainingRoot);
+      await writeFile(preferencesPath, JSON.stringify(saved));
+    }
+  }
+}
 const updates = new UpdateManager({ directory: path.join(userData, 'updates'), currentVersion: app.getVersion(), allowLoopbackHttp: allowLocalUpdateTest,
   verifyPackage: (filename, manifest) => {
     // 本地更新 UI 夹具只验证下载、校验和安装门控；生产路径仍必须验证签名与产品版本。
@@ -241,8 +336,8 @@ function handle(channel: string, callback: (event: IpcMainInvokeEvent, ...args: 
 async function diskDiagnostics(): Promise<Record<string, unknown>> {
   try {
     const disk = await statfs(dataDir);
-    return { freeBytes: Number(disk.bavail) * Number(disk.bsize), dataLocation: '当前 Windows 用户的应用数据目录' };
-  } catch { return { freeBytes: null, dataLocation: '应用数据目录不可用' }; }
+    return { freeBytes: Number(disk.bavail) * Number(disk.bsize), dataLocation: '软件安装目录' };
+  } catch { return { freeBytes: null, dataLocation: '软件安装目录不可用' }; }
 }
 async function diagnostics(): Promise<Record<string, unknown>> {
   const usage = await storage?.usage();
@@ -602,7 +697,7 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
   }
   if (validated.command === 'settings.get') {
     const { localPythonPath, localModelGrants, mediaFfmpegPath, mediaFfprobePath, ...visiblePreferences } = preferenceStore.value;
-    const desktop = { closeBehavior, updateManifestUrl: preferences.updateManifestUrl ?? '', desktop: { ...visiblePreferences, closeBehavior, dataLocation: '当前 Windows 用户的应用数据目录' } };
+    const desktop = { closeBehavior, updateManifestUrl: preferences.updateManifestUrl ?? '', desktop: { ...visiblePreferences, closeBehavior, dataLocation: '软件安装目录' } };
     try { return { ...await requestEngine.request(validated.command, payload) as object, ...desktop }; }
     catch { return { ...desktop, engineAvailable: false }; }
   }
@@ -1075,6 +1170,7 @@ app.on('child-process-gone', async (_event, details) => {
 
   void app.whenReady().then(async () => {
     await mkdir(userData, { recursive: true });
+    await restoreLegacyUserData();
     // 上次会话留下的转码副本已经失去授权、也无法再被任何任务引用，开机即清。
     void transcoder.sweep();
     preferences = await preferenceStore.load();

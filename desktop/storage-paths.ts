@@ -77,15 +77,6 @@ async function probeWithFallback(primary: string, fallback: string, label: strin
 
 export interface ResolvedPaths extends StoragePathsState { entries: StoragePathEntry[] }
 
-/** 只判断三类目录是否已有内容，不做深度统计，用于识别保留下来的旧数据。 */
-async function hasManagedData(root: string): Promise<boolean> {
-  for (const kind of PATH_KINDS) {
-    try { if ((await readdir(path.join(root, kind))).length) return true; }
-    catch { /* 目录不存在或不可读时继续检查下一类。 */ }
-  }
-  return false;
-}
-
 /**
  * 解析三类数据的实际生效路径并创建目录。
  * 自定义路径校验失败或运行中变得不可写时回退到受管位置，并把原因带回界面，不静默降级。
@@ -106,11 +97,9 @@ export async function resolveStoragePaths(preferences: DesktopPreferences, insta
   if (forcedRoot) rootDecision = await probeWithFallback(path.resolve(forcedRoot), path.resolve(forcedRoot), '存储根目录', 'custom');
   else if (savedRoot) rootDecision = await probeWithFallback(savedRoot, fallbackRoot, '存储根目录', 'custom');
   else {
-    // 卸载会把 <安装目录>\AutoLabelData 迁到用户目录保留；默认根为空而保留目录有数据时沿用，
-    // 避免重装后默认位置空着、用户以为数据丢失。
-    const restored = !(await hasManagedData(defaultRoot)) && await hasManagedData(fallbackRoot);
-    rootDecision = await probeWithFallback(restored ? fallbackRoot : defaultRoot, fallbackRoot, '存储根目录', restored ? 'fallback' : 'default');
-    if (restored && !rootDecision.reason) rootDecision = { ...rootDecision, source: 'fallback', reason: '检测到上次卸载时保留的数据目录，已沿用该位置' };
+    // 默认位置始终是安装目录。卸载时保留在用户目录的旧数据不再悄悄接管默认位置，
+    // 由设置页的迁移入口复制到安装目录，避免界面显示的“默认位置”和实际落点不一致。
+    rootDecision = await probeWithFallback(defaultRoot, fallbackRoot, '存储根目录', 'default');
   }
   const entries: StoragePathEntry[] = [];
   for (const kind of PATH_KINDS) {
@@ -302,7 +291,11 @@ export class StoragePathSettings {
     const current = await resolveStoragePaths(this.preferences, this.installDirectory(), this.dataDirectory());
     const candidates: StoragePathCandidate[] = [];
     for (const entry of current.entries) {
-      const source = previous?.entries?.find(item => item.kind === entry.kind)?.path;
+      // 首次升级到安装目录时，旧版本卸载保留的 AutoLabelData 没有写入过
+      // storagePathsPrevious；将其作为一次性迁移候选展示，而不是直接恢复为默认目录。
+      const legacy = !previous && current.rootSource === 'default' && !samePath(current.root, current.fallbackRoot)
+        ? path.join(current.fallbackRoot, entry.kind) : undefined;
+      const source = previous?.entries?.find(item => item.kind === entry.kind)?.path ?? legacy;
       if (!source || samePath(source, entry.path)) continue;
       let info; try { info = await stat(source); } catch { continue; }
       if (!info.isDirectory()) continue;

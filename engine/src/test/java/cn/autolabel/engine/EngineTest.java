@@ -161,6 +161,17 @@ public final class EngineTest {
         }
     }
     static void transportLimits()throws Exception{
+        String badRequest=Providers.providerErrorMessage("{\"error\":{\"message\":\"Invalid parameter: max_tokens is not supported.\",\"type\":\"invalid_request_error\",\"param\":\"max_tokens\",\"code\":\"unsupported_parameter\"}}".getBytes(StandardCharsets.UTF_8),400);
+        check(badRequest.contains("max_tokens is not supported")&&badRequest.contains("unsupported_parameter")&&badRequest.contains("参数: max_tokens"),"provider HTTP 400 keeps actionable error details");
+        check(Providers.providerErrorMessage("not-json".getBytes(StandardCharsets.UTF_8),400).equals("接口返回 HTTP 400，请核对接口、模型与权限。"),"provider error falls back safely for non-JSON responses");
+        JsonArray tool=Json.arr(Json.obj("type","function","function",Json.obj("name","probe","parameters",Json.obj("type","object"))));
+        try(Store store=new Store(root.resolve("provider-body-data"))){
+            Providers providers=new Providers(store);
+            JsonObject provider=Json.obj("protocol","chat-completions","extraParameters",new JsonObject());
+            JsonObject compatible=providers.body(provider,"gpt-6-sol",Json.arr(Json.obj("role","user","content","probe")),tool,false);
+            check(Json.str(compatible,"reasoning_effort","").equals("none"),"GPT-6 Chat Completions tools disable reasoning explicitly");
+            check(!providers.body(provider,"gpt-5.6-sol",Json.arr(Json.obj("role","user","content","probe")),tool,false).has("reasoning_effort"),"older models do not receive GPT-6-only parameter");
+        }
         HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),4);server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.createContext("/stall/chat/completions",e->{try{e.sendResponseHeaders(200,0);e.getResponseBody().write('{');e.getResponseBody().flush();Thread.sleep(2500);e.getResponseBody().write('}');}catch(Exception ignored){}finally{e.close();}});
         server.createContext("/oversize/chat/completions",e->{try{e.sendResponseHeaders(200,0);byte[] data=new byte[65536];Arrays.fill(data,(byte)' ');for(int i=0;i<150;i++)e.getResponseBody().write(data);}catch(Exception ignored){}finally{e.close();}});server.start();

@@ -7,8 +7,9 @@ const entries = [['desktop/security.test.ts', 'desktop/dist/security.test.cjs'],
   ['renderer/tests/glossary.test.ts', 'desktop/dist/glossary.test.cjs'],
   ['renderer/tests/video-continuity.test.ts', 'desktop/dist/video-continuity.test.cjs'],
   ['renderer/tests/thumbnail-url.test.ts', 'desktop/dist/thumbnail-url.test.cjs'],
-  // 这五套原先是孤儿 runner（没有 npm 脚本、无人登记），回归等于没跑；并进来才算数。
+  // 桌面存储与业务边界单测统一登记，避免只有孤儿 runner 而未进入回归。
   ['desktop/storage.test.ts', 'desktop/dist/storage.test.cjs'],
+  ['desktop/storage-paths.test.ts', 'desktop/dist/storage-paths.test.cjs'],
   ['desktop/flow.test.ts', 'desktop/dist/flow.test.cjs'],
   ['desktop/track-validation.test.ts', 'desktop/dist/track-validation.test.cjs'],
   ['desktop/media-execution.test.ts', 'desktop/dist/media-execution.test.cjs'],
