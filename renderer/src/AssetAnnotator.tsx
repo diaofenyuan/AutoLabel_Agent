@@ -144,7 +144,7 @@ export default function AssetAnnotator({ asset, classes, taskType, templateSetti
     </div>
     <CandidateGeometryReview asset={current}/>
     <VideoContinuityReview issues={continuityIssues}/>
-    <QualityCanvas mediaUrl={current.mediaUrl ?? ''} width={current.width} height={current.height} annotations={annotations}
+    <QualityCanvas key={current.id} mediaUrl={current.mediaUrl ?? ''} width={current.width} height={current.height} annotations={annotations}
       classes={classes} taskType={taskType} purpose="asset" keypointNames={templateSettings?.keypointNames as string[] | undefined}
       keypointConnections={templateSettings?.keypointConnections} templateSettings={templateSettings}
       title="人工标注" disabled={busy} imageAlt={`${current.name} 的人工标注画布`}

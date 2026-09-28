@@ -99,6 +99,9 @@ export interface AppState {
   /** 欢迎页发送时拖了视频：抽帧面板要等进入项目会话后才打开，队列在这里中转。 */
   pendingVideoImports: { projectId: string; files: string[] } | null;
   setPendingVideoImports: (value: { projectId: string; files: string[] } | null) => void;
+  /** 欢迎页草稿和临时附件只保存在当前进程内，切页可恢复；成功发送后清空，退出应用不持久化路径。 */
+  homeDraft: string; setHomeDraft: React.Dispatch<React.SetStateAction<string>>;
+  homeAttachments: ChatAttachment[]; setHomeAttachments: React.Dispatch<React.SetStateAction<ChatAttachment[]>>;
   openJumper: () => void;
   openHelp: () => void;
   /** 侧栏项目项的「删除…」入口：只触发回调，三步确认弹窗由阶段 4 接入。 */

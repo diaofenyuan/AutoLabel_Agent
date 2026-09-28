@@ -21,7 +21,7 @@ const steps = [
 // 一键准备两条会真实下载几百 MB、本机标注两条跑真实推理：默认计入，--skip-slow 可跳过。
 const manual = ['update-ui', 'usability-ui', 'run-controls', 'media-ui', 'reason-ui', 'annotate-ui', 'unknown-retry-ui', 'frame-scope-ui',
   'project-identity-ui', 'directory-import-ui', 'onboarding-ui', 'ai-preset-ui', 'composer-ui', 'settings-ui', 'error-action-ui',
-  'sidebar-ui', 'provider-delete-ui', 'editing-ui', 'quality-ui', 'local-ui', 'storage-ui', 'model-library-ui',
+  'chat-state-ui', 'sidebar-ui', 'provider-delete-ui', 'editing-ui', 'quality-ui', 'local-ui', 'storage-ui', 'model-library-ui',
   'local-annotate-ui', 'direct-run-ui', 'builtin-five-ui', 'rerun-ui', 'five-ui', 'connection-ui'];
 const slow = new Set(['runtime-setup-ui', 'runtime-setup-offline-ui', 'local-annotate-ui', 'builtin-five-ui', 'five-ui']);
 const setupChecks = ['runtime-setup-ui', 'runtime-setup-offline-ui'];

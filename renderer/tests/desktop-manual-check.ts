@@ -16,6 +16,7 @@ import { checkDesktopRunControls } from './desktop-run-control-check';
 import { checkDesktopReason } from './desktop-reason-check';
 import { checkDesktopAnnotate } from './desktop-annotate-check';
 import { checkDesktopUnknownRetry } from './desktop-unknown-retry-check';
+import { checkDesktopChatState } from './desktop-chat-state-check';
 import { checkDesktopFrameScope } from './desktop-frame-scope-check';
 import { checkDesktopProjectIdentity } from './desktop-project-identity-check';
 import { checkDesktopDirectoryImport } from './desktop-directory-import-check';
@@ -53,6 +54,7 @@ const DISPATCH: Array<[string, (window: BrowserWindow, output: string) => Promis
   ['AUTOLABEL_PROJECT_IDENTITY_UI_CHECK', checkDesktopProjectIdentity],
   ['AUTOLABEL_FRAME_SCOPE_UI_CHECK', checkDesktopFrameScope],
   ['AUTOLABEL_UNKNOWN_RETRY_UI_CHECK', checkDesktopUnknownRetry],
+  ['AUTOLABEL_CHAT_STATE_UI_CHECK', checkDesktopChatState],
   ['AUTOLABEL_ANNOTATE_UI_CHECK', checkDesktopAnnotate],
   ['AUTOLABEL_REASON_UI_CHECK', checkDesktopReason],
   ['AUTOLABEL_PROVIDER_DELETE_UI_CHECK', checkDesktopProviderDelete],

@@ -13,6 +13,8 @@ import { inspectVideoContinuity } from './videoContinuity';
 import TemplateDialog from './TemplateDialog';
 import TruthSets from './TruthSets';
 import { errorMessage, isDemo, request } from './bridge';
+import { thumbnailUrlForAsset } from './thumbnailUrl';
+import AssetThumbnail from './AssetThumbnail';
 import { confirmDialog } from './confirm';
 import { Button, Empty, IconButton, Loading, Modal, PageHeader } from './ui';
 import { statusNames, taskNames } from './types';
@@ -71,6 +73,8 @@ export default function ProjectOverview() {
   const [confirming, setConfirming] = useState(false);
   const [selectingAll, setSelectingAll] = useState(false);
   const [filter, setFilter] = useState<ResultFilter>('all');
+  const [failedThumbnails, setFailedThumbnails] = useState<Record<string, boolean>>({});
+  const [thumbnailRetryKeys, setThumbnailRetryKeys] = useState<Record<string, number>>({});
   const requestSequence = useRef(0);
 
   /**
@@ -270,13 +274,17 @@ export default function ProjectOverview() {
           {visible.length
             ? <div className="result-grid">{visible.map(asset => <div className={`result-thumb-wrap ${selectedAssetIds.includes(asset.id) ? 'selected' : ''}`} key={asset.id}>
             <button className="result-thumb" title={`${asset.name} · ${statusNames[asset.status] ?? asset.status}`} onClick={() => setPreview(asset)}>
-              <img loading="lazy" src={`autolabel-media://thumb/${asset.id}`} alt={asset.name} />
+              <AssetThumbnail key={`${asset.id}:${thumbnailRetryKeys[asset.id] ?? 0}`} src={thumbnailUrlForAsset(asset, isDemo)} alt={asset.name}
+                retryKey={thumbnailRetryKeys[asset.id] ?? 0} onFailureChange={failed => setFailedThumbnails(current => ({ ...current, [asset.id]: failed }))} />
               <span className="truncate">{asset.name}</span>
               <small>{statusNames[asset.status] ?? asset.status} · {asset.annotations.length} 个
                 {Boolean(asset.metadata?.requiresGeometryReview) && <span className="text-error"> · 需几何复核</span>}
                 {continuityIssues.has(asset.id) && <span className="text-error"> · 连续性需复核</span>}
               </small>
             </button>
+            {failedThumbnails[asset.id] && <button type="button" className="result-thumb-retry" aria-label={`重试加载 ${asset.name} 缩略图`}
+              onClick={event => { event.stopPropagation(); setFailedThumbnails(current => ({ ...current, [asset.id]: false }));
+                setThumbnailRetryKeys(current => ({ ...current, [asset.id]: (current[asset.id] ?? 0) + 1 })); }}>重试缩略图</button>}
             {/* 勾选放在缩略图内部左侧，冒泡到外层 card 之上，点它不会误开预览。 */}
             <label className="result-thumb-check" aria-label={`选择 ${asset.name}`} onClick={event => event.stopPropagation()}>
               <input type="checkbox" checked={selectedAssetIds.includes(asset.id)} onChange={() => toggleAsset(asset.id)} />

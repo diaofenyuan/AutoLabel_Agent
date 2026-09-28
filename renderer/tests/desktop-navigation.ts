@@ -89,15 +89,31 @@ export async function openProjectChat(driver: UiDriver, name: string): Promise<v
 export async function openProjectOverview(driver: UiDriver, name: string): Promise<void> {
   await driver.wait(`[...document.querySelectorAll('.sidebar-project .sidebar-row-title')].some(node=>node.innerText.includes(${q(name)}))`);
   await waitForIdle(driver);
-  await driver.js(`([...document.querySelectorAll('.sidebar-project')].find(node=>node.innerText.includes(${q(name)}))).querySelector('.sidebar-actions button[title="项目概览"]').click()`);
+  await driver.js(`(()=>{const project=[...document.querySelectorAll('.sidebar-project')].find(node=>node.innerText.includes(${q(name)}));
+    const more=project?.querySelector('.sidebar-actions button[aria-label^="项目操作"]');
+    if(more) more.click();
+    else project?.querySelector('.sidebar-actions button[title="项目概览"]')?.click();
+  })()`);
+  await driver.wait(`!!document.querySelector('[role="menu"]')||!!document.querySelector('.overview-page')`);
+  if (!(await driver.js<boolean>(`!!document.querySelector('.overview-page')`))) {
+    await driver.js(`([...document.querySelectorAll('[role="menu"] button')].find(node=>node.innerText.trim()==='项目概览')).click()`);
+  }
   await driver.wait(`!!document.querySelector('.overview-page')`);
 }
 
 /** 打开当前项目的概览页（项目刚被打开、侧栏里它处于选中态时用）。 */
 export async function openSelectedProjectOverview(driver: UiDriver): Promise<void> {
-  await driver.wait(`!!document.querySelector('.sidebar-project.selected .sidebar-actions button[title="项目概览"]')`);
+  await driver.wait(`!!document.querySelector('.sidebar-project.selected .sidebar-actions button[aria-label^="项目操作"]')||!!document.querySelector('.sidebar-project.selected .sidebar-actions button[title="项目概览"]')`);
   await waitForIdle(driver);
-  await driver.js(`document.querySelector('.sidebar-project.selected .sidebar-actions button[title="项目概览"]').click()`);
+  await driver.js(`(()=>{const project=document.querySelector('.sidebar-project.selected');
+    const more=project?.querySelector('.sidebar-actions button[aria-label^="项目操作"]');
+    if(more) more.click();
+    else project?.querySelector('.sidebar-actions button[title="项目概览"]')?.click();
+  })()`);
+  await driver.wait(`!!document.querySelector('[role="menu"]')||!!document.querySelector('.overview-page')`);
+  if (!(await driver.js<boolean>(`!!document.querySelector('.overview-page')`))) {
+    await driver.js(`([...document.querySelectorAll('[role="menu"] button')].find(node=>node.innerText.trim()==='项目概览')).click()`);
+  }
   await driver.wait(`!!document.querySelector('.overview-page')`);
 }
 

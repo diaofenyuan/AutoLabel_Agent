@@ -13,7 +13,6 @@ import { applyProjectDraft } from './projectSetup';
 import { VideoPickList, useChatFileDrop, importAttachments, filesToAttachments } from './chatDrop';
 import { VIDEO_EXTENSION_LABEL } from '../../shared/mediaFormats';
 import { directoryName, folderName, sameNameProject } from './projectNaming';
-import type { ChatAttachment } from './context';
 import type { Project } from './types';
 
 /**
@@ -22,13 +21,12 @@ import type { Project } from './types';
  * 描述或拖入的文件先确认项目归属（命名或选已有），发送后才建好项目并开始对话。
  */
 export default function ChatHome() {
-  const { projects, openProject, refreshProjects, notify, setMediaJob, setMediaTaskId, prefs, savePrefs, providers, navigate, setPendingVideoImports } = useApp();
-  const [input, setInput] = useState('');
+  const { projects, openProject, refreshProjects, notify, setMediaJob, setMediaTaskId, prefs, savePrefs, providers, navigate, setPendingVideoImports,
+    homeDraft: input, setHomeDraft: setInput, homeAttachments: attachments, setHomeAttachments: setAttachments } = useApp();
   const [busy, setBusy] = useState(false);
   // 欢迎页还没有项目时，用户点「选择视频抽帧」要先有一个项目承载抽帧产物；这里存下这次点击建好的项目与选中路径。
   const [videoStart, setVideoStart] = useState<{ projectId: string; path: string } | null>(null);
-  // 拖进来的文件挂在聊天框附件条上，发送时随项目确认一起入库；不再拖入即建项目。
-  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  // 待发送附件只在当前进程内存保留，跨页面往返不丢；成功发送后清空，退出应用不落盘。
   // 项目归属确认：发送 / 导入都先弹框让用户命名或选已有项目，确认后才真正执行。
   const [projectPrompt, setProjectPrompt] = useState<null | { title: string; confirmLabel: string; suggest: string; run: (project: Project) => Promise<void> }>(null);
   const drop = useChatFileDrop(items => setAttachments(current => {
@@ -178,9 +176,9 @@ export default function ChatHome() {
                 const result = await importAttachments(target.id, attachments);
                 if (result.videos.length) setPendingVideoImports({ projectId: target.id, files: result.videos });
                 if (result.queued) notify(`这批有 ${result.total ?? 0} 张，导入量较大已转入后台任务：进度见「任务 · 素材任务」，可随时取消。`); else if (result.imported || result.skipped) notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`);
-                setAttachments([]);
               }
               await openProject(target, text || `刚添加了 ${attachments.length} 个文件，请核对项目素材。`);
+              setInput(''); setAttachments([]);
             }
           });
         }} placeholder="例如：标注工地照片里的安全帽和人员…" busy={busy}

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Download, Eye, PencilLine } from 'lucide-react';
 import { useApp } from './context';
 import { request, errorMessage, isDemo } from './bridge';
+import { thumbnailUrlForAsset } from './thumbnailUrl';
+import AssetThumbnail from './AssetThumbnail';
 import { Button, Modal } from './ui';
 import ExportDialog from './ExportDialog';
 import AssetAnnotator from './AssetAnnotator';
@@ -9,9 +11,13 @@ import { statusNames, type Asset, type Project } from './types';
 
 /** asset.list 的 limit 上限就是 100；超过一页用 total 翻页，避免一次渲染上千张缩略图。 */
 const PAGE_SIZE = 100;
+const annotationSourceNames: Record<string, string> = {
+  import: '导入素材', api: '云端候选', local: '本地候选', manual: '人工编辑',
+  imported_yolo: '导入标注', preset_manual: '人工示例', track: '轨迹候选',
+};
 
 /**
- * 对话结果卡片：把这一轮之后的实际结果摊开给用户看。
+ * 对话里的项目素材概况：项目素材不是单次运行快照，文案明确提示不限于本轮。
  * 缩略图按页加载（每页 100 张 + 加载更多），统计只覆盖已加载部分并在文案里注明，
  * 抽查走只读预览，修正仍然回到对话。
  */
@@ -22,6 +28,8 @@ export default function ResultCard({ project }: { project: Project }) {
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState<Asset | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [failedThumbnails, setFailedThumbnails] = useState<Record<string, boolean>>({});
+  const [thumbnailRetryKeys, setThumbnailRetryKeys] = useState<Record<string, number>>({});
   async function load(more: boolean) {
     setLoading(true);
     try {
@@ -52,11 +60,11 @@ export default function ResultCard({ project }: { project: Project }) {
     .map(label => ({ id: label.id, name: label.name, color: label.color,
       count: assets.reduce((sum, asset) => sum + asset.annotations.filter(annotation => annotation.classId === label.id).length, 0) }))
     .filter(item => item.count > 0);
-  return <section className="result-card" aria-label="本轮结果">
+  return <section className="result-card" aria-label="项目素材概况">
     <div className="result-card-head">
       <div>
-        <h3>结果 · {project.name}</h3>
-        <p className="muted tiny">已加载 {assets.length} / 共 {total} 张 · {annotationCount} 个标注对象{candidateOnly ? `（其中 ${candidateOnly} 张是待确认的候选）` : ''}{confirmedOnly ? ` · 已确认 ${confirmedOnly} 张` : ''}{assets.length < total ? '（统计只覆盖已加载部分）' : ''}</p>
+        <h3>项目素材 · {project.name}</h3>
+        <p className="muted tiny">当前项目素材概况（不限于本轮）· 已加载 {assets.length} / 共 {total} 张 · {annotationCount} 个标注对象{candidateOnly ? `（其中 ${candidateOnly} 张是待确认的候选）` : ''}{confirmedOnly ? ` · 已确认 ${confirmedOnly} 张` : ''}{assets.length < total ? '（统计只覆盖已加载部分）' : ''}</p>
       </div>
       <div className="actions">
         <Button disabled={!assets.length} onClick={() => setPreview(assets[0])}><Eye size={14} />抽查</Button>
@@ -66,11 +74,14 @@ export default function ResultCard({ project }: { project: Project }) {
     </div>
     {distribution.length > 0 && <div className="result-stats">{distribution.map(item => <span key={item.id}><i style={{ background: item.color }} />{item.name} <strong>{item.count}</strong></span>)}</div>}
     {assets.length
-      ? <div className="result-grid">{assets.map(asset => <button key={asset.id} className="result-thumb" title={`${asset.name} · ${statusNames[asset.status] ?? asset.status}`} onClick={() => setPreview(asset)}>
-        <img loading="lazy" src={`autolabel-media://thumb/${asset.id}`} alt={asset.name} />
+      ? <div className="result-grid">{assets.map(asset => <div className="result-thumb-wrap" key={asset.id}><button className="result-thumb" title={`${asset.name} · ${statusNames[asset.status] ?? asset.status}`} onClick={() => setPreview(asset)}>
+        <AssetThumbnail key={`${asset.id}:${thumbnailRetryKeys[asset.id] ?? 0}`} src={thumbnailUrlForAsset(asset, isDemo)} alt={asset.name}
+          retryKey={thumbnailRetryKeys[asset.id] ?? 0} onFailureChange={failed => setFailedThumbnails(current => ({ ...current, [asset.id]: failed }))} />
         <span className="truncate">{asset.name}</span>
-        <small>{statusNames[asset.status] ?? asset.status} · {asset.annotations.length} 个</small>
-      </button>)}</div>
+        <small>{annotationSourceNames[asset.source] ?? '其他来源'} · {statusNames[asset.status] ?? asset.status} · {asset.annotations.length} 个</small>
+      </button>{failedThumbnails[asset.id] && <button type="button" className="result-thumb-retry" aria-label={`重试加载 ${asset.name} 缩略图`}
+        onClick={event => { event.stopPropagation(); setFailedThumbnails(current => ({ ...current, [asset.id]: false }));
+          setThumbnailRetryKeys(current => ({ ...current, [asset.id]: (current[asset.id] ?? 0) + 1 })); }}>重试缩略图</button>}</div>)}</div>
       : <p className="quiet-empty">{loading ? '正在读取素材…' : '这个项目还没有素材，先在对话里说明要导入什么。'}</p>}
     {assets.length < total && <Button busy={loading} onClick={() => void load(true)}>加载更多（还有 {total - assets.length} 张）</Button>}
     {preview && <Modal wide title={`素材 · ${preview.name}`} onClose={() => setPreview(null)}>

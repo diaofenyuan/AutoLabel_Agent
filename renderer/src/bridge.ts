@@ -11,6 +11,7 @@ export async function getBridge(): Promise<DesktopBridge> {
 export async function request<T>(command: string, payload: Record<string, unknown> = {}): Promise<T> {
   return (await getBridge()).request<T>(command, payload);
 }
+
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

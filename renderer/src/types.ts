@@ -15,7 +15,7 @@ export interface Resource { id: string; name: string; kind: string; content: unk
 export interface Run {
   id: string; projectId?: string; kind?: 'api' | 'local'; status: string; model?: string; createdAt?: string;
   modelId?: string; modelVersion?: number; device?: string;
-  prompt?: string; samples?: Array<{ id?: string; assetId: string; name?: string; status: string; error?: string; candidateVersion?: number; attemptCount?: number; reused?: boolean; reusedFrom?: import('../../shared/reuse').CandidateReuseProvenance; inputReusedFrom?: import('../../shared/reuse').InputReuseProvenance; inputId?: string; resultId?: string }>;
+  prompt?: string; samples?: Array<{ id?: string; assetId: string; name?: string; status: string; error?: string; errorCode?: string; message?: string; candidateVersion?: number; attemptCount?: number; reused?: boolean; reusedFrom?: import('../../shared/reuse').CandidateReuseProvenance; inputReusedFrom?: import('../../shared/reuse').InputReuseProvenance; inputId?: string; resultId?: string }>;
   statistics?: Record<string, number>; total?: number; completed?: number;
   [key: string]: unknown;
 }

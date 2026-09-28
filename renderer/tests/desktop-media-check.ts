@@ -21,11 +21,17 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
   assert.ok(userData); const fixtures = path.join(userData, 'fixtures'); await mkdir(fixtures, { recursive: true });
   const videoPath = path.join(fixtures, 'vtest.avi'); await copyFile(path.resolve('.qa/media-samples/vtest.avi'), videoPath);
   const js = <T = any>(code: string): Promise<T> => window.webContents.executeJavaScript(code);
-  const api = (command: string, payload: unknown = {}) => js(`window.autoLabel.request(${json(command)},${json(payload)})`);
+  const api = async (command: string, payload: unknown = {}) => {
+    const result = await js<{ ok: boolean; data?: any; error?: { message?: string; code?: string; details?: unknown } }>(
+      `window.autoLabel.request(${json(command)},${json(payload)}).then(data=>({ok:true,data}),error=>({ok:false,error:{message:error?.message,code:error?.code,details:error?.details}}))`);
+    if (!result.ok) throw new Error(`${command}：${JSON.stringify(result.error)}`);
+    return result.data;
+  };
   const dialog = "document.querySelector('dialog[open]')";
   async function wait(expression: string, timeout = 20000) { const end = Date.now() + timeout; while (Date.now() < end) { if (await js(expression)) return; await new Promise(r => setTimeout(r, 70)); } throw new Error(`媒体界面等待超时：${expression}`); }
   async function click(selector: string) { await wait(`!!document.querySelector(${json(selector)})&&!document.querySelector(${json(selector)}).disabled`); await js(`document.querySelector(${json(selector)}).click()`); }
   async function button(label: string, scope = 'document') { await wait(`!!${scope}&&[...${scope}.querySelectorAll('button')].some(b=>b.innerText.trim()===${json(label)}&&!b.disabled)`); await js(`[...${scope}.querySelectorAll('button')].find(b=>b.innerText.trim()===${json(label)}&&!b.disabled).click()`); }
+  async function overviewMenuButton(label: string) { await click('.overview-more-actions summary'); await button(label, "document.querySelector('.overview-more-menu')"); }
   async function fill(selector: string, value: string) { await js(`(()=>{const e=document.querySelector(${json(selector)});Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,${json(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`); }
   async function select(selector: string, value: string) { await wait(`!!document.querySelector(${json(selector)})&&!document.querySelector(${json(selector)}).disabled`); await js(`(()=>{const e=document.querySelector(${json(selector)});e.value=${json(value)};e.dispatchEvent(new Event('change',{bubbles:true}));})()`); }
   async function queue(kind: string, file: string) { await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind, paths: [file] }])); }
@@ -120,7 +126,7 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     assert.ok(concurrentRebuilds.every(bytes => Buffer.from(bytes).equals(Buffer.from(rebuilt))), '并发重建应返回相同的完整缩略图');
     checks.push({ check: 'thumbnail-served-and-rebuildable', thumbBytes: thumbBytes.length, fullBytes: fullBytes.length, rebuiltBytes: rebuilt.length, concurrentRebuilds: concurrentRebuilds.length });
     // 标准答案集入口：界面重构移除旧页面后它一直没有新落点，评测因此没法给新项目建真值；这里守一条「概览页能打开它」。
-    await js(`([...document.querySelectorAll('.overview-page button')].find(node=>node.innerText.trim()==='标准答案集')).click()`);
+    await overviewMenuButton('标准答案集');
     await wait(`!!document.querySelector('dialog[open]')&&document.querySelector('dialog[open]').innerText.includes('独立标准答案集')`);
     await capture('-truth-entry.png', 'dialog[open] .modal-inner');
     await js(`document.querySelector('dialog[open] [aria-label="关闭弹窗"]').click()`);
@@ -129,18 +135,57 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     checks.push({ check: 'explicit-frame-import', jobId: firstJob.id, assetsCommitted: true, imported: all.total, sourceIdentityRetained: true, overviewVisible: 4 });
 
     // ===== 时间轴：帧数据按接口断言；界面在「任务 · 轨迹标注」里选中它并进入工作区 =====
+    const keyframeAsset = all.items[0];
+    const seededAnnotation = { id: 'track-undo-fixture', type: 'detect', classId: 'person', bbox: { x: 12, y: 18, width: 80, height: 64 } };
+    const savedAnnotation = await api('annotation.save', { assetId: keyframeAsset.id, baseVersion: keyframeAsset.version, annotations: [seededAnnotation], confirm: false });
+    checks.push({ check: 'track-undo-seed-annotation', assetId: keyframeAsset.id, version: savedAnnotation.version });
     const timeline = await api('track.timeline.create', { projectId: project.id, mediaJobId: firstJob.id });
+    checks.push({ check: 'track-undo-create-timeline', timelineId: timeline.id, version: timeline.version });
     const timelineFrames = await api('track.timeline.frames', { timelineId: timeline.id, offset: 0, limit: 50 });
     assert.equal(timelineFrames.total, 4); assert.ok(timelineFrames.items.every((frame: any) => frame.assetId && typeof frame.sourcePts === 'string'));
+    const keyframeSource = timelineFrames.items.find((frame: any) => frame.assetId === keyframeAsset.id);
+    assert.ok(keyframeSource, '人工标注的素材应出现在固定时间轴中');
+    const track = await api('track.create', { timelineId: timeline.id, timelineVersion: timeline.version, classId: 'person', name: '撤销重做验收轨迹' });
+    checks.push({ check: 'track-undo-create-track', trackId: track.id, version: track.version });
+    const trackFrames = await api('track.timeline.frames', { timelineId: timeline.id, trackId: track.id, offset: 0, limit: 50 });
+    checks.push({ check: 'track-undo-read-track-frames', count: trackFrames.total, first: trackFrames.items[0]?.frameId });
     await gotoTasks(driver, '轨迹标注');
     await wait(`!!document.querySelector('.video-timeline')`);
+    await wait(`!!document.querySelector('[aria-label="视频时间轴"] option[value="${timeline.id}"]')`);
     await select('[aria-label="视频时间轴"]', timeline.id);
-    // 帧条与逐帧预览只存在于已移除的非任务视图；任务模式保留的是轨迹与关键帧工作区，所以这里只断言「这条时间轴能进去」。
+    // 任务页给现有时间轴保留轻量帧选择与关键帧编辑入口，不开放创建时间轴的低频操作。
     await wait(`!!document.querySelector('.timeline-identity')||!!document.querySelector('.timeline-track-picker')`);
     const workspaceVisible = await js<boolean>(`!!document.querySelector('.timeline-identity')||!!document.querySelector('.timeline-track-picker')`);
     assert.equal(workspaceVisible, true, '轨迹标注页应能选中这条时间轴并进入工作区');
+    await select('[aria-label="对象轨迹"]', track.id);
+    await button('刷新时间轴');
+    await wait(`!!document.querySelector('[aria-label="当前视频帧"]')`);
+    await select('[aria-label="当前视频帧"]', keyframeSource.frameId);
+    await button('将此帧设为关键帧');
+    await wait(`!!document.querySelector('dialog[open] .track-keyframe-editor')&&!!document.querySelector('[aria-label="关键帧选中对象"]')`);
+    checks.push({ check: 'track-keyframe-editor-opened' });
+    await select('[aria-label="关键帧选中对象"]', seededAnnotation.id);
+    await wait(`!!document.querySelector('[aria-label="关键帧对象x"]')`);
+    checks.push({ check: 'track-keyframe-object-selected' });
+    await fill('[aria-label="关键帧对象x"]', '77');
+    await wait(`document.querySelector('[aria-label="关键帧对象x"]')?.value==='77'`);
+    checks.push({ check: 'track-keyframe-geometry-edited', x: 77 });
+    await button('撤销本次编辑', dialog);
+    await wait(`document.querySelector('[aria-label="关键帧对象x"]')?.value==='12'`);
+    checks.push({ check: 'track-keyframe-undo', x: 12 });
+    assert.equal(await js<boolean>(`[...(document.querySelector('dialog[open]')?.querySelectorAll('button')??[])].some(b=>b.innerText.trim()==='重做本次编辑'&&!b.disabled)`), true, '撤销后应启用关键帧重做');
+    await button('重做本次编辑', dialog);
+    await wait(`document.querySelector('[aria-label="关键帧对象x"]')?.value==='77'`);
+    checks.push({ check: 'track-keyframe-redo', x: 77 });
+    checks.push({ check: 'track-keyframe-undo-redo-restores-geometry', originalX: 12, undoneX: 12, redoneX: 77 });
+    await button('保存关键帧', dialog);
+    await wait(`!document.querySelector('dialog[open]')`);
+    const savedKey = await api('track.keyframe.list', { trackId: track.id, offset: 0, limit: 20 });
+    assert.equal(savedKey.items.length, 1);
+    assert.equal(savedKey.items[0].annotation.bbox.x, 77, '重做后的关键帧几何应正式保存');
+    assert.ok(savedAnnotation.version > keyframeAsset.version, '撤销重做使用的标注已由引擎持久化');
     await capture('-timeline.png', '.video-timeline');
-    checks.push({ check: 'timeline-workspace-reachable', timelineId: timeline.id, frames: timelineFrames.total, builtFromRealFrames: true, workspaceVisible });
+    checks.push({ check: 'timeline-workspace-reachable', timelineId: timeline.id, frames: timelineFrames.total, builtFromRealFrames: true, workspaceVisible, keyframeUndoRedoSavedX: savedKey.items[0].annotation.bbox.x });
     // ===== 场景变化抽帧：场景门控、首帧必留、最小间隔稀疏化（同一段真实视频上的确定性断言）=====
     async function sceneJob(sceneThreshold: number, minIntervalSeconds: number) {
       const job = await api<{ id: string }>('media.video.create', { projectId: project.id, sourcePath: videoPath,

@@ -39,7 +39,19 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
         } catch { /* 非 JSON 的文本段忽略 */ }
       }
     }
-    const content = JSON.stringify({ assetId, annotations: [{ id: 'direct-run-fixture', classId: 'vehicle', type: 'detect', bbox: { x: 221, y: 483, width: 537, height: 350 } }] });
+    const content = assetId
+      ? JSON.stringify({ assetId, annotations: [{ id: 'direct-run-fixture', classId: 'vehicle', type: 'detect', bbox: { x: 221, y: 483, width: 537, height: 350 } }] })
+      : '已读取当前项目素材概况。';
+    if (body.stream === true) {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+      response.end([
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: 'assistant' } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`,
+        'data: [DONE]\n\n',
+      ].join(''));
+      return;
+    }
     response.writeHead(200, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } }));
   });
@@ -147,13 +159,51 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
       oneOffInstruction, tightBoxGuidance: directDetail.prompt.includes('贴合目标可见外缘'),
       versionSources: history.map(item => item.source), humanAnnotations: assets.items[0].annotations?.length ?? 0 });
 
+    // 在真实直达运行已写入云端候选后，再配置一个固定流式回复验证项目素材卡的范围与来源。
+    await api('settings.save', { settings: { ...settings, annotationProviderId: provider.id, annotationModel: 'fixture-direct', chatProviderId: provider.id, chatModel: 'fixture-direct' } });
+    window.webContents.reload();
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    await waitFor(`!!document.querySelector('.sidebar')&&!document.querySelector('.connection-banner')`);
+    const projectName = (await api<Array<{ id: string; name: string }>>('project.list', {})).find(item => item.id === projectId)?.name;
+    assert.ok(projectName, '应能读到项目名');
+    const driver = { js, wait: waitFor };
+    await openProjectChat(driver, projectName!);
+    await js(`(()=>{const e=document.querySelector('.chat-panel textarea');e.focus();
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,'请概括项目素材。');
+      e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await waitFor(`!document.querySelector('.chat-panel .send-button').disabled`);
+    await js(`document.querySelector('.chat-panel .send-button').click()`);
+    await waitFor(`!!document.querySelector('.chat-panel .result-card')`, 40000);
+    await waitFor(`!!document.querySelector('.result-card .result-thumb')`, 25000);
+    const resultCard = await js<{ label: string; heading: string; scope: boolean; sourceLabels: string[] }>(`(()=>({
+      label:document.querySelector('.result-card')?.getAttribute('aria-label')??'',
+      heading:document.querySelector('.result-card h3')?.innerText.trim()??'',
+      scope:document.querySelector('.result-card')?.innerText.includes('不限于本轮')??false,
+      sourceLabels:[...document.querySelectorAll('.result-card .result-thumb small')].map(node=>node.innerText.trim())
+    }))()`);
+    assert.equal(resultCard.label, '项目素材概况');
+    assert.ok(resultCard.heading.startsWith('项目素材 · '), `标题应说明展示的是项目素材：${json(resultCard)}`);
+    assert.equal(resultCard.scope, true, '结果卡应清楚说明项目汇总不限于本轮');
+    assert.ok(resultCard.sourceLabels.some(label=>label.includes('人工示例')), `素材缩略图应保留人工示例来源：${json(resultCard.sourceLabels)}`);
+    checks.push({ check: 'result-card-project-scope-and-source', ...resultCard });
+
+    // 缩略图协议临时失败时，卡片不能留下空白；就地重试应重新挂载图片请求。
+    await js(`(()=>{const image=document.querySelector('.result-card .result-thumb img');if(!image)return false;image.dispatchEvent(new Event('error',{bubbles:true}));return true})()`);
+    await waitFor(`!!document.querySelector('.result-card .asset-thumbnail-failure')&&!!document.querySelector('.result-card .result-thumb-retry')`);
+    const thumbnailFailure = await js<{ message: string; retryLabel: string }>(`(()=>({
+      message:document.querySelector('.result-card .asset-thumbnail-failure')?.innerText.trim()??'',
+      retryLabel:document.querySelector('.result-card .result-thumb-retry')?.innerText.trim()??''
+    }))()`);
+    assert.equal(thumbnailFailure.message, '缩略图加载失败');
+    assert.equal(thumbnailFailure.retryLabel, '重试缩略图');
+    await js(`document.querySelector('.result-card .result-thumb-retry').click()`);
+    await waitFor(`!!document.querySelector('.result-card .result-thumb img')`);
+    checks.push({ check: 'result-card-thumbnail-failure-retry', ...thumbnailFailure, remounted: true });
+
     // ===== 发送副本：默认长边 1920，「原图」能明确关掉；实发尺寸与体积记在运行上 =====
     const defaultRecipe = (await api<{ payload?: { maxEdge?: number | null } }>('run.get', { runId: direct!.id })).payload?.maxEdge ?? null;
     assert.equal(defaultRecipe, 1920, `默认应按长边 1920 生成发送副本，实际：${defaultRecipe}`);
     // 建完任务会落到任务中心；后面的操作都在会话输入卡上，先按项目名回到会话。
-    const projectName = (await api<Array<{ id: string; name: string }>>('project.list', {})).find(item => item.id === projectId)?.name;
-    assert.ok(projectName, '应能读到项目名');
-    const driver = { js, wait: waitFor };
     await openProjectChat(driver, projectName!);
     await js(`document.querySelector('.chat-panel .direct-run-trigger').click()`);
     await waitFor(`!!document.querySelector('.direct-run .picker-popover')`);
@@ -337,6 +387,10 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     const referenceDetail = await api<{ samples: Array<{ assetId: string }> }>('run.get', { runId: referenceRunId });
     assert.equal(referenceDetail.samples.length, 1, '参考帧不应被当成待标注目标');
     assert.notEqual(referenceDetail.samples[0].assetId, referenceAsset.id, '参考帧不在本次目标里');
+    const referenceDeadline = Date.now() + 25000;
+    while (Date.now() < referenceDeadline && !seenReferences.some(item => item.assetId === referenceAsset.id)) {
+      await new Promise(resolve => setTimeout(resolve, 80));
+    }
     const wireReference = seenReferences.find(item => item.assetId === referenceAsset.id);
     assert.ok(wireReference, `请求里必须带 role=reference 的示例帧，实际记录：${json(seenReferences)}`);
     assert.equal(wireReference!.objects, 1, '参考帧要把它的人工标注一起发给模型');

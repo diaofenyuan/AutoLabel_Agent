@@ -1,6 +1,7 @@
 import type { BrowserWindow } from 'electron';
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
 /**
  * 首屏上手路径验收。
@@ -14,6 +15,12 @@ import { writeFile } from 'node:fs/promises';
  * 4. 未配置接口时第 3 条路给出通往「设置 · 软件 AI 配置」的入口。
  */
 export async function checkDesktopOnboarding(window: BrowserWindow, output: string): Promise<void> {
+  const userData = process.env.AUTOLABEL_TEST_USER_DATA!;
+  assert.ok(userData, '首页附件生命周期验收需要隔离的 AUTOLABEL_TEST_USER_DATA');
+  const attachmentFixtureDir = path.join(userData, 'fixtures', `home-attachment-${Date.now()}`);
+  await mkdir(attachmentFixtureDir, { recursive: true });
+  const attachmentPath = path.join(attachmentFixtureDir, '首页验收附件.png');
+  await copyFile(path.resolve('renderer/public/example-street.png'), attachmentPath);
   const checks: Record<string, unknown>[] = [];
   const js = <T = unknown>(code: string): Promise<T> => window.webContents.executeJavaScript(code);
   const json = JSON.stringify;
@@ -61,14 +68,22 @@ export async function checkDesktopOnboarding(window: BrowserWindow, output: stri
     checks.push({ check: 'home-send-button-legible', ...send });
 
     // ===== 示例项目：不经过设置页就能走通 =====
-    const before = (await api<Array<{ id: string }>>('project.list')).length;
+    const beforeIds = new Set((await api<Array<{ id: string }>>('project.list')).map(item => item.id));
     await laneButton(0, '载入示例项目');
     await waitFor(`!!document.querySelector('.page-chat .chat-panel textarea')`);
     const projects = await api<Array<{ id: string; name: string; assetCount: number }>>('project.list');
-    assert.ok(projects.length > before, '载入示例应新建一个项目');
-    const example = [...projects].sort((a, b) => b.assetCount - a.assetCount)[0];
+    const example = projects.find(item => !beforeIds.has(item.id));
+    assert.ok(example, '载入示例应新建一个项目');
     assert.ok(example.assetCount > 0, `示例项目应带素材，实际 ${example.assetCount} 张`);
     checks.push({ check: 'home-loads-example', project: example.name, assets: example.assetCount });
+
+    await js(`[...document.querySelectorAll('#app-sidebar nav .nav-item')].find(node=>node.innerText.trim()==='新对话').click()`);
+    await waitFor(`!!document.querySelector('.chat-home .chat-recent-list button')`);
+    const recent = await js<{ found: boolean; assets: boolean }>(`(()=>{const row=[...document.querySelectorAll('.chat-recent-list button')].find(node=>node.innerText.includes(${json(example.name)}));return {found:!!row,assets:!!row?.innerText.includes(${json(`${example.assetCount} 张素材`)})};})()`);
+    assert.deepEqual(recent, { found: true, assets: true }, '首页最近项目应显示刚创建项目与素材数');
+    await js(`[...document.querySelectorAll('.chat-recent-list button')].find(node=>node.innerText.includes(${json(example.name)})).click()`);
+    await waitFor(`!!document.querySelector('.page-chat .chat-panel textarea') && [...document.querySelectorAll('.sidebar-project button.sidebar-row')].some(node=>node.getAttribute('aria-pressed')==='true'&&node.innerText.includes(${json(example.name)}))`);
+    checks.push({ check: 'home-continues-recent-project', project: example.name, assetCount: example.assetCount, opened: true });
 
     // ===== 第 3 条路指向设置里的软件 AI 配置 =====
     await js(`[...document.querySelectorAll('.sidebar-scroll .nav-item')].find(node=>node.innerText.trim()==='新对话').click()`);
@@ -90,6 +105,57 @@ export async function checkDesktopOnboarding(window: BrowserWindow, output: stri
     assert.equal(library.tab, '模型库', `「用内置模型标注」应直落模型库页签，实际落在「${library.tab}」`);
     assert.ok(library.copy.includes('模型'), `落点应是模型库内容，实际：${library.copy}`);
     checks.push({ check: 'builtin-lane-opens-model-library', tab: library.tab });
+
+    // ===== 首页草稿跨页面保留，成功发起后清空 =====
+    await js(`[...document.querySelectorAll('#app-sidebar nav .nav-item')].find(node=>node.innerText.trim()==='新对话').click()`);
+    await waitFor(`!!document.querySelector('.chat-home textarea')`);
+    const draft = '切页后仍保留的首页草稿';
+    await js(`(()=>{const input=document.querySelector('.chat-home textarea');const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;setter.call(input,${json(draft)});input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await waitFor(`document.querySelector('.chat-home textarea')?.value===${json(draft)}`);
+
+    // 回形针会创建临时 file input；测试期间只保留这个 DOM 节点，再用 DevTools 注入真实隔离文件路径。
+    const debuggerSession = window.webContents.debugger;
+    const debuggerWasAttached = debuggerSession.isAttached();
+    try {
+      if (!debuggerWasAttached) debuggerSession.attach('1.3');
+      await debuggerSession.sendCommand('DOM.enable');
+      await js(`(()=>{const original=HTMLInputElement.prototype.click;window.__homeAttachmentOriginalClick=original;
+        HTMLInputElement.prototype.click=function(){if(this.type==='file'){this.setAttribute('data-onboarding-file-fixture','true');this.style.display='none';document.body.appendChild(this);return;}return original.call(this);};})()`);
+      await js(`document.querySelector('.chat-home .composer-pick').click()`);
+      await waitFor(`!!document.querySelector('input[data-onboarding-file-fixture]')`);
+      const { root } = await debuggerSession.sendCommand('DOM.getDocument') as { root: { nodeId: number } };
+      const { nodeId } = await debuggerSession.sendCommand('DOM.querySelector', { nodeId: root.nodeId, selector: 'input[data-onboarding-file-fixture]' }) as { nodeId: number };
+      assert.ok(nodeId, '回形针应创建文件输入控件');
+      await debuggerSession.sendCommand('DOM.setFileInputFiles', { nodeId, files: [attachmentPath] });
+      await js(`document.querySelector('input[data-onboarding-file-fixture]')?.dispatchEvent(new Event('change',{bubbles:true}))`);
+    } finally {
+      await js(`(()=>{if(window.__homeAttachmentOriginalClick){HTMLInputElement.prototype.click=window.__homeAttachmentOriginalClick;delete window.__homeAttachmentOriginalClick;}
+        document.querySelector('input[data-onboarding-file-fixture]')?.remove();})()`).catch(() => undefined);
+      if (!debuggerWasAttached && debuggerSession.isAttached()) debuggerSession.detach();
+    }
+    await waitFor(`document.querySelector('.chat-home .composer-attachments .attachment-chip')?.innerText.includes('首页验收附件.png')`);
+    const attachment = await js<{ name: string; removeLabel: string | null }>(`(()=>{const chip=document.querySelector('.chat-home .composer-attachments .attachment-chip');return {name:chip?.innerText.trim()??'',removeLabel:chip?.querySelector('button')?.getAttribute('aria-label')??null};})()`);
+    assert.ok(attachment.name.includes('首页验收附件.png'));
+    assert.equal(attachment.removeLabel, '移除 首页验收附件.png');
+    await js(`[...document.querySelectorAll('.sidebar-bottom .nav-item')].find(node=>node.innerText.trim()==='任务').click()`);
+    await waitFor(`location.hash==='#tasks'&&!!document.querySelector('.tasks-page')`);
+    await js(`[...document.querySelectorAll('#app-sidebar nav .nav-item')].find(node=>node.innerText.trim()==='新对话').click()`);
+    await waitFor(`document.querySelector('.chat-home textarea')?.value===${json(draft)}`);
+    await waitFor(`document.querySelector('.chat-home .composer-attachments .attachment-chip')?.innerText.includes('首页验收附件.png')`);
+    checks.push({ check: 'home-draft-and-attachment-survive-page-switch', value: draft, attachment: attachment.name, removable: Boolean(attachment.removeLabel) });
+
+    await js(`document.querySelector('.chat-home .send-button').click()`);
+    await waitFor(`document.querySelector('dialog[open] h2')?.innerText.includes('发送第一条消息')`);
+    await js(`(()=>{const input=document.querySelector('dialog[open] input[placeholder="给项目起个名字"]');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(input,'首页草稿清理验收项目');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await js(`document.querySelector('dialog[open] .modal-actions .button.primary').click()`);
+    await waitFor(`!!document.querySelector('.page-chat .chat-panel textarea')`, 45000);
+    await waitFor(`window.autoLabel.request('project.list').then(list=>list.some(project=>project.name==='首页草稿清理验收项目'&&project.assetCount===1))`, 45000);
+    const sentProject = (await api<Array<{ id: string; name: string; assetCount: number }>>('project.list')).find(project => project.name === '首页草稿清理验收项目');
+    assert.equal(sentProject?.assetCount, 1, '首条消息携带的图片附件应实际导入到新项目');
+    await js(`[...document.querySelectorAll('#app-sidebar nav .nav-item')].find(node=>node.innerText.trim()==='新对话').click()`);
+    await waitFor(`!!document.querySelector('.chat-home textarea')&&document.querySelector('.chat-home textarea').value===''`);
+    assert.equal(await js<number>(`document.querySelectorAll('.chat-home .composer-attachments .attachment-chip').length`), 0, '成功发起后不应把已提交附件留在欢迎页草稿');
+    checks.push({ check: 'home-draft-and-attachment-clear-after-start', project: sentProject?.name, importedAssets: sentProject?.assetCount });
     await writeFile(output, json({ checks, passed: true }));
   } catch (error) {
     await writeFile(output.replace(/\.json$/, '-failure.png'), (await window.webContents.capturePage()).toPNG());

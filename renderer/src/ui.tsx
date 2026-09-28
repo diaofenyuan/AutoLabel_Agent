@@ -1,12 +1,34 @@
 import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
-import { LoaderCircle, X, Search, ArrowUp, Square, Info, Image as ImageIcon, Film, Folder, Paperclip } from 'lucide-react';
+import { LoaderCircle, X, Search, ArrowUp, Square, Info, TriangleAlert, AlertCircle, Check, Image as ImageIcon, Film, Folder, Paperclip } from 'lucide-react';
 import type { ChatAttachment } from './context';
 
 export function Button({ children, className = '', busy, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean }) {
-  return <button className={`button ${className}`} {...props} disabled={props.disabled || busy}>{busy && <LoaderCircle className="spin" size={15} />}{children}</button>;
+  return <button className={`button ${className}`} {...props} disabled={props.disabled || busy} aria-busy={busy || undefined}>{busy && <LoaderCircle className="spin" size={15} aria-hidden="true" />}{children}</button>;
 }
 export function IconButton({ label, children, active, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; active?: boolean }) {
   return <button className={`icon-button ${active ? 'active' : ''} ${props.className ?? ''}`} {...props} aria-label={label} title={label} aria-pressed={active === undefined ? undefined : active}>{children}</button>;
+}
+export function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'success' | 'warning' | 'error' }) {
+  return <span className="tiny-badge" data-tone={tone}>{children}</span>;
+}
+export function StatusDot({ state = 'default' }: { state?: 'default' | 'ready' | 'starting' | 'disconnected' | 'error' | 'stopped' }) {
+  return <span className={`status-dot ${state}`} aria-hidden="true" />;
+}
+export function TextButton({ children, className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
+  return <button className={`text-button ${className}`} {...props}>{children}</button>;
+}
+export function ToastMessage({ message, error = false, action, onClose }: {
+  message: string;
+  error?: boolean;
+  action?: { label: string; onClick: () => void };
+  onClose: () => void;
+}) {
+  return <div className={`toast ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'} aria-live={error ? 'assertive' : 'polite'}>
+    {error ? <AlertCircle size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}
+    <span>{message}</span>
+    {action && <button className="toast-action" onClick={action.onClick}>{action.label}</button>}
+    <IconButton label="关闭提示" onClick={onClose}><X size={14} /></IconButton>
+  </div>;
 }
 export function PageHeader({ title, description, actions }: { title: string; description?: string; actions?: ReactNode }) {
   return <div className="page-heading"><div><h1>{title}</h1>{description && <p>{description}</p>}</div><div className="actions">{actions}</div></div>;
@@ -18,8 +40,8 @@ export function Modal({ title, children, onClose, drawer = false, wide = false }
     <div className="modal-inner"><header><h2>{title}</h2><IconButton label="关闭弹窗" onClick={onClose}><X size={18} /></IconButton></header>{children}</div>
   </dialog>;
 }
-export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
-  return <label className="field"><span>{label}</span>{children}{hint && <small>{hint}</small>}</label>;
+export function Field({ label, children, hint, hintId }: { label: string; children: ReactNode; hint?: string; hintId?: string }) {
+  return <label className="field"><span>{label}</span>{children}{hint && <small id={hintId}>{hint}</small>}</label>;
 }
 export function SearchField({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
   return <label className="search-field"><Search size={15} /><input aria-label={placeholder} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} /></label>;
@@ -28,9 +50,20 @@ export function Empty({ icon, title, description, children }: { icon: ReactNode;
   return <div className="empty empty-state"><div className="empty-orbit" aria-hidden="true"><div className="empty-icon">{icon}</div><span className="empty-orbit-ring" /></div><h2>{title}</h2><p>{description}</p>{children && <div className="empty-actions">{children}</div>}</div>;
 }
 export function Loading({ label = '正在读取…', compact = false }: { label?: string; compact?: boolean }) {
-  return <div className={`inline-loading ${compact ? 'compact' : ''}`} role="status" aria-live="polite"><LoaderCircle className="spin" size={compact ? 14 : 17} /><span>{label}</span></div>;
+  return <div className={`inline-loading ${compact ? 'compact' : ''}`} role="status" aria-live="polite"><LoaderCircle className="spin" size={compact ? 14 : 17} aria-hidden="true" /><span>{label}</span></div>;
 }
-export function Notice({ children }: { children: ReactNode }) { return <div className="notice"><Info size={16} /><div>{children}</div></div>; }
+export function InlineError({ children, tone = 'error', live = 'assertive' }: {
+  children: ReactNode;
+  tone?: 'error' | 'warning';
+  live?: 'assertive' | 'polite' | 'off';
+}) {
+  const role = live === 'assertive' ? 'alert' : live === 'polite' ? 'status' : undefined;
+  return <div className={`inline-error inline-error-${tone}`} role={role} aria-live={live}>{children}</div>;
+}
+export function Notice({ children, tone = 'info' }: { children: ReactNode; tone?: 'info' | 'warning' }) {
+  const Icon = tone === 'warning' ? TriangleAlert : Info;
+  return <div className="notice" data-tone={tone}><Icon size={16} aria-hidden="true" /><div>{children}</div></div>;
+}
 /** 统一确认框：替代原生 window.confirm——原生弹窗与整体视觉不一致，且在自动化验收里不可控。 */
 export function ConfirmModal({ message, onYes, onNo }: { message: string; onYes: () => void; onNo: () => void }) {
   return <Modal title="请确认" onClose={onNo}><div className="form-stack"><p>{message}</p>

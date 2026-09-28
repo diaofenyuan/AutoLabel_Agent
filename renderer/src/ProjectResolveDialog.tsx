@@ -58,9 +58,9 @@ export default function ProjectResolveDialog({ title, confirmLabel, projects, su
   }
   return <Modal title={title} onClose={onClose}>
     <div className="form-stack">
-      {allowExisting && <div className="segmented">
-        <button type="button" className={mode === 'create' ? 'selected' : ''} onClick={() => setMode('create')}>新建项目</button>
-        <button type="button" className={mode === 'existing' ? 'selected' : ''} disabled={!projects.length} onClick={() => setMode('existing')}>选择已有项目</button>
+      {allowExisting && <div className="segmented" role="group" aria-label="项目归属方式">
+        <button type="button" className={mode === 'create' ? 'selected' : ''} aria-pressed={mode === 'create'} onClick={() => setMode('create')}>新建项目</button>
+        <button type="button" className={mode === 'existing' ? 'selected' : ''} aria-pressed={mode === 'existing'} disabled={!projects.length} onClick={() => setMode('existing')}>选择已有项目</button>
       </div>}
       {mode === 'create'
         ? <><Field label="项目名称"><input autoFocus maxLength={80} value={name} onChange={e => setName(e.target.value)} placeholder="给项目起个名字"

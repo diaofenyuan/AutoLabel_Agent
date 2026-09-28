@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Download, RefreshCw, Save, Square, PackageCheck } from 'lucide-react';
 import { useApp } from './context';
 import { errorMessage, isDemo, request } from './bridge';
-import { Button, Field, Loading, Notice } from './ui';
+import { Button, Field, InlineError, Loading, Notice } from './ui';
 
 interface UpdateSettingsProps { onDirtyChange?: (dirty: boolean) => void }
 interface UpdateStatus {
@@ -48,7 +48,7 @@ export default function UpdateSettings({ onDirtyChange }: UpdateSettingsProps){
     {changed&&<p className="muted">更新地址尚未保存，请先保存再检查。</p>}
     {status?.release&&<div className="update-release"><h3>版本 {status.release.version}</h3><p className="muted">安装包 {bytes(status.release.size)}{status.release.publishedAt?` · ${new Date(status.release.publishedAt).toLocaleString('zh-CN')}`:''}</p><div className="release-notes">{status.release.releaseNotes||'此版本未提供更新说明。'}</div></div>}
     {status&&['downloading','verifying','ready','cancelled','installing'].includes(status.state)&&<div className="download-progress"><p>{bytes(downloaded)}{total?` / ${bytes(total)}`:''}{percent!==null?` · ${percent.toFixed(1)}%`:''}</p>{percent!==null&&<progress aria-label="安装包实际下载进度" value={downloaded} max={total}/>}<small>{status.state==='verifying'?'下载完成，正在验证完整性与安装包身份。':status.state==='cancelled'?'已停止下载。重新下载将由桌面更新器处理。':'进度来自实际接收的字节。'}</small></div>}
-    {(status?.error||error)&&<div className="inline-error" role="alert">{status?.error&&<p>{status.error.message}<small className="error-code">{status.error.code}</small></p>}{error&&<p>{error}</p>}</div>}
+    {(status?.error||error)&&<InlineError>{status?.error&&<p>{status.error.message}<small className="error-code">{status.error.code}</small></p>}{error&&<p>{error}</p>}</InlineError>}
     <div className="actions update-actions"><Button disabled={!status||active||changed||status.state==='unconfigured'} busy={pending==='check'} onClick={()=>void command('check')}><RefreshCw size={14}/>检查更新</Button><Button className="primary" disabled={!status||active||changed||!['available','cancelled'].includes(status.state)} busy={pending==='download'} onClick={()=>void command('download')}><Download size={14}/>下载更新</Button>{status?.state==='downloading'&&<Button busy={cancelling} onClick={()=>void command('cancel')}><Square size={13}/>取消下载</Button>}</div>
     {status?.state==='ready'&&<section className="operation-section"><p className="muted">安装前请结束未完成任务并处理待确认调用。主进程会再次检查全部任务；暂停任务仍可能阻止安装。</p><label className="checkbox-row"><input type="checkbox" checked={installAck} disabled={active} onChange={e=>setInstallAck(e.target.checked)}/>已了解安装将退出应用并启动安装程序</label><Button className="primary" disabled={!installAck||active||changed} busy={pending==='install'} onClick={()=>void command('install')}><PackageCheck size={14}/>退出并安装更新</Button></section>}
     </div></>}

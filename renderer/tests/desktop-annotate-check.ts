@@ -2,6 +2,7 @@ import type { BrowserWindow } from 'electron';
 import assert from 'node:assert/strict';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { openProjectOverview } from './desktop-navigation';
 
 /**
  * 素材人工标注验收。
@@ -60,6 +61,10 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
     await js(`[...document.querySelectorAll('.result-thumb')].find(b=>b.innerText.includes(${json(name)})).click()`);
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('编辑标注')`);
   }
+  async function overviewMenuButton(text: string) {
+    await js(`document.querySelector('.overview-more-actions summary').click()`);
+    await button(text, "document.querySelector('.overview-more-menu')");
+  }
   const checks: Record<string, unknown>[] = [];
   window.show();
   try {
@@ -76,7 +81,7 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
     assert.ok(created, `欢迎页导入应建立名为 ${batch} 的项目`);
     const projectId = created!.id;
 
-    await js(`[...document.querySelectorAll('.sidebar-project')].find(g=>g.innerText.includes(${json(batch)})).querySelector('[title="项目概览"]').click()`);
+    await openProjectOverview({ js, wait: waitFor }, batch);
     await waitFor(`!!document.querySelector('.page-overview')&&!!document.querySelector('.result-thumb')`);
 
     // ===== 无类别时：入口存在但明确不可用，并说清去哪加类别 =====
@@ -89,8 +94,8 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
     await button('关闭', dialog);
     await waitFor(`!document.querySelector('dialog[open]')`);
 
-    // 走真实入口建类别，而不是直接用接口绕过去。
-    await button('类别与点位模板');
+    // 项目低频配置收在「更多」中，验收继续走用户实际可见的页面入口。
+    await overviewMenuButton('类别与点位模板');
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('类别与点位模板')`);
     await button('添加类别', dialog);
     await fill(`${dialogCss} [aria-label="类别1名称"]`, '粉色手办');
@@ -120,6 +125,12 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
     await select('.asset-annotator .truth-properties select', 'annotate-fixture');
     await waitFor(`!!document.querySelector('.asset-annotator [aria-label="标注对象x"]')`);
     await fill('.asset-annotator [aria-label="标注对象x"]', '77');
+    await waitFor(`document.querySelector('.asset-annotator [aria-label="标注对象x"]')?.value==='77'`);
+    await js(`document.querySelector('.asset-annotator [aria-label="撤销标注改动"]').click()`);
+    await waitFor(`document.querySelector('.asset-annotator [aria-label="标注对象x"]')?.value==='40'`);
+    await js(`document.querySelector('.asset-annotator [aria-label="重做标注改动"]').click()`);
+    await waitFor(`document.querySelector('.asset-annotator [aria-label="标注对象x"]')?.value==='77'`);
+    checks.push({ check: 'annotate-undo-redo-restores-geometry', originalX: 40, undoneX: 40, redoneX: 77 });
     assert.equal(await enabled('保存'), true, '有改动后「保存」应可用');
     await button('保存', dialog);
     await waitFor(`window.autoLabel.request('asset.get',{assetId:${json(target.id)}}).then(a=>a.version>${seeded.version})`);
@@ -151,7 +162,7 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
     checks.push({ check: 'annotate-reopen-visible', historyVersions: history.length });
 
     // ===== 划分口径与来源组：概念要在界面上可读到，来源组不足要主动提示 =====
-    await button('数据集版本');
+    await overviewMenuButton('数据集版本');
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('数据集版本')`);
     await button('新建版本', dialog);
     await js(`[...${dialog}.querySelectorAll('details')].forEach(d=>d.setAttribute('open',''))`);
@@ -207,8 +218,8 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
     for (const ghost of ['标注工作台', 'V / H', 'Ctrl + S', 'Ctrl + Z']) {
       assert.ok(!settingsText.includes(ghost), `设置页仍在宣传不存在的「${ghost}」，实际：${settingsText.slice(0, 400)}`);
     }
-    assert.ok(await js<boolean>(`[...document.querySelectorAll('.sidebar-project button[title]')].some(b=>b.getAttribute('title')==='进入对话')`), '侧栏项目行应有明确的「进入对话」入口，而不是只能点项目名');
-    checks.push({ check: 'shortcut-copy-matches-capability', helpGhosts: 0, settingsGhosts: 0, sidebarChatEntry: true });
+    assert.ok(await js<boolean>(`[...document.querySelectorAll('.sidebar-project .sidebar-row')].some(b=>b.getAttribute('title')?.includes('张素材'))`), '侧栏项目主行应明确显示项目与素材数，并可直接进入项目会话');
+    checks.push({ check: 'shortcut-copy-matches-capability', helpGhosts: 0, settingsGhosts: 0, sidebarProjectEntry: true });
 
     // ===== AI 配置：能力验证要如实说明测试图很小，且超时设置可找到 =====
     await js(`[...document.querySelectorAll('.settings-tabs button')].find(b=>b.innerText.trim()==='软件 AI 配置').click()`);

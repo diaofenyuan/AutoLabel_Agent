@@ -1,0 +1,84 @@
+/* 先统一高复用控件的状态值；具体页面布局仍由各自样式负责。 */
+body {
+  color: var(--color-text);
+  background: var(--color-background);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
+button:not(:disabled) { transition-duration: var(--motion-fast); }
+button:disabled { opacity: var(--state-disabled-opacity); }
+button[aria-busy="true"] { cursor: progress; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible { position: relative; z-index: 1; }
+
+input, textarea, select {
+  color: var(--color-text);
+  background: var(--color-background);
+  border-color: var(--color-border);
+  border-radius: var(--radius-control);
+  padding: var(--control-pad-y) var(--control-pad-x);
+  transition: border-color var(--motion-fast), background-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+
+input:not(:disabled):not([aria-invalid="true"]):hover,
+textarea:not(:disabled):not([aria-invalid="true"]):hover,
+select:not(:disabled):not([aria-invalid="true"]):hover {
+  border-color: var(--color-muted);
+}
+
+input:focus-visible:not([aria-invalid="true"]),
+textarea:focus-visible:not([aria-invalid="true"]),
+select:focus-visible:not([aria-invalid="true"]) {
+  border-color: var(--color-accent);
+}
+
+input:disabled, textarea:disabled, select:disabled {
+  color: var(--color-subtle);
+  background: var(--color-panel);
+  cursor: not-allowed;
+}
+
+input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="true"] {
+  border-color: var(--color-error);
+  box-shadow: var(--focus-ring-soft);
+}
+
+.button {
+  min-height: var(--control-height);
+  border-radius: var(--radius-control);
+}
+
+.icon-button {
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--color-selected);
+  color: var(--color-text);
+}
+
+.inline-error.inline-error-error {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 7%, var(--color-background));
+}
+
+.inline-error.inline-error-warning {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 9%, var(--color-background));
+}
+
+.notice[data-tone="warning"] {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 8%, var(--color-background));
+}
+
+.tiny-badge[data-tone="success"] { color: var(--color-success); background: color-mix(in srgb, var(--color-success) 9%, var(--color-background)); }
+.tiny-badge[data-tone="warning"] { color: var(--color-warning); background: color-mix(in srgb, var(--color-warning) 9%, var(--color-background)); }
+.tiny-badge[data-tone="error"] { color: var(--color-error); background: color-mix(in srgb, var(--color-error) 8%, var(--color-background)); }
+
+.toast { z-index: var(--layer-toast); }

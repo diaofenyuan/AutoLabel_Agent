@@ -935,8 +935,31 @@ async function smoke(): Promise<void> {
     });
     app.quit(); return;
   }
-  if (process.argv.includes('--desktop-connection-check')) { await checkDesktopConnection(window!, output, { stop: () => engine.stop(), restart: () => engine.restart() }); app.quit(); return; }
-  if (process.argv.includes('--desktop-ui-check')) { await checkDesktopUi(window!, output); app.quit(); return; }
+  if (process.argv.includes('--desktop-connection-check')) {
+    try {
+      await checkDesktopConnection(window!, output, {
+        stop: () => engine.stop(), restart: () => engine.restart(),
+        fail: async () => {
+          const previous = process.env.AUTOLABEL_ENGINE_JAR;
+          process.env.AUTOLABEL_ENGINE_JAR = path.join(userData, 'missing-ui-check-engine.jar');
+          try { return await engine.restart(); }
+          finally { if (previous === undefined) delete process.env.AUTOLABEL_ENGINE_JAR; else process.env.AUTOLABEL_ENGINE_JAR = previous; }
+        },
+      });
+    } catch (error) {
+      await writeFile(output, JSON.stringify({ passed: false, error: error instanceof Error ? error.message : String(error) }, null, 2));
+      throw error;
+    }
+    app.quit(); return;
+  }
+  if (process.argv.includes('--desktop-ui-check')) {
+    try { await checkDesktopUi(window!, output); }
+    catch (error) {
+      await writeFile(output, JSON.stringify({ passed: false, error: error instanceof Error ? error.message : String(error) }, null, 2));
+      throw error;
+    }
+    app.quit(); return;
+  }
   if (process.argv.includes('--desktop-window-check')) {
     const inspect = async () => {
       const view = await window!.webContents.executeJavaScript(`({ title:document.title, headerCount:document.querySelectorAll('.topbar,.titlebar').length,

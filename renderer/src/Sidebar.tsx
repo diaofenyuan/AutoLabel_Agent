@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Eraser, FolderOpen, LayoutGrid, ListTodo, MessageSquare, MoreHorizontal, Pencil, Pin, PinOff, Plus, Scan, Search,
-  Settings as SettingsIcon, Trash2,
+  ArrowRight, Eraser, FolderOpen, LayoutGrid, ListTodo, MessageSquare, MoreHorizontal, Pencil, Pin, PinOff, Plus, Scan, Search,
+  Settings as SettingsIcon, Trash2, X,
 } from 'lucide-react';
 import type { ChatSessionSummary } from '../../shared/chat';
 import type { Project } from './types';
@@ -31,8 +31,8 @@ const ORPHANED_VISIBLE = 3;
 type RenameTarget = { kind: 'session' | 'project'; id: string; value: string };
 
 /** Codex 式侧栏：顶部 / 主入口 / 置顶 / 项目 / 最近 / 底部六段，会话来自 chat.history.list。 */
-export function Sidebar({ inert = false, drawer = false }: { inert?: boolean; drawer?: boolean }) {
-  const { page, navigate, project, projects, openProject, refreshProjects, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, openJumper, requestDeleteProject, notify, engine, setProject } = useApp();
+export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: boolean; drawer?: boolean; onClose: () => void }) {
+  const { page, navigate, project, projects, openProject, refreshProjects, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, requestDeleteProject, notify, engine, setProject } = useApp();
   // 侧栏「任务」徽标：进行中的长任务数量，切页也能看见还有多少在跑。
   const activeTasks = useActiveTaskCount();
   const [rename, setRename] = useState<RenameTarget | null>(null);
@@ -42,8 +42,17 @@ export function Sidebar({ inert = false, drawer = false }: { inert?: boolean; dr
   const [showAllProjects, setShowAllProjects] = useState(false);
   const [showAllOrphaned, setShowAllOrphaned] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<string[]>([]);
+  const [projectMenu, setProjectMenu] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   // 新建项目走命名弹框：项目不再自动取名，名称由用户在这里确定。
   const [creatingProject, setCreatingProject] = useState(false);
+  useEffect(() => {
+    if (!projectMenu) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setProjectMenu(''); } };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [projectMenu]);
 
   // 置顶按 pinOrder、其余按 lastMessageAt 倒序，Ctrl+1…9 与置顶共用同一序列。
   const ordered = useMemo(() => [...chatSessions].sort((a, b) => {
@@ -51,6 +60,9 @@ export function Sidebar({ inert = false, drawer = false }: { inert?: boolean; dr
     if (a.pinned) return (a.pinOrder || 0) - (b.pinOrder || 0);
     return b.lastMessageAt.localeCompare(a.lastMessageAt);
   }), [chatSessions]);
+  const query = searchQuery.trim().toLocaleLowerCase('zh-CN');
+  const matchingProjects = query ? projects.filter(item => item.name.toLocaleLowerCase('zh-CN').includes(query)).slice(0, 8) : [];
+  const matchingSessions = query ? ordered.filter(item => item.title.toLocaleLowerCase('zh-CN').includes(query)).slice(0, 8) : [];
   const pinned = ordered.filter(item => item.pinned);
   // 会话按项目归组：项目行下面直接列出该项目的会话，进对话一律从项目走。
   // 每组默认只留最近几条，展开后才是全部。
@@ -145,10 +157,11 @@ export function Sidebar({ inert = false, drawer = false }: { inert?: boolean; dr
     <div className="sidebar-top">
       {/* 顶部只留产品标识与搜索：原先的下拉菜单里两项（快速跳转、帮助）在顶栏都已有入口。 */}
       <div className="sidebar-workspace"><Scan size={20} strokeWidth={1.8} /><span>自动标注小助手</span></div>
-      <IconButton label="搜索" onClick={openJumper}><Search size={16} /></IconButton>
+      <IconButton label="搜索项目和会话" onClick={() => { setSearchQuery(''); setSearchOpen(true); }}><Search size={16} /></IconButton>
+      {isMobileDrawer && <IconButton label="关闭侧栏" onClick={onClose}><X size={16} /></IconButton>}
     </div>
     <div className="sidebar-scroll">
-      <nav aria-label="主导航">{mainEntries.map(entry => <button key={entry.key} className="nav-item" title={entry.label} onClick={() => void startProjectChat()}><entry.icon size={18} strokeWidth={1.65} /><span>{entry.label}</span></button>)}</nav>
+      <nav aria-label="主导航">{mainEntries.map(entry => <button key={entry.key} className="nav-item" aria-current={page === 'chat' && !activeSessionId ? 'page' : undefined} title={entry.label} onClick={() => void startProjectChat()}><entry.icon size={18} strokeWidth={1.65} /><span>{entry.label}</span></button>)}</nav>
       {pinned.length > 0 && <div className="sidebar-group"><div className="sidebar-group-head"><span className="sidebar-group-title">置顶</span></div>{pinned.map(sessionRow)}</div>}
       <div className="sidebar-group">
         {/* 「＋」弹出命名框：项目必须由用户命名，不再自动取名也不再只跳欢迎页。 */}
@@ -166,13 +179,12 @@ export function Sidebar({ inert = false, drawer = false }: { inert?: boolean; dr
               <div className={`sidebar-project ${project?.id === item.id ? 'selected' : ''}`}>
                 {/* 素材数直接写在项目行上：同名项目靠它区分，否则用户只能逐个点开看哪个有素材。 */}
                 <button className="sidebar-row" title={`${item.name} · ${item.assetCount} 张素材`} aria-pressed={project?.id === item.id} onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><FolderOpen size={15} /><span className="sidebar-row-title truncate">{item.name}</span><span className="sidebar-project-count">{item.assetCount} 张</span></button>
-                <span className="sidebar-actions">
-                  {/* 进对话与看概览分开给图标：点项目名字虽然也能进，但界面上没有任何提示。 */}
-                  <button title="进入对话" onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><MessageSquare size={13} /></button>
-                  <button title="项目概览" onClick={() => void openOverview(item)}><LayoutGrid size={13} /></button>
-                  <button title="重命名" onClick={() => setRename({ kind: 'project', id: item.id, value: item.name })}><Pencil size={13} /></button>
-                  <button title="删除项目…" onClick={() => requestDeleteProject(item)}><Trash2 size={13} /></button>
-                </span>
+                <span className="sidebar-actions"><button aria-label={`项目操作 ${item.name}`} aria-haspopup="menu" aria-expanded={projectMenu === item.id} title="项目操作" onClick={() => setProjectMenu(value => value === item.id ? '' : item.id)}><MoreHorizontal size={15} /></button></span>
+                {projectMenu === item.id && <div className="sidebar-menu" role="menu" aria-label={`${item.name} 的项目操作`}>
+                  <button role="menuitem" onClick={() => { setProjectMenu(''); void openOverview(item); }}><LayoutGrid size={14} />项目概览</button>
+                  <button role="menuitem" onClick={() => { setProjectMenu(''); setRename({ kind: 'project', id: item.id, value: item.name }); }}><Pencil size={14} />重命名</button>
+                  <button role="menuitem" onClick={() => { setProjectMenu(''); requestDeleteProject(item); }}><Trash2 size={14} />删除项目…</button>
+                </div>}
               </div>
               {sessions.length > 0 && <div className="sidebar-sublist">{sessions.map(sessionRow)}</div>}
               {total > SESSIONS_PER_PROJECT && <button className="sidebar-more" onClick={() => setExpandedProjects(list => list.includes(item.id) ? list.filter(id => id !== item.id) : [...list, item.id])}>
@@ -215,6 +227,14 @@ export function Sidebar({ inert = false, drawer = false }: { inert?: boolean; dr
         await openProject(created);
         setCreatingProject(false);
       }} />}
+    {searchOpen && <Modal title="搜索项目和会话" onClose={() => setSearchOpen(false)}><div className="command-palette sidebar-search-palette">
+      <label className="command-search"><Search size={16} aria-hidden="true"/><input autoFocus aria-label="搜索项目和会话" placeholder="输入项目名或会话标题…" value={searchQuery} onChange={event => setSearchQuery(event.target.value)}/></label>
+      {!query ? <p className="quiet-empty">输入关键词，搜索项目和会话。</p> : <div className="sidebar-search-results">
+        {matchingProjects.length > 0 && <section aria-label="匹配的项目"><h3>项目</h3><div className="command-list">{matchingProjects.map(item => <button key={item.id} aria-label={`打开项目 ${item.name}`} onClick={() => { setSearchOpen(false); void openProject(item).catch(e => notify(errorMessage(e), true)); }}><span className="command-icon"><FolderOpen size={16}/></span><span className="truncate">{item.name}</span><small>{item.assetCount} 张素材</small><ArrowRight size={14}/></button>)}</div></section>}
+        {matchingSessions.length > 0 && <section aria-label="匹配的会话"><h3>会话</h3><div className="command-list">{matchingSessions.map(item => <button key={item.id} aria-label={`打开会话 ${item.title}`} onClick={() => { setSearchOpen(false); void openSession(item.id); }}><span className="command-icon"><MessageSquare size={16}/></span><span className="truncate">{item.title}</span><small>{projects.find(target => target.id === item.projectId)?.name ?? '项目不可用'}</small><ArrowRight size={14}/></button>)}</div></section>}
+        {!matchingProjects.length && !matchingSessions.length && <p className="quiet-empty">没有匹配的项目或会话。</p>}
+      </div>}
+    </div></Modal>}
     {rename && <Modal title={rename.kind === 'session' ? '重命名对话' : '重命名项目'} onClose={() => setRename(null)}><form onSubmit={submitRename} className="form-stack"><Field label="名称"><input autoFocus maxLength={rename.kind === 'session' ? 120 : 80} value={rename.value} onChange={e => setRename({ ...rename, value: e.target.value })} /></Field><div className="modal-actions"><Button type="button" onClick={() => setRename(null)}>取消</Button><Button className="primary" type="submit" busy={busy} disabled={!rename.value.trim()}>保存</Button></div></form></Modal>}
     {confirmClear && <Modal title="清空全部对话" onClose={() => setConfirmClear(false)}><div className="form-stack"><p>全部 {chatSessions.length} 个对话会先移入回收站并保留 7 天，可在此期间从回收站恢复。</p><div className="modal-actions"><Button type="button" onClick={() => setConfirmClear(false)}>取消</Button><Button className="primary" busy={busy} onClick={() => void clearSessions()}>确认清空</Button></div></div></Modal>}
   </aside>;

@@ -1,11 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { PanelLeftClose, PanelLeftOpen, CircleHelp, ChevronRight, X, Minus, Square, Check, AlertCircle, Keyboard, LoaderCircle, Search, ArrowRight } from 'lucide-react';
-import { Context, blankChatSession, isEditableTarget, navAll, navLabel, type Page, type ChatSession, type SettingsSection } from './context';
+import { PanelLeftClose, PanelLeftOpen, CircleHelp, ChevronRight, X, Minus, Square, AlertCircle, Keyboard, LoaderCircle, Search, ArrowRight } from 'lucide-react';
+import { Context, blankChatSession, isEditableTarget, navAll, navLabel, type ChatAttachment, type Page, type ChatSession, type SettingsSection } from './context';
 import { getBridge, isDemo, request, errorMessage } from './bridge';
 import type { Project, Asset, Preferences, Provider, EngineEvent, EngineStatus } from './types';
 import { defaultPreferences } from './types';
 import type { ChatHistoryList, ChatSessionSummary } from '../../shared/chat';
-import { IconButton, Modal } from './ui';
+import { IconButton, Modal, ToastMessage } from './ui';
 import { Sidebar } from './Sidebar';
 import { ProjectDeletionDialog } from './ProjectDeletion';
 import { ConfirmHost } from './confirm';
@@ -43,6 +43,8 @@ export default function App() {
   const [chats, setChats] = useState<Record<string, ChatSession>>({});
   const [chatSessions, setChatSessions] = useState<ChatSessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState('');
+  const [homeDraft, setHomeDraft] = useState('');
+  const [homeAttachments, setHomeAttachments] = useState<ChatAttachment[]>([]);
   // 欢迎页发送时拖了视频：抽帧面板要等进入项目会话后才打开，队列在这里中转。
   const [pendingVideoImports, setPendingVideoImports] = useState<{ projectId: string; files: string[] } | null>(null);
   const [engine, setEngine] = useState<EngineStatus>({ state: 'starting' });
@@ -282,20 +284,20 @@ export default function App() {
     catch (e) { notify(errorMessage(e), true); }
     finally { setReconnecting(false); }
   }
-  return <Context.Provider value={{ page, navigate, settingsSection, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, mediaJob, setMediaJob, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, pendingVideoImports, setPendingVideoImports, openJumper, openHelp, requestDeleteProject }}>
+  return <Context.Provider value={{ page, navigate, settingsSection, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, mediaJob, setMediaJob, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, pendingVideoImports, setPendingVideoImports, homeDraft, setHomeDraft, homeAttachments, setHomeAttachments, openJumper, openHelp, requestDeleteProject }}>
     <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`} onClickCapture={event => {
       const target = event.target;
       if (mobileLayout && !collapsed && target instanceof Element && target.closest('.sidebar .nav-item, .sidebar .sidebar-row')) setSidebarOpen(false);
     }}>
-      <Sidebar inert={collapsed && mobileLayout} drawer={mobileLayout} />
+      <Sidebar inert={collapsed && mobileLayout} drawer={mobileLayout} onClose={() => setSidebarOpen(false)} />
       {!collapsed && <button className="sidebar-backdrop" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} />}
       {deletion && <ProjectDeletionDialog project={deletion} onClose={() => setDeletion(null)} onDeleted={projectId => void projectDeleted(projectId)} />}
       <ConfirmHost />
-      <section className="app-main"><header className="topbar" onDoubleClick={e => { if (!isDemo && !(e.target as HTMLElement).closest('button,input,select,textarea')) void getBridge().then(b => b.windowAction('maximize')); }}><div className="breadcrumb"><IconButton label={collapsed ? '展开侧栏' : '收起侧栏'} aria-controls="app-sidebar" aria-expanded={!collapsed} onClick={() => setSidebarOpen(collapsed)}>{collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</IconButton><span>{navLabel(page)}</span>{project && page !== 'chat' && <><ChevronRight size={13} /><span className="muted truncate">{project.name}</span></>}</div><div className="topbar-actions">{isDemo && <span className="demo-indicator">演示模式</span>}{!isDemo && <span className={`engine-chip ${engine.state}`} role={engine.state === 'error' ? 'alert' : 'status'} title={engine.message || '本地引擎状态'}><span className="status-dot" />{engine.state === 'ready' ? '引擎已连接' : engine.state === 'starting' ? '引擎启动中' : engine.state === 'disconnected' ? '引擎已中断' : engine.state === 'stopped' ? '引擎已停止' : '引擎异常'}</span>}<button className="command-trigger" onClick={openJumper}><Search size={14} /><span>快速跳转</span><kbd>Ctrl K</kbd></button><IconButton label="快捷键与帮助" onClick={openHelp}><CircleHelp size={17} /></IconButton>{!isDemo && <div className="window-actions">{(['minimize', 'maximize', 'close'] as const).map((action, index) => <button key={action} aria-label={['最小化窗口', '最大化窗口', '关闭窗口'][index]} onClick={() => void getBridge().then(b => b.windowAction(action)).catch(e => notify(errorMessage(e), true))}>{index === 0 ? <Minus size={13} /> : index === 1 ? <Square size={11} /> : <X size={14} />}</button>)}</div>}</div></header>
+      <section className="app-main" inert={!collapsed && mobileLayout ? true : undefined}><header className="topbar" onDoubleClick={e => { if (!isDemo && !(e.target as HTMLElement).closest('button,input,select,textarea')) void getBridge().then(b => b.windowAction('maximize')); }}><div className="breadcrumb"><IconButton label={collapsed ? '展开侧栏' : '收起侧栏'} aria-controls="app-sidebar" aria-expanded={!collapsed} onClick={() => setSidebarOpen(collapsed)}>{collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</IconButton><span>{navLabel(page)}</span>{project && page !== 'chat' && <><ChevronRight size={13} /><span className="muted truncate">{project.name}</span></>}</div><div className="topbar-actions">{isDemo && <span className="demo-indicator">演示模式</span>}{!isDemo && <span className={`engine-chip ${engine.state}`} role={engine.state === 'error' ? 'alert' : 'status'} title={engine.message || '本地引擎状态'}><span className="status-dot" />{engine.state === 'ready' ? '引擎已连接' : engine.state === 'starting' ? '引擎启动中' : engine.state === 'disconnected' ? '引擎已中断' : engine.state === 'stopped' ? '引擎已停止' : '引擎异常'}</span>}<button className="command-trigger" onClick={openJumper}><Search size={14} /><span>快速跳转</span><kbd>Ctrl K</kbd></button><IconButton label="快捷键与帮助" onClick={openHelp}><CircleHelp size={17} /></IconButton>{!isDemo && <div className="window-actions">{(['minimize', 'maximize', 'close'] as const).map((action, index) => <button key={action} aria-label={['最小化窗口', '最大化窗口', '关闭窗口'][index]} onClick={() => void getBridge().then(b => b.windowAction(action)).catch(e => notify(errorMessage(e), true))}>{index === 0 ? <Minus size={13} /> : index === 1 ? <Square size={11} /> : <X size={14} />}</button>)}</div>}</div></header>
         {/* 抽帧进度与自动导入挂在应用层：抽帧创建后会跳到概览页，进度条若只在对话页，
             用户一离开就没人推进自动导入了。 */}
         {!isDemo && <FrameJobStrip />}
-        {!isDemo && engine.state !== 'ready' && <div className="connection-banner" role={engine.state === 'error' ? 'alert' : 'status'} aria-live="polite" aria-busy={reconnecting}><AlertCircle size={14} />{reconnecting ? '正在重新连接本地引擎…' : engine.message || '本地引擎尚未就绪，数据操作暂不可用。'}<button disabled={reconnecting} onClick={() => void reconnect()}>{reconnecting ? '连接中…' : '重新连接'}</button></div>}
+        {!isDemo && engine.state !== 'ready' && <div className="connection-banner" role={engine.state === 'error' ? 'alert' : 'status'} aria-live={engine.state === 'error' ? 'assertive' : 'polite'} aria-busy={reconnecting}><AlertCircle size={14} />{reconnecting ? '正在重新连接本地引擎…' : engine.message || '本地引擎尚未就绪，数据操作暂不可用。'}<button disabled={reconnecting} onClick={() => void reconnect()}>{reconnecting ? '连接中…' : '重新连接'}</button></div>}
         <main className={`page page-${page}`} key={page} aria-busy={loading || assetsLoading}>
           {loading ? <div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作空间…</div> : <Suspense fallback={<div className="page-loading" role="status"><LoaderCircle className="spin" size={20} />加载工作区…</div>}>
             {page === 'chat' ? (activeSessionId ? <ChatPanel /> : <ChatHome />) : page === 'overview' ? <ProjectOverview /> : page === 'tasks' ? <Tasks /> : <Settings />}
@@ -303,7 +305,9 @@ export default function App() {
         </main>
       </section>
     </div>
-    {toast && <div key={toast.id} className={`toast ${toast.error ? 'error' : ''}`} role={toast.error ? 'alert' : 'status'}>{toast.error ? <AlertCircle size={17} /> : <Check size={17} />}<span>{toast.message}</span>{toast.action && <button className="toast-action" onClick={() => { const action = toast.action!; setToast(null); action.run(); }}>{toast.action.label}</button>}<IconButton label="关闭提示" onClick={() => setToast(null)}><X size={14} /></IconButton></div>}
+    {toast && <ToastMessage key={toast.id} message={toast.message} error={toast.error}
+      action={toast.action ? { label: toast.action.label, onClick: () => { const action = toast.action!; setToast(null); action.run(); } } : undefined}
+      onClose={() => setToast(null)} />}
     {help && <Modal title="快捷键与帮助" onClose={() => setHelp(false)}><div className="help-content"><Keyboard size={26} /><p>人工标注在素材预览里完成：打开项目概览或对话结果中的任意素材，点「编辑标注」进入画布；画完点「保存」写入正式标注，核对无误再点「保存并确认」。也可以直接在对话里说明要改什么。</p><dl className="shortcuts">{[['完成当前多边形', 'Enter'], ['取消当前绘制', 'Escape'], ['删除选中的多边形顶点', 'Delete'], ['发送对话消息', 'Ctrl + Enter'], ['打开快速跳转', 'Ctrl + K'], ['切换到前九个对话', 'Ctrl + 1…9']].map(([label,key]) => <div key={label}><dt>{label}</dt><dd><kbd>{key}</kbd></dd></div>)}</dl><p className="muted">{isDemo ? '当前为隔离的浏览器演示。图片与标注保存在本浏览器；API 调用、真实任务及 YOLO 导出需要桌面引擎。' : '图片坐标以引擎提供的基准图为准。模型候选与人工确认分别记录。'}</p></div></Modal>}
     {commandPalette && <Modal title="快速跳转" onClose={() => setCommandPalette(false)}><div className="command-palette"><label className="command-search"><Search size={16} /><input autoFocus value={commandQuery} onChange={event => { setCommandQuery(event.target.value); setCommandSelection(0); }} placeholder="搜索页面…" /></label><div className="command-list">{commandItems.map((entry, index) => <button key={entry.key} className={index === commandSelection ? 'selected' : ''} aria-selected={index === commandSelection} onMouseEnter={() => setCommandSelection(index)} onClick={() => { setCommandPalette(false); void navigate(entry.key); }}><span className="command-icon"><entry.icon size={16} /></span><span>{entry.label}</span><ArrowRight size={14} /></button>)}{!commandItems.length && <p className="quiet-empty">没有匹配的页面。</p>}</div><p className="command-hint"><kbd>↑↓</kbd> 选择 · <kbd>Enter</kbd> 打开 · <kbd>Esc</kbd> 关闭</p></div></Modal>}
     {busyChat && <div className="global-chat-status" role="status"><LoaderCircle size={14} className="spin" /><span>助手执行中 · {busyChat.runningScope}</span><ButtonCancel id={busyChat.id} notify={notify} /></div>}

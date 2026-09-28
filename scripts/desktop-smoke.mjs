@@ -32,6 +32,7 @@ const MANUAL_CHECKS = [
   { flag: '--reason', label: 'reason-check', env: 'AUTOLABEL_REASON_UI_CHECK' },
   { flag: '--annotate', label: 'annotate-check', env: 'AUTOLABEL_ANNOTATE_UI_CHECK' },
   { flag: '--unknown-retry', label: 'unknown-retry-check', env: 'AUTOLABEL_UNKNOWN_RETRY_UI_CHECK' },
+  { flag: '--chat-state-ui', label: 'chat-state-check', env: 'AUTOLABEL_CHAT_STATE_UI_CHECK' },
   { flag: '--frame-scope', label: 'frame-scope-check', env: 'AUTOLABEL_FRAME_SCOPE_UI_CHECK' },
   { flag: '--project-identity', label: 'project-identity-check', env: 'AUTOLABEL_PROJECT_IDENTITY_UI_CHECK' },
   { flag: '--directory-import', label: 'directory-import-check', env: 'AUTOLABEL_DIRECTORY_IMPORT_UI_CHECK' },
@@ -68,6 +69,7 @@ const mediaOnly = flagIs('--media');
 const reasonOnly = flagIs('--reason');
 const annotateOnly = flagIs('--annotate');
 const unknownRetryOnly = flagIs('--unknown-retry');
+const chatStateOnly = flagIs('--chat-state-ui');
 const frameScopeOnly = flagIs('--frame-scope');
 const projectIdentityOnly = flagIs('--project-identity');
 const directoryImportOnly = flagIs('--directory-import');
@@ -190,7 +192,7 @@ if (releaseOnly) {
   console.log(`新包版本与 4C 启动检查通过：${output}`); process.exit(0);
 }
 if (updateUiOnly) { assert.equal(result.passed, true); assert.deepEqual(result.states, ['available','ready','install-gate','cancelled','checksum-error']); console.log(`更新界面本地回环检查通过：${output}`); process.exit(0); }
-if (runControlOnly) { assert.equal(result.passed, true); assert.equal(result.paused.cancelled, true); assert.equal(result.failedRetry.retryDispatched, true); assert.ok(result.failedRetry.callsAfter > result.failedRetry.callsBefore); console.log(`任务中心暂停/恢复/取消/失败重试界面检查通过：${output}`); process.exit(0); }
+if (runControlOnly) { assert.equal(result.passed, true); assert.equal(result.taskKinds?.group, '任务类型'); assert.deepEqual(result.taskKinds?.pressed, ['标注任务']); assert.equal(result.paused.cancelled, true); assert.equal(result.failedRetry.retryDispatched, true); assert.ok(result.failedRetry.callsAfter > result.failedRetry.callsBefore); console.log(`任务中心暂停/恢复/取消/失败重试界面检查通过：${output}`); process.exit(0); }
 if (mediaOnly) { assert.equal(result.passed, true); assert.equal(result.timeline?.frameCount, 4); assert.equal(result.timeline?.framesHaveSourcePts, true); assert.equal(result.timeline?.workspaceVisible, true);
   const scene = result.checks.find(check => check.check === 'scene-extraction');
   assert.ok(scene && scene.firstKept === true && scene.thresholdOneFrames === 1 && scene.thinnedFrames >= 1 && scene.thinnedFrames <= 3, `场景变化抽帧断言未通过：${JSON.stringify(scene)}`);
@@ -222,8 +224,11 @@ if (sidebarOnly) {
   assert.ok(byCheck.get('sidebar-name-readable')?.sidebar >= 236);
   assert.ok(byCheck.get('sidebar-name-readable')?.titleWidth >= 84);
   assert.ok(byCheck.get('sidebar-name-readable')?.shown >= 5);
-  // 悬浮操作仍然直接可达，没被收进溢出菜单。
-  assert.ok(byCheck.get('sidebar-name-readable')?.actionButtons >= 3);
+  // 项目行只保留一个更多入口；其低频动作和侧栏搜索职责分别有独立断言。
+  assert.equal(byCheck.get('sidebar-name-readable')?.actionButtons, 1);
+  assert.deepEqual(byCheck.get('project-actions-in-more-menu')?.items, ['项目概览', '重命名', '删除项目…']);
+  assert.deepEqual(byCheck.get('sidebar-search-and-page-jump-are-distinct')?.projectSearch, { project: true, pageOnly: false });
+  assert.deepEqual(byCheck.get('sidebar-search-and-page-jump-are-distinct')?.jumpSearch, { page: '任务', count: 1 });
   console.log(`侧栏可读性检查通过：${output}`); process.exit(0);
 }
 if (errorActionOnly) {
@@ -235,6 +240,9 @@ if (errorActionOnly) {
   assert.equal(byCheck.get('blocked-notice-has-next-step')?.landed?.tab, '软件 AI 配置');
   // 普通成功提示不带出口。
   assert.ok(String(byCheck.get('blocked-notice-has-next-step')?.plainToastText ?? '').includes('示例项目已载入'));
+  assert.equal(byCheck.get('blocked-notice-has-next-step')?.plainRole, 'status');
+  assert.equal(byCheck.get('blocked-notice-has-next-step')?.blockedRole, 'alert');
+  assert.equal(byCheck.get('inline-error-default-semantics')?.role, 'alert');
   console.log(`阻塞提示的下一步检查通过：${output}`); process.exit(0);
 }
 if (settingsUiOnly) {
@@ -410,6 +418,17 @@ if (aiPresetOnly) {
   assert.equal(byCheck.get('quick-form-hides-advanced')?.keyEnabled, true);
   // 手动配置里一件没少。
   assert.equal(byCheck.get('manual-form-keeps-everything')?.capabilityRows, 6);
+  // 不可达回环地址由本地引擎拒绝，错误要出现在当前配置表单中。
+  assert.ok(byCheck.get('api-validation-failed')?.message?.length > 0);
+  // 任一凭据本身不代表默认对话已配置；成功设置后首页要立即显示模型与调整入口。
+  assert.ok(byCheck.get('credential-without-chat-default-is-unconfigured')?.action?.includes('配置 AI'));
+  assert.ok(byCheck.get('configured-default-reflected-on-home')?.modelText?.includes('当前模型：fixture-setup-model'));
+  assert.ok(byCheck.get('configured-default-reflected-on-home')?.action?.includes('调整 AI 配置'));
+  for (const capability of ['连接', '文本输入', '图片输入', '结构化输出']) {
+    assert.ok(byCheck.get('configured-default-reflected-on-home')?.capabilityResults?.find(result => result.name === capability)?.status?.includes('已验证'), `默认模型必需能力未通过：${capability}`);
+  }
+  assert.ok(byCheck.get('configured-default-reflected-on-home')?.modelRequests >= 2);
+  assert.ok(byCheck.get('configured-default-reflected-on-home')?.chatRequests >= 3);
   console.log(`简版 AI 配置检查通过：${output}`); process.exit(0);
 }
 if (onboardingOnly) {
@@ -427,6 +446,10 @@ if (onboardingOnly) {
   assert.ok(byCheck.get('home-loads-example')?.assets > 0);
   // 第 3 条路把人送到设置 · 软件 AI 配置。
   assert.equal(byCheck.get('ai-lane-opens-settings')?.section, '软件 AI 配置');
+  // 首页草稿切页保留，成功发起后清空。
+  assert.ok(String(byCheck.get('home-draft-and-attachment-survive-page-switch')?.value ?? '').includes('首页草稿'));
+  assert.ok(String(byCheck.get('home-draft-and-attachment-survive-page-switch')?.attachment ?? '').includes('首页验收附件.png'));
+  assert.equal(byCheck.get('home-draft-and-attachment-clear-after-start')?.importedAssets, 1);
   console.log(`首屏三条上手路径检查通过：${output}`); process.exit(0);
 }
 if (directoryImportOnly) {
@@ -486,6 +509,33 @@ if (unknownRetryOnly) {
   assert.equal(byCheck.get('unknown-retry-dispatched')?.retryUnknown, true);
   console.log(`结果未知的补救出口检查通过：${output}`); process.exit(0);
 }
+if (chatStateOnly) {
+  assert.equal(result.passed, true);
+  const byCheck = new Map(result.checks.map(check => [check.check, check]));
+  const failed = byCheck.get('chat-failure-shows-retry');
+  assert.ok(String(failed?.text ?? '').includes('HTTP 503'));
+  assert.equal(failed?.retry, '重试上一条');
+  assert.equal(failed?.requests, 1, '失败状态不得自动重发');
+  const streaming = byCheck.get('chat-streaming-delta-visible');
+  assert.equal(streaming?.text, '重试后成功：');
+  assert.equal(streaming?.busy, true);
+  assert.equal(streaming?.completedMessageVisible, false);
+  const completed = byCheck.get('chat-retry-stream-completes');
+  assert.ok(String(completed?.reply ?? '').includes('重试后成功：流式回复已完成。'));
+  assert.equal(completed?.failedMessages, 1);
+  assert.equal(completed?.busy, false);
+  assert.equal(completed?.requests, 2);
+  const cancelled = byCheck.get('chat-cancel-in-flight');
+  assert.ok(String(cancelled?.reply ?? '').includes('已发出的请求和已提交的任务可在任务中心查看。'));
+  assert.equal(cancelled?.busy, false);
+  assert.equal(cancelled?.requests, 3);
+  assert.equal(cancelled?.upstreamCancelled, true);
+  const permission = byCheck.get('chat-permission-error-next-step');
+  assert.ok(String(permission?.text ?? '').includes('HTTP 403'));
+  assert.ok(String(permission?.text ?? '').includes('权限'));
+  assert.equal(permission?.requests, 4);
+  console.log(`会话失败、权限提示、手动重试、流式成功与停止检查通过：${output}`); process.exit(0);
+}
 if (annotateOnly) {
   assert.equal(result.passed, true);
   const byCheck = new Map(result.checks.map(check => [check.check, check]));
@@ -495,6 +545,7 @@ if (annotateOnly) {
   // 画布改动必须真的落库成正式标注，并能在重开后看到。
   assert.equal(byCheck.get('annotate-save-writes-annotation')?.x, 77);
   assert.equal(byCheck.get('annotate-save-writes-annotation')?.status, 'modified');
+  assert.equal(byCheck.get('annotate-undo-redo-restores-geometry')?.redoneX, 77);
   assert.equal(byCheck.get('annotate-save-and-confirm')?.status, 'confirmed');
   assert.ok(byCheck.get('annotate-reopen-visible')?.historyVersions >= 3);
   // 文案不再宣传不可用快捷键。
@@ -508,9 +559,9 @@ if (annotateOnly) {
   assert.equal(byCheck.get('ai-capability-honesty')?.rows, 6);
   assert.equal(byCheck.get('ai-capability-honesty')?.timeoutDiscoverable, true);
   assert.equal(byCheck.get('ai-capability-honesty')?.oneClickVerify, true);
-  // 导出：输出目录留空也能提交，且侧栏有明确的进入对话入口。
+  // 导出：输出目录留空也能提交，且侧栏项目主行明确显示素材数并可进入项目会话。
   assert.equal(byCheck.get('export-without-output-dir')?.submitted, true);
-  assert.equal(byCheck.get('shortcut-copy-matches-capability')?.sidebarChatEntry, true);
+  assert.equal(byCheck.get('shortcut-copy-matches-capability')?.sidebarProjectEntry, true);
   console.log(`素材人工标注入口与文案一致性检查通过：${output}`); process.exit(0);
 }
 /**
@@ -546,7 +597,7 @@ if (flagIs('--five')) {
   console.log(`五类任务界面链路检查通过：${output}`); process.exit(0);
 }
 if (trainingUiOnly) { assert.equal(result.passed, true); assert.ok(['ready', 'invalid'].includes(result.dataset.status)); assert.equal(result.readOnly, true); console.log(`训练改由对话发起后的只读看板检查通过：${output}`); process.exit(0); }
-if (connectionOnly) { assert.equal(result.before.ready, true); assert.equal(result.before.banner, false); assert.equal(result.disconnected.visible, true); assert.equal(result.disconnected.buttonEnabled, true); assert.equal(result.restored.ready, true); assert.equal(result.restored.banner, false); console.log(`断线重连桌面界面检查通过：${output}`); process.exit(0); }
+if (connectionOnly) { assert.equal(result.before.ready, true); assert.equal(result.before.banner, false); assert.equal(result.disconnected.visible, true); assert.equal(result.disconnected.role, 'status'); assert.equal(result.disconnected.live, 'polite'); assert.equal(result.disconnected.buttonEnabled, true); assert.equal(result.connecting.busy, 'true'); assert.equal(result.connecting.live, 'polite'); assert.equal(result.restored.ready, true); assert.equal(result.restored.banner, false); assert.equal(result.engineError?.role, 'alert'); assert.equal(result.engineError?.live, 'assertive'); assert.match(result.engineError?.message ?? '', /引擎/); console.log(`断线重连与真实启动错误播报桌面界面检查通过：${output}`); process.exit(0); }
 if (uiOnly) {
   // 主导航收敛后验收覆盖三项主导航 + 项目概览（只读抽查的落点）。
   const pages = result.pages.filter(page => page.page);

@@ -23,6 +23,7 @@ export async function checkDesktopProjectIdentity(window: BrowserWindow, output:
   const json = JSON.stringify;
   const api = <T = any>(command: string, payload: Record<string, unknown> = {}): Promise<T> => js<T>(`window.autoLabel.request(${json(command)},${json(payload)})`);
   const dialog = "document.querySelector('dialog[open]')";
+  let projectModeAccessibilityChecked = false;
   async function waitFor(expression: string, timeout = 30000) {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
@@ -41,6 +42,19 @@ export async function checkDesktopProjectIdentity(window: BrowserWindow, output:
   async function importFolder() {
     await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind: 'images', paths }]));
     await button('导入图片');
+    await waitFor(`!!${dialog}&&${dialog}.innerText.includes('导入并继续')`);
+    const projectMode = await js<{ available: boolean; groupName: string | null; pressedCount: number }>(`(()=>{
+      const group=${dialog}.querySelector('.segmented');
+      return {available:!!group,groupName:group?.getAttribute('aria-label')??null,
+        pressedCount:group?.querySelectorAll('button[aria-pressed="true"]').length??0};})()`);
+    if (projectMode.available) {
+      assert.equal(projectMode.groupName, '项目归属方式', '项目归属切换应作为有名称的分段控件呈现');
+      assert.equal(projectMode.pressedCount, 1, '项目归属切换应明确暴露唯一选中项');
+      if (!projectModeAccessibilityChecked) {
+        checks.push({ check: 'project-choice-accessible-selected-state', ...projectMode });
+        projectModeAccessibilityChecked = true;
+      }
+    }
     // 项目必须由用户确认归属：导入前先过确认框。同名项目会默认落在「选择已有项目」上，一并覆盖。
     await button('导入并继续');
     await waitFor(`!!document.querySelector('.chat-panel textarea')`);

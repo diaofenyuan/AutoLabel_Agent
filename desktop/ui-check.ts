@@ -10,7 +10,7 @@ function stage(message: string): void {
   try { appendFileSync(target, `${new Date().toISOString()} ${message}\n`); } catch { /* 诊断失败不影响运行 */ }
 }
 
-export async function checkDesktopConnection(window: BrowserWindow, output: string, control: { stop: () => Promise<void>; restart: () => Promise<unknown> }): Promise<void> {
+export async function checkDesktopConnection(window: BrowserWindow, output: string, control: { stop: () => Promise<void>; restart: () => Promise<unknown>; fail?: () => Promise<unknown> }): Promise<void> {
   const waitFor = async (expression: string) => {
     const deadline = Date.now() + 12000;
     while (Date.now() < deadline) {
@@ -29,14 +29,35 @@ export async function checkDesktopConnection(window: BrowserWindow, output: stri
   stage('conn:stopped');
   await waitFor(`!!document.querySelector('.connection-banner') && document.querySelector('.connection-banner').innerText.includes('重新连接')`);
   stage('conn:banner');
-  const disconnected = await window.webContents.executeJavaScript(`(()=>{const banner=document.querySelector('.connection-banner');const button=[...banner.querySelectorAll('button')].find(b=>b.innerText.trim()==='重新连接');return {visible:!!banner,role:banner.getAttribute('role'),busy:banner.getAttribute('aria-busy'),buttonEnabled:!!button&&!button.disabled,message:banner.innerText.trim()}})()`);
+  const disconnected = await window.webContents.executeJavaScript(`(()=>{const banner=document.querySelector('.connection-banner');const button=[...banner.querySelectorAll('button')].find(b=>b.innerText.trim()==='重新连接');return {visible:!!banner,role:banner.getAttribute('role'),live:banner.getAttribute('aria-live'),busy:banner.getAttribute('aria-busy'),buttonEnabled:!!button&&!button.disabled,message:banner.innerText.trim()}})()`);
   await window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
   await writeFile(output.replace(/\.json$/i, '-disconnected.png'), (await window.webContents.capturePage()).toPNG());
   await window.webContents.executeJavaScript(`document.querySelector('.connection-banner button').click()`);
+  await waitFor(`document.querySelector('.connection-banner')?.getAttribute('aria-busy')==='true' &&
+    [...document.querySelectorAll('.connection-banner button')].some(button=>button.disabled && button.innerText.trim()==='连接中…')`);
+  const connecting = await window.webContents.executeJavaScript(`(()=>{const banner=document.querySelector('.connection-banner');
+    const button=banner?.querySelector('button');return {visible:!!banner,role:banner?.getAttribute('role'),live:banner?.getAttribute('aria-live'),busy:banner?.getAttribute('aria-busy'),
+      buttonDisabled:!!button?.disabled,message:banner?.innerText.trim()??''}})()`);
+  await window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  await writeFile(output.replace(/\.json$/i, '-connecting.png'), (await window.webContents.capturePage()).toPNG());
   await waitFor(`!!document.querySelector('.sidebar-status .status-dot.ready') && !document.querySelector('.connection-banner')`);
   const restored = await window.webContents.executeJavaScript(`({ready:!!document.querySelector('.sidebar-status .status-dot.ready'),banner:!!document.querySelector('.connection-banner')})`);
+  stage('conn:restored');
   await writeFile(output.replace(/\.json$/i, '.png'), (await window.webContents.capturePage()).toPNG());
-  await writeFile(output, JSON.stringify({ before, disconnected, restored, engineRestarted: true }, null, 2));
+  let engineError: Record<string, unknown> | null = null;
+  if (control.fail) {
+    stage('conn:before-induced-error');
+    await control.fail();
+    stage('conn:induced-error-returned');
+    await waitFor(`document.querySelector('.connection-banner')?.getAttribute('role')==='alert' && document.querySelector('.connection-banner')?.getAttribute('aria-live')==='assertive' && document.querySelector('.connection-banner')?.innerText.includes('引擎')`);
+    stage('conn:error-banner-ready');
+    engineError = await window.webContents.executeJavaScript(`(()=>{const banner=document.querySelector('.connection-banner');return {role:banner?.getAttribute('role'),live:banner?.getAttribute('aria-live'),busy:banner?.getAttribute('aria-busy'),message:banner?.innerText.trim()??''}})()`);
+    await writeFile(output.replace(/\.json$/i, '-engine-error.png'), (await window.webContents.capturePage()).toPNG());
+    await control.restart();
+    stage('conn:error-restart-returned');
+    await waitFor(`!!document.querySelector('.sidebar-status .status-dot.ready') && !document.querySelector('.connection-banner')`);
+  }
+  await writeFile(output, JSON.stringify({ before, disconnected, connecting, restored, engineRestarted: true, engineError }, null, 2));
 }
 
 // 固定的桌面验收流程，仅由显式测试启动参数调用，不接受界面传入脚本。
@@ -273,8 +294,10 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   results.push({check:'reduced-motion', ...reducedMotion});
   // R5 项目删除：必须给出影响清单，且不再要求输入项目名，可直接进入删除选项。
   const removal = await window.webContents.executeJavaScript(`(async()=>{
-    const button=[...document.querySelectorAll('button[title="删除项目…"]')][0];
-    if(!button)return {opened:false};
+    const action=[...document.querySelectorAll('button[aria-label^="项目操作"]')][0];
+    if(action){action.click();await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));}
+    const button=[...document.querySelectorAll('[role="menuitem"]')].find(node=>node.innerText.trim()==='删除项目…');
+    if(!button)return {opened:false,actionCount:document.querySelectorAll('button[aria-label^="项目操作"]').length,projectRows:document.querySelectorAll('.sidebar-project').length,sidebar:document.querySelector('.sidebar')?.innerText.slice(0,240)??''};
     button.click();
     await new Promise(resolve=>setTimeout(resolve,600));
     const dialog=document.querySelector('dialog[open]');
@@ -291,7 +314,7 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
     const options=dialog.innerText.includes('同时删除受管文件');
     return {opened:true,tabs,counts:counts.split('\\n').slice(0,3),managed,nextEnabled,nameInput,options};
   })()`);
-  if (!removal.opened || removal.tabs?.length !== 2 || removal.tabs.some((tab: { label: string }, index: number) => !tab.label.startsWith(`${index + 1}. `))) throw new Error('项目删除弹窗步骤不完整');
+  if (!removal.opened || removal.tabs?.length !== 2 || removal.tabs.some((tab: { label: string }, index: number) => !tab.label.startsWith(`${index + 1}. `))) throw new Error(`项目删除弹窗步骤不完整：${JSON.stringify(removal)}`);
   if (!removal.managed || !removal.counts?.length) throw new Error('项目删除弹窗缺少影响清单');
   if (!removal.nextEnabled) throw new Error('影响清单页应可直接进入删除选项');
   if (removal.nameInput) throw new Error('项目删除不应再要求输入项目名称');
@@ -302,6 +325,107 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   await window.webContents.executeJavaScript(`(()=>{const dialog=document.querySelector('dialog[open]');
     [...(dialog?.querySelectorAll('button')??[])].find(node=>node.innerText.trim()==='取消')?.click();})()`);
   await waitFor(`!document.querySelector('dialog[open]')`);
+  stage('ui:before-responsive');
+  // 源码态按计划尺寸回归主要页面；每格记录视口、主题、整页宽度和核心入口，避免只靠截图判断。
+  const responsiveViewports = [
+    { width: 390, height: 844 }, { width: 768, height: 900 }, { width: 1024, height: 768 },
+    { width: 1100, height: 700 }, { width: 1440, height: 900 }, { width: 1920, height: 1080 },
+  ];
+  const responsiveViews = [
+    { name: 'home', selector: '.chat-home .chat-dock' },
+    { name: 'session', selector: '.chat-panel .chat-dock' },
+    { name: 'overview', selector: '.page-overview .overview-card' },
+    { name: 'tasks', selector: '.page-tasks .task-kind-tabs' },
+    { name: 'settings', selector: '.page-settings .settings-tabs' },
+  ];
+  const responsiveMatrix: Record<string, unknown>[] = [];
+  const debuggerApi = window.webContents.debugger;
+  const attachedHere = !debuggerApi.isAttached();
+  stage('ui:responsive-start');
+  if (attachedHere) debuggerApi.attach('1.3');
+  stage('ui:responsive-debugger-attached');
+  try {
+    const applyTheme = async (theme: 'light' | 'dark') => {
+      await openPage('设置', 'settings');
+      await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.settings-tabs button')].find(item=>item.innerText.trim()==='外观')?.click())()`);
+      await waitFor(`!!document.querySelector('.settings-tabs')`);
+      const themeName = theme === 'dark' ? '深色' : '浅色';
+      await window.webContents.executeJavaScript(`(()=>{
+        const button=[...document.querySelectorAll('button')].find(item=>item.innerText.trim()===${JSON.stringify(themeName)});
+        if(!button)throw new Error('外观设置缺少${themeName}主题');
+        button.click();
+      })()`);
+      await settle();
+      const selected = await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('button')].find(item=>item.innerText.trim()===${JSON.stringify(themeName)})?.classList.contains('selected'))()`);
+      if (!selected) throw new Error(`${themeName}主题未能选中`);
+      await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('button')].find(item=>item.innerText.trim()==='保存设置')?.click())()`);
+      await waitFor(`document.documentElement.dataset.theme===${JSON.stringify(theme)}`);
+      await settle();
+    };
+    for (const theme of ['light', 'dark'] as const) {
+      await applyTheme(theme);
+      stage(`ui:responsive-theme-${theme}`);
+      for (const viewport of responsiveViewports) {
+        await debuggerApi.sendCommand('Emulation.setDeviceMetricsOverride', {
+          width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: false,
+        });
+        stage(`ui:responsive-viewport-${viewport.width}x${viewport.height}`);
+        await settle();
+        for (const view of responsiveViews) {
+          if (view.name === 'home') {
+            stage(`ui:responsive-open-home-${theme}-${viewport.width}`);
+            if (viewport.width <= 1000) {
+              await window.webContents.executeJavaScript(`(()=>document.querySelector('[aria-label="展开侧栏"]')?.click())()`);
+              await settle();
+            }
+            await window.webContents.executeJavaScript(`(()=>{
+              const button=[...document.querySelectorAll('.nav-item')].find(item=>item.innerText.trim()==='新对话');
+              if(!button)throw new Error('缺少新对话入口');button.click();
+            })()`);
+            stage(`ui:responsive-clicked-home-${theme}-${viewport.width}`);
+            await waitFor(`!!document.querySelector('.chat-home') && !document.querySelector('.page-loading')`);
+            stage(`ui:responsive-home-ready-${theme}-${viewport.width}`);
+          } else if (view.name === 'session') {
+            if (viewport.width <= 1000) {
+              await window.webContents.executeJavaScript(`(()=>document.querySelector('[aria-label="展开侧栏"]')?.click())()`);
+              await settle();
+            }
+            await window.webContents.executeJavaScript(`(()=>{
+              const button=document.querySelector('.sidebar-session .sidebar-row');
+              if(!button)throw new Error('示例项目没有可验收会话');button.click();
+            })()`);
+            await waitFor(`!!document.querySelector('.chat-panel') && !document.querySelector('.page-loading')`);
+          } else {
+            const label = view.name === 'overview' ? '项目概览' : pageLabels[view.name];
+            await openPage(label, view.name);
+          }
+          await settle();
+          const state = await window.webContents.executeJavaScript(`(()=>{
+            const root=document.documentElement, body=document.body, page=document.querySelector('.page');
+            const core=document.querySelector(${JSON.stringify(view.selector)});
+            const rect=core?.getBoundingClientRect();
+            return {theme:${JSON.stringify(theme)},view:${JSON.stringify(view.name)},width:innerWidth,height:innerHeight,
+              rootWidth:root.scrollWidth,clientWidth:root.clientWidth,bodyWidth:body.scrollWidth,
+              pageTextLength:page?.innerText.length??0,coreVisible:!!rect&&rect.width>0&&rect.height>0&&rect.right>0&&rect.left<innerWidth&&rect.bottom>0&&rect.top<innerHeight,
+              overflow:root.scrollWidth>root.clientWidth+1||body.scrollWidth>root.clientWidth+1,
+              error:document.querySelector('.toast.error')?.innerText??null};
+          })()`);
+          if (state.width !== viewport.width || state.height !== viewport.height) throw new Error(`Electron 视口尺寸模拟失败：${JSON.stringify(state)}`);
+          if (state.overflow || !state.coreVisible || state.pageTextLength <= 20 || state.error)
+            throw new Error(`Electron 响应式页面检查失败：${JSON.stringify(state)}`);
+          responsiveMatrix.push(state);
+          await writeFile(path.join(folder, `responsive-${theme}-${viewport.width}-${view.name}.png`), (await window.webContents.capturePage()).toPNG());
+          stage(`ui:responsive-${theme}-${viewport.width}-${view.name}`);
+        }
+      }
+    }
+  } finally {
+    try { await debuggerApi.sendCommand('Emulation.clearDeviceMetricsOverride'); } catch { /* 清理失败不覆盖原始验收错误 */ }
+    if (attachedHere && debuggerApi.isAttached()) debuggerApi.detach();
+  }
+  if (responsiveMatrix.length !== responsiveViewports.length * responsiveViews.length * 2) throw new Error(`Electron 响应式矩阵数量不完整：${responsiveMatrix.length}`);
+  results.push({ check: 'responsive-layout-matrix', viewports: responsiveViewports, views: responsiveViews.map(view => view.name), themes: ['light', 'dark'], cases: responsiveMatrix.length, states: responsiveMatrix });
+  stage('ui:responsive-matrix');
   results.push({ check: 'secondary-ui', views: secondary });
   stage('ui:secondary');
   await writeFile(output, JSON.stringify({ pages: results, screenshots: folder }, null, 2));

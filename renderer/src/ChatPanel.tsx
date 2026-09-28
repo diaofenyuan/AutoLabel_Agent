@@ -165,7 +165,8 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     try {
       const result = await request<{ content: string; status: string; actions?: AgentStep[] }>('agent.chat', {
         sessionId: session.id, projectId: project?.id, providerId: selectedProviderId, model: selectedModel,
-        messages: next, autoExecute: overrides.autoExecute ?? session.autoExecute,
+        // failed 是界面态标记，不属于 Agent 消息协议；重试时剥离，避免把本地展示字段送入严格校验。
+        messages: next.map(({ role, content }) => ({ role, content })), autoExecute: overrides.autoExecute ?? session.autoExecute,
         context: { depth, ...(session.referenceResources?.length?{referenceResources:session.referenceResources}:{}), ...(assetIds ? { assetIds } : {}), ...(annotationConfig.providerId&&annotationConfig.model ? { annotationProviderId:annotationConfig.providerId,annotationModel:annotationConfig.model } : {}), ...(annotationConfig.prompt?{prompt:annotationConfig.prompt}:{}), ...(session.exportDir ? { exportDir: session.exportDir } : {}), ...(annotationConfig.maxRequests!==undefined ? { maxRequests:annotationConfig.maxRequests} : {}), ...(annotationConfig.concurrency?{concurrency:annotationConfig.concurrency}:{}) },
       });
       // 先看方案时 agent 只给出待执行的操作：确认卡片据此渲染，写操作一个都没跑。
