@@ -65,8 +65,10 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     assert.match(initialEstimate, /最多约 80 个候选帧/, `场景采样要按视频时长显示候选帧上界：${initialEstimate}`);
     assert.match(initialStorageEstimate, /PNG/, `空间估算应说明当前输出格式：${initialStorageEstimate}`);
     checks.push({ check: 'video-drop-default-scene', defaultDensity, primaryReady: true, candidateEstimateVisible: true });
-    // 关掉「抽帧完成后自动导入项目」，才能验证「产物就绪但尚未入库」这一段；它是偏好设置，界面开关在应用层进度条上。
-    const settings = await api<Record<string, unknown>>('settings.get'); await api('settings.save', { settings: { ...settings, frameAutoImport: false } });
+    // 关掉自动导入来实际检查手动入库路径，必须从当前表单操作，避免只改引擎偏好却让界面仍使用旧状态。
+    const autoImportChecked = await js<boolean>(`[...document.querySelectorAll('.checkbox-row')].find(e=>e.innerText.includes('抽帧完成后自动导入项目'))?.querySelector('input')?.checked??false`);
+    if (autoImportChecked) await js(`([...document.querySelectorAll('.checkbox-row')].find(e=>e.innerText.includes('抽帧完成后自动导入项目'))?.querySelector('input')?.click())`);
+    await wait(`[...document.querySelectorAll('.checkbox-row')].find(e=>e.innerText.includes('抽帧完成后自动导入项目'))?.querySelector('input')?.checked===false`);
     await select('[aria-label="视频采样密度"]', 'custom'); await select('[aria-label="视频采样方式"]', 'interval'); await fill('[aria-label="视频采样值"]', '1');
     // 时间段与输出尺寸都在「高级设置」折叠里：先展开，否则里面的按钮没有可读文本、点不到。
     await click('.video-advanced>summary');
@@ -93,11 +95,11 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     const firstJob = (await api('media.job.list', { projectId: project.id, kind: 'video_extract' })).items[0], extracted = await settled(firstJob.id); assert.equal(extracted.stage, 'ready'); assert.equal(extracted.artifactCommitted, true); assert.equal(extracted.assetsCommitted, false); assert.equal(extracted.canImport, true); assert.equal((await api('asset.list', { projectId: project.id })).total, 0);
     assert.deepEqual(extracted.parameters.ranges, [{ start: 0, end: 2 }, { start: 4, end: 6 }]); assert.equal(extracted.parameters.mode, 'interval'); assert.equal(extracted.parameters.everyNFrames, undefined); assert.equal(extracted.parameters.targetFps, undefined);
     const frames = await api('media.video.frames', { jobId: firstJob.id, offset: 0, limit: 20 }); assert.equal(frames.total, 4); assert.deepEqual(frames.items.map((f: any) => f.timeSeconds), [0, 1, 4, 5]); for (const frame of frames.items) { assert.equal(frame.width, 384); assert.equal(frame.height, 288); assert.equal(typeof frame.sourcePts, 'string'); assert.equal(frame.assetId, undefined); }
-    await wait(`document.querySelector('.media-job-detail')?.innerText.includes('抽帧就绪，待导入')`); await button('查看抽帧记录'); await wait(`document.querySelectorAll('.video-frame-list>div:not(.pagination)').length===4`); await capture('-ready.png', '.media-job-detail');
+    await wait(`document.querySelector('.media-job-detail')?.innerText.includes('抽帧就绪，待导入')`); await wait(`document.querySelector('.frame-job-strip')?.innerText.includes('抽帧就绪，待导入')`, 8000); await button('查看抽帧记录'); await wait(`document.querySelectorAll('.video-frame-list>div:not(.pagination)').length===4`); await capture('-ready.png', '.media-job-detail');
     checks.push({ check: 'video-inspect-extract-before-import', inspection, jobId: firstJob.id, geometryNoticeVisible: await js(`document.querySelector('.media-job-detail .notice')?.innerText??null`), frames: frames.items, overlappingRangesBlocked: true, assetCountBeforeImport: 0 });
 
     // ===== 导入：产物入库后才可用，素材在项目概览里可见 =====
-    await button('将抽帧导入项目'); await wait(`window.autoLabel.request('media.job.get',{jobId:${json(firstJob.id)}}).then(j=>j.status==='completed'&&j.stage==='done'&&j.assetsCommitted)`, 60000); const importedFrames = await api('media.video.frames', { jobId: firstJob.id, offset: 0, limit: 20 }); assert.ok(importedFrames.items.every((f: any) => f.assetId)); const all = await api('asset.list', { projectId: project.id, limit: 100 }); assert.equal(all.total, 4);
+    await button('将抽帧导入项目'); await wait(`window.autoLabel.request('media.job.get',{jobId:${json(firstJob.id)}}).then(j=>j.status==='completed'&&j.stage==='done'&&j.assetsCommitted)`, 60000); await wait(`document.querySelector('.frame-job-strip')?.innerText.includes('素材已入库，可以直接标注')`, 8000); const importedFrames = await api('media.video.frames', { jobId: firstJob.id, offset: 0, limit: 20 }); assert.ok(importedFrames.items.every((f: any) => f.assetId)); const all = await api('asset.list', { projectId: project.id, limit: 100 }); assert.equal(all.total, 4);
     await openProjectOverview(driver, name);
     await wait(`document.querySelectorAll('.result-thumb').length===4`);
     // ===== 缩略图：网格拉的是可重建的缩略图（<30KB），不是全尺寸 PNG；缓存删掉自动重建 =====
@@ -139,25 +141,35 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     const seededAnnotation = { id: 'track-undo-fixture', type: 'detect', classId: 'person', bbox: { x: 12, y: 18, width: 80, height: 64 } };
     const savedAnnotation = await api('annotation.save', { assetId: keyframeAsset.id, baseVersion: keyframeAsset.version, annotations: [seededAnnotation], confirm: false });
     checks.push({ check: 'track-undo-seed-annotation', assetId: keyframeAsset.id, version: savedAnnotation.version });
-    const timeline = await api('track.timeline.create', { projectId: project.id, mediaJobId: firstJob.id });
-    checks.push({ check: 'track-undo-create-timeline', timelineId: timeline.id, version: timeline.version });
+    await gotoTasks(driver, '轨迹标注');
+    await wait(`!!document.querySelector('.video-timeline')`);
+    await wait(`!!document.querySelector('[aria-label="时间轴来源抽帧任务"] option[value="${firstJob.id}"]')`);
+    await select('[aria-label="时间轴来源抽帧任务"]', firstJob.id);
+    await button('建立时间轴');
+    await wait(`!!document.querySelector('.timeline-workspace')`);
+    const timelineId = await js<string>(`document.querySelector('[aria-label="视频时间轴"]').value`);
+    assert.ok(timelineId, '从任务页建立时间轴后应自动进入该时间轴');
+    const timeline = await api('track.timeline.get', { timelineId });
+    checks.push({ check: 'track-undo-create-timeline-from-task-ui', timelineId: timeline.id, version: timeline.version });
     const timelineFrames = await api('track.timeline.frames', { timelineId: timeline.id, offset: 0, limit: 50 });
     assert.equal(timelineFrames.total, 4); assert.ok(timelineFrames.items.every((frame: any) => frame.assetId && typeof frame.sourcePts === 'string'));
     const keyframeSource = timelineFrames.items.find((frame: any) => frame.assetId === keyframeAsset.id);
     assert.ok(keyframeSource, '人工标注的素材应出现在固定时间轴中');
-    const track = await api('track.create', { timelineId: timeline.id, timelineVersion: timeline.version, classId: 'person', name: '撤销重做验收轨迹' });
-    checks.push({ check: 'track-undo-create-track', trackId: track.id, version: track.version });
+    await button('新建对象轨迹');
+    await fill('[aria-label="新轨迹名称"]', '撤销重做验收轨迹');
+    await select('[aria-label="新轨迹类别"]', 'person');
+    await button('创建轨迹');
+    await wait(`window.autoLabel.request('track.list',{timelineId:${JSON.stringify(timeline.id)},offset:0,limit:50,includeArchived:true}).then(r=>r.total>0)`);
+    const tracks = await api('track.list', { timelineId: timeline.id, offset: 0, limit: 50, includeArchived: true });
+    const track = tracks.items.find((item: any) => item.name === '撤销重做验收轨迹');
+    assert.ok(track, '任务页创建轨迹后应显示在对象轨迹选择框中');
+    checks.push({ check: 'track-undo-create-track-from-task-ui', trackId: track.id, version: track.version });
     const trackFrames = await api('track.timeline.frames', { timelineId: timeline.id, trackId: track.id, offset: 0, limit: 50 });
     checks.push({ check: 'track-undo-read-track-frames', count: trackFrames.total, first: trackFrames.items[0]?.frameId });
-    await gotoTasks(driver, '轨迹标注');
-    await wait(`!!document.querySelector('.video-timeline')`);
-    await wait(`!!document.querySelector('[aria-label="视频时间轴"] option[value="${timeline.id}"]')`);
-    await select('[aria-label="视频时间轴"]', timeline.id);
-    // 任务页给现有时间轴保留轻量帧选择与关键帧编辑入口，不开放创建时间轴的低频操作。
+    // 从任务页完成建轴和建轨迹后，应直接看到同一条时间轴和真实帧编辑区。
     await wait(`!!document.querySelector('.timeline-identity')||!!document.querySelector('.timeline-track-picker')`);
     const workspaceVisible = await js<boolean>(`!!document.querySelector('.timeline-identity')||!!document.querySelector('.timeline-track-picker')`);
-    assert.equal(workspaceVisible, true, '轨迹标注页应能选中这条时间轴并进入工作区');
-    await select('[aria-label="对象轨迹"]', track.id);
+    assert.equal(workspaceVisible, true, '轨迹标注页应能从零完成建轴、建轨迹并进入工作区');
     await button('刷新时间轴');
     await wait(`!!document.querySelector('[aria-label="当前视频帧"]')`);
     await select('[aria-label="当前视频帧"]', keyframeSource.frameId);

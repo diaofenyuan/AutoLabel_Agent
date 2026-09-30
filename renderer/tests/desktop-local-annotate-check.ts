@@ -7,11 +7,12 @@ import path from 'node:path';
 import type { LocalModel, LocalRuntimeState } from '../../shared/inference';
 import type { ModelLibraryState } from '../../shared/model-library';
 import { deriveClassMap } from '../../shared/vocabulary';
+import { statusNames } from '../src/types';
 import { gotoSettings, gotoWelcome, openPythonPicker, openSelectedProjectOverview, waitForIdle } from './desktop-navigation';
 
 interface ProjectRow { id: string; name: string; classes: Array<{ id: string; name: string }> }
 interface AssetRow { id: string; version: number; status: string; annotations: Array<{ id: string; classId: string; type: string }> }
-interface RunRow { id: string; status: string; kind: string; statistics: Record<string, number>; samples: Array<{ resultId: string; assetId: string; status: string; errorCode?: string; message?: string }> }
+interface RunRow { id: string; status: string; kind: string; statistics: Record<string, number>; samples: Array<{ resultId: string; assetId: string; status: string; errorCode?: string; message?: string; requiresGeometryReview?: boolean }> }
 interface ResultRow { source: string; status: string; annotations: Array<{ classId: string; type: string }>; rawResult: Record<string, unknown> | null; provenance: Record<string, unknown> }
 interface EvaluationSchemeRow { id: string; runKind?: string; averageImageMs?: number; cost?: { basis?: string }; metrics: { scorableSamples?: number } }
 
@@ -161,7 +162,13 @@ export async function checkDesktopLocalAnnotate(window: BrowserWindow, output: s
         textClasses: builtinTerms, classMap: builtinMap.classMap, confidence: 0.2, timeoutMs: 300000, forceRerun: true });
     await wait(`window.autoLabel.request('run.get',{runId:${json(run.id)}}).then(item=>['completed','completed_with_errors','failed','needs_attention','cancelled'].includes(item.status))`, 180000);
     const finished = await api<RunRow>('run.get', { runId: run.id });
-    assert.equal(finished.status, 'completed', json(finished));
+    assert.ok(['completed', 'completed_with_errors'].includes(finished.status), json(finished));
+    assert.equal(finished.statistics.failed, 0, '成功生成候选的样本不能计为失败');
+    assert.equal(finished.statistics.unknown, 0, '已收敛的本机任务不能保留未知结果');
+    if (finished.status === 'completed_with_errors') {
+      assert.ok(finished.samples.some(sample => sample.requiresGeometryReview), '没有失败样本时，待处理状态应由几何复核门槛解释');
+      assert.equal(statusNames[finished.status], '完成，有需处理项', '几何复核不能在界面上误报为失败样本');
+    }
     assert.equal(finished.kind, 'local');
     assert.equal(finished.statistics.requestsUsed, 0, '本机标注不得产生 API 请求');
     // resultId 只有在运行结束后才有值：创建响应里的样本还是 null，不能拿它去查结果。

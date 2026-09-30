@@ -28,7 +28,7 @@ export default function App() {
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   // 正在跟踪的抽帧任务随会话存活：对话区的抽帧进度条据此自动导入产物，切页回来也不会丢。
-  const [mediaJob, setMediaJob] = useState<{ id: string; temporarySource?: string } | null>(null);
+  const [mediaJob, setMediaJob] = useState<{ id: string; temporarySource?: string; timelineId?: string } | null>(null);
   const assetLocation = useRef({ projectId: '', offset: 0 });
   const assetRevision = useRef(0);
   const projectRefreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);

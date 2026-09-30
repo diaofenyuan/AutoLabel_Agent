@@ -73,7 +73,9 @@ final class TrackGenerations implements AutoCloseable {
      * 仍走同一版本校验、排队和逐帧提交路径，产物保持候选态；不使用 interpolate，避免用插值伪造成实际检测结果。
      */
     JsonObject enqueueExternal(Connection c,JsonObject plan,String original)throws Exception{validate(c,plan,true);return insert(c,plan,original);}
-    static JsonObject storedPlan(Connection c,String id)throws Exception{JsonObject row=Store.one(c,"SELECT data FROM track_generation_plans WHERE generation_id=?",id);if(row==null)throw error(409,"track_generation_plan_missing","生成的冻结计划缺失，不能自动继续。");return Json.parse(Json.required(row,"data"));}
+    static JsonObject storedPlan(Connection c,String id)throws Exception{JsonObject row=Store.one(c,"SELECT data FROM track_generation_plans WHERE generation_id=?",id);if(row==null)throw error(409,"track_generation_plan_missing","轨迹生成的冻结计划缺失，不能自动继续。");JsonElement value=row.get("data");
+        // 冻结计划包含逐帧基准与候选几何，长视频很容易超过普通文本字段的 100000 字符上限；这里已由 SQLite 的 NOT NULL 约束保证存在，直接按 JSON 读取。
+        if(value==null||value.isJsonNull()||!value.isJsonPrimitive()||value.getAsString().isBlank())throw error(409,"track_generation_plan_missing","轨迹生成的冻结计划内容无效，不能自动继续。");return Json.parse(value.getAsString());}
     private static JsonArray slice(JsonArray values,int offset,int limit){JsonArray out=new JsonArray();for(int i=offset;i<values.size()&&out.size()<limit;i++)out.add(values.get(i));return out;}
     JsonObject get(JsonObject p){FlowPlans.keys(p,"generationId");return store.read(c->publicView(Store.document(c,"track_generations",id(p,"generationId"))));}
     JsonObject list(JsonObject p){FlowPlans.keys(p,"trackId","offset","limit");String trackId=id(p,"trackId");int offset=pageInt(p,"offset",0,0,Integer.MAX_VALUE),limit=pageInt(p,"limit",100,1,100);return store.read(c->{Store.document(c,"tracks",trackId);JsonArray items=new JsonArray();for(JsonElement value:Store.docs(c,"SELECT data FROM track_generations WHERE track_id=? ORDER BY rowid DESC LIMIT ? OFFSET ?",trackId,limit,offset))items.add(publicView(value.getAsJsonObject()));return Json.obj("items",items,"total",Store.one(c,"SELECT COUNT(*) AS n FROM track_generations WHERE track_id=?",trackId).get("n"));});}

@@ -23,13 +23,13 @@ export function FrameJobStrip() {
   const { mediaJob, setMediaJob, prefs, notify, refreshAssets, refreshProjects, project, navigate } = useApp();
   const [job, setJob] = useState<MediaJob | null>(null);
   const [error, setError] = useState('');
-  const [timelineId, setTimelineId] = useState<string | null>(null);
+  const [createdTimelineId, setCreatedTimelineId] = useState<string | null>(null);
   const jobId = mediaJob?.id ?? '';
   const autoImport = prefs.frameAutoImport !== false;
   const advanced = useRef('');
 
   useEffect(() => {
-    if (!jobId) { setJob(null); setTimelineId(null); return; }
+    if (!jobId) { setJob(null); setCreatedTimelineId(null); return; }
     let live = true; let timer: ReturnType<typeof setTimeout>;
     async function read() {
       try {
@@ -63,7 +63,7 @@ export function FrameJobStrip() {
         if (project && ['detect', 'pose'].includes(project.taskType)) {
           try {
             const timeline = await request<{ id: string }>('track.timeline.create', { projectId: project.id, mediaJobId: jobId });
-            setTimelineId(timeline.id);
+            setCreatedTimelineId(timeline.id);
             setMediaJob(current => current?.id === jobId ? { ...current, timelineId: timeline.id } : current);
           } catch { /* 建轴失败不影响素材已经入库这件事，如实让用户自己去轨迹页建 */ }
         }
@@ -84,7 +84,7 @@ export function FrameJobStrip() {
       : ready ? (autoImport ? '抽帧就绪，正在导入素材…' : '抽帧就绪，待导入')
         : `${mediaStatuses[job.status]} · 已生成 ${job.progress.completedFrames ?? 0} 帧`}</span>
     <span className="frame-job-actions">
-      {imported && timelineId && <Button onClick={() => void navigate('tasks')}>去视频轨迹</Button>}
+      {(imported && (mediaJob?.timelineId ?? createdTimelineId)) && <Button onClick={() => void navigate('tasks')}>查看这条视频轨迹</Button>}
       {imported && <Button onClick={() => { setMediaJob(null); void navigate('overview'); }}>查看素材</Button>}
       {!imported && ready && !autoImport && <Button className="primary" onClick={async () => {
         try { setJob(await request<MediaJob>('media.video.import', { jobId })); await Promise.all([refreshAssets(), refreshProjects()]); }

@@ -49,5 +49,6 @@ export const statusNames: Record<string, string> = {
   unlabeled: '未标注', candidate: '候选标注', modified: '人工修改', confirmed: '已确认', invalid: '无效素材', missing: '文件缺失',
   queued: '排队中', running: '执行中', paused: '已暂停', pausing: '暂停中', cancelling: '取消中', cancelled: '已取消', completed: '已完成',
   succeeded: '已完成', success: '已完成', failed: '失败', partial: '部分失败', unknown: '结果未知', retry_wait: '等待重试',
-  completed_with_errors: '完成，有失败样本', needs_attention: '需要处理',
+  // 引擎的此状态也包含已成功产出、但需要几何复核的结果；失败数要看任务明细。
+  completed_with_errors: '完成，有需处理项', needs_attention: '需要处理',
 };

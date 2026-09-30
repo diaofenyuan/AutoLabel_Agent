@@ -66,11 +66,18 @@ export async function checkDesktopReason(window: BrowserWindow, output: string):
     assert.ok(listed.items.every((asset: { status: string }) => asset.status === 'unlabeled'), '素材应为未标注状态');
     checks.push({ check: 'unlabeled-project-created', projectId: created!.id, assets: listed.total });
 
-    await js(`[...document.querySelectorAll('.sidebar-project')].find(g=>g.innerText.includes(${json(batch)})).querySelector('[title="项目概览"]').click()`);
+    // 项目概览在项目操作菜单中；先打开真实菜单，再点击菜单项，避免依赖已移除的直达 title。
+    const projectGroup = `[...document.querySelectorAll('.sidebar-project-group')].find(g=>g.querySelector('.sidebar-project')?.innerText.includes(${json(batch)}))`;
+    await waitFor(`!!${projectGroup}&&!!${projectGroup}.querySelector('button[aria-label^="项目操作"]')`);
+    await js(`${projectGroup}.querySelector('button[aria-label^="项目操作"]').click()`);
+    await waitFor(`!!${projectGroup}.querySelector('[role="menuitem"]')`);
+    await js(`([...${projectGroup}.querySelectorAll('[role="menuitem"]')].find(b=>b.innerText.includes('项目概览'))).click()`);
     await waitFor(`!!document.querySelector('.page-overview')&&!!document.querySelector('.overview-card')`);
 
     // ===== 数据集版本：预检必须给出可读明细 + 中文遗漏范围 =====
-    await button('数据集版本');
+    await js(`document.querySelector('.overview-more-actions summary')?.click()`);
+    await waitFor(`!!document.querySelector('.overview-more-menu')`);
+    await button('数据集版本', `document.querySelector('.overview-more-menu')`);
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('版本列表')`);
     await button('新建版本', dialog);
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('标注范围')`);

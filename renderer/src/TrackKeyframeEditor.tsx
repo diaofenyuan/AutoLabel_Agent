@@ -8,7 +8,7 @@ import { annotationAttributeIssues } from './templateAttributes';
 import { keyframeStates, TrackError, trackRequest } from './trackUi';
 import { useApp } from './context';
 
-export default function TrackKeyframeEditor({ timeline, track, frame, onClose, onSaved }: { timeline: TrackTimelineDetail; track: Track; frame: TrackFrame; onClose: () => void; onSaved: (result: TrackMutation) => void }) {
+export default function TrackKeyframeEditor({ timeline, track, frame, preferredObjectId, onClose, onSaved }: { timeline: TrackTimelineDetail; track: Track; frame: TrackFrame; preferredObjectId?: string; onClose: () => void; onSaved: (result: TrackMutation) => void }) {
   const { syncWindowDirtySource } = useApp();
   const [asset, setAsset] = useState<Asset | null>(null), [annotations, setAnnotations] = useState<Annotation[]>([]), [selected, setSelected] = useState('');
   const [state, setState] = useState<TrackKeyframeState>(frame.keyframe?.state ?? 'located'), [busy, setBusy] = useState(false), [dirty, setDirty] = useState(false), [pending, setPending] = useState(false), [exit, setExit] = useState(false), [error, setError] = useState(''), [savedVersion, setSavedVersion] = useState<number | null>(null);
@@ -19,7 +19,7 @@ export default function TrackKeyframeEditor({ timeline, track, frame, onClose, o
   useEffect(() => { let live = true; void request<Asset>('asset.get', { assetId: frame.assetId }).then(value => {
     if (value.contentHash !== frame.contentHash || value.width !== frame.width || value.height !== frame.height || value.version !== frame.annotationVersion) throw new Error('track_frame_stale：帧内容或标注版本已变化，请刷新时间轴。');
     if (value.draft && value.metadata?.draftBaseVersion !== undefined && value.metadata.draftBaseVersion !== value.version) throw new Error('track_draft_conflict：此帧含旧版本草稿，请先在图片标注中核对。');
-    if (live) { setAsset(value); setAnnotations(structuredClone(value.draft ?? value.annotations)); const keyId = frame.keyframe?.annotation?.id; setSelected(keyId && (value.draft ?? value.annotations).some(a => a.id === keyId) ? keyId : ''); }
+    if (live) { setAsset(value); setAnnotations(structuredClone(value.draft ?? value.annotations)); const keyId = frame.keyframe?.annotation?.id; const preferredId = preferredObjectId && (value.draft ?? value.annotations).some(a => a.id === preferredObjectId && a.classId === track.classId && a.type === timeline.taskType) ? preferredObjectId : ''; setSelected(keyId && (value.draft ?? value.annotations).some(a => a.id === keyId) ? keyId : preferredId); }
   }).catch(e => { if (live) setError(errorMessage(e)); }); return () => { live = false; }; }, [frame.assetId, frame.annotationVersion]);
   function change(next: Annotation[]) { setUndo(list => [...list.slice(-29), structuredClone(annotations)]); setRedo([]); setAnnotations(next); setDirty(true); setSavedVersion(null); }
   function undoLast() {

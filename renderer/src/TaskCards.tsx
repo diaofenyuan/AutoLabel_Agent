@@ -17,7 +17,7 @@ import { statusNames, type Run } from './types';
 const FINISHED_FLOW = ['completed', 'completed_with_errors', 'failed', 'cancelled', 'partial'];
 const flowStatusNames: Record<string, string> = {
   queued: '排队中', running: '执行中', paused: '已暂停', pausing: '正在暂停', needs_attention: '等待人工检查',
-  completed: '已完成', completed_with_errors: '完成但有失败', failed: '失败', cancelled: '已取消', partial: '部分完成',
+  completed: '已完成', completed_with_errors: '完成，有需处理项', failed: '失败', cancelled: '已取消', partial: '部分完成',
 };
 
 function jobIdOf(step: AgentStep): string | undefined {

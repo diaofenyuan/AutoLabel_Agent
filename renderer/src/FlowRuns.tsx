@@ -10,7 +10,7 @@ import { ArtifactView } from './FlowArtifacts';
 import type { Project } from './types';
 import ReusePolicyFields from './ReusePolicyFields';
 
-const labels: Record<string, string> = { pending: '等待前序', queued: '排队中', running: '执行中', pausing: '正在暂停', paused: '已暂停', cancelling: '正在停止', cancelled: '已停止', completed: '已完成', completed_with_errors: '完成，有失败样本', failed: '失败', needs_attention: '需要处理', skipped: '已跳过' };
+const labels: Record<string, string> = { pending: '等待前序', queued: '排队中', running: '执行中', pausing: '正在暂停', paused: '已暂停', cancelling: '正在停止', cancelled: '已停止', completed: '已完成', completed_with_errors: '完成，有需处理项', failed: '失败', needs_attention: '需要处理', skipped: '已跳过' };
 const activeStates = ['queued', 'running', 'pausing', 'cancelling'];
 export default function FlowRuns({ projectId, initialRunId }: { projectId?: string; initialRunId?: string }) {
   const { events, notify, navigate, openProject } = useApp();
