@@ -95,7 +95,7 @@ export function Composer({ value, onChange, onSend, placeholder, busy, onCancel,
     <div className="composer-toolbar">
       <div className="composer-tools">{children}</div>
       {/* 拖拽之外的一等输入路径：点选与粘贴（Ctrl+V）都直接进附件条。 */}
-      {onAttachFiles && <button type="button" className="composer-pick" title="选择文件作为附件" aria-label="选择文件作为附件" onClick={() => { const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'image/*,video/*'; input.onchange = () => onAttachFiles([...(input.files ?? [])]); input.click(); }}><Paperclip size={13} /></button>}
+      {onAttachFiles && <button type="button" className="composer-pick icon-button" title="选择文件作为附件" aria-label="选择文件作为附件" onClick={() => { const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'image/*,video/*'; input.onchange = () => onAttachFiles([...(input.files ?? [])]); input.click(); }}><Paperclip size={13} /></button>}
       <kbd className="composer-kbd">Ctrl + Enter</kbd>
       <button className="send-button" aria-label={busy ? '停止对话' : '发送'} disabled={!busy && !value.trim() && !hasAttachments} onClick={busy ? onCancel : onSend}>{busy ? <Square size={13} /> : <ArrowUp size={17} />}<span className="send-button-label">{busy ? '停止' : '发送'}</span></button>
     </div>

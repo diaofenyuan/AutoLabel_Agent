@@ -15,6 +15,23 @@ import { VIDEO_EXTENSION_LABEL } from '../../shared/mediaFormats';
 import { directoryName, folderName, sameNameProject } from './projectNaming';
 import type { Project } from './types';
 
+/** 卡片上的相对更新时间：与「继续最近项目」的排序口径一致，超过一周直接给日期。 */
+function timeAgo(iso: string): string {
+  const time = Date.parse(iso);
+  if (!Number.isFinite(time)) return '';
+  const minutes = Math.round((Date.now() - time) / 60000);
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} 天前`;
+  const date = new Date(time);
+  return date.getFullYear() === new Date().getFullYear()
+    ? `${date.getMonth() + 1} 月 ${date.getDate()} 日`
+    : `${date.getFullYear()} 年 ${date.getMonth() + 1} 月 ${date.getDate()} 日`;
+}
+
 /**
  * 欢迎页：还没有进入任何项目时落在这里。
  * 会话必须挂在项目下，所以这里不做「不属于任何项目的对话」：
@@ -202,10 +219,14 @@ export default function ChatHome() {
         onImportImages={() => void importImages()} onImportImageFolder={() => void importImageFolder()}
         onImportVideo={() => void selectVideo()} onImportVideoFolder={() => void selectVideoFolder()} />
       {recentProjects.length > 0 && <section className="chat-recent" aria-labelledby="chat-recent-title">
-        <div className="chat-recent-heading"><span id="chat-recent-title">继续最近项目</span><small>最近更新</small></div>
+        {/* 排序口径写在卡片上（相对更新时间），不再放一个没有对应内容的「最近更新」表头。 */}
+        <div className="chat-recent-heading"><span id="chat-recent-title">继续最近项目</span></div>
         <div className="chat-recent-list">
-          {recentProjects.map(item => <button key={item.id} disabled={busy} title={`最近更新的项目 · ${item.assetCount} 张素材`}
-            onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><span>继续</span>{item.name}<small>{item.assetCount} 张素材</small></button>)}
+          {recentProjects.map(item => {
+            const updated = timeAgo(String(item.updatedAt ?? ''));
+            return <button key={item.id} disabled={busy} title={`最近更新的项目 · ${item.assetCount} 张素材`}
+              onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><span>继续</span><span className="truncate">{item.name}</span><small>{item.assetCount} 张素材{updated ? ` · ${updated}` : ''}</small></button>;
+          })}
         </div>
       </section>}
     </div>
