@@ -59,6 +59,8 @@
   --focus-ring-soft: 0 0 0 2px var(--color-accent-subtle);
   --focus-ring-error-soft: 0 0 0 2px color-mix(in srgb, var(--color-error) 16%, transparent);
   --state-disabled-opacity: .4;
+  --scrollbar-thumb: color-mix(in srgb, var(--color-subtle) 42%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--color-muted) 60%, transparent);
   --motion-fast: 140ms;
   --motion-panel: 180ms;
   --motion-slow: 220ms;

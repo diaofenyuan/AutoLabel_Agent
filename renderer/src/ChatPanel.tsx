@@ -276,7 +276,8 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
           {/* 直达标注：对话模型没配或不能调工具时，这里是唯一能真正开跑的路。 */}
           {project && <DirectRun project={project} annotationConfig={annotationConfig} selectedAssetIds={selectedAssetIds} disabled={session.busy} />}
         </div>
-        <span className="composer-hint">Enter 换行 · Ctrl + Enter 发送{session.attachments?.length ? ` · 已添加 ${session.attachments.length} 个文件` : ''}</span>
+        {/* Ctrl+Enter 已在发送键旁的 kbd 上，这里只补「Enter 换行」，不再重复一遍同样的快捷键。 */}
+        <span className="composer-hint">Enter 换行{session.attachments?.length ? ` · 已添加 ${session.attachments.length} 个文件` : ''}</span>
       </Composer>
     </footer>
     {/* 拖入多个视频时先给候选清单：原先只打开第一个，其余文件名连提都不提。 */}

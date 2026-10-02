@@ -20,6 +20,7 @@
 - `Loading` 使用 `status/polite`；`ToastMessage` 对普通提示使用 `status/polite`，对阻断错误使用 `alert/assertive`，并提供关闭按钮。提示常在自家弹窗内触发，因此 toast 用 `popover="manual"` 进入 top layer（盖过原生 `<dialog>`，不阻塞交互）。
 - `Modal` 使用原生模态对话框，Escape/遮罩关闭后由调用处恢复到触发流程。
 - 画布对象标签（类别色底板 + 名称）统一用 `canvasChip.ts`：`chipTextColor` 按 底色明暗 选深/白字，`chipTextWidth` 按中文全宽/西文 0.66 宽估算底板尺寸；`QualityCanvas` 与 `ResultViewer` 共用，不要在组件里各自写死「白字 + `.length` 测宽」。
+- 滚动条由 `foundations.css` 的细样式全局接管（透明轨道 + 内缩圆角滑杆，颜色跟随 `--color-subtle`/`--color-muted`，浅/深主题自动适配）；确要隐藏滚动条的横排标签（如设置页 tabs）再用 `scrollbar-width:none` 或 `::-webkit-scrollbar{display:none}` 局部覆盖。
 
 ## 样例与验收
 

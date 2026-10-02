@@ -95,3 +95,16 @@ input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="
 .tiny-badge[data-tone="error"] { color: var(--color-error); background: color-mix(in srgb, var(--color-error) 8%, var(--color-background)); }
 
 .toast { z-index: var(--layer-toast); }
+
+/* 细滚动条：Windows 默认滚动条厚而方，与整体轻量风格不符；
+   透明轨道 + 内缩圆角滑杆在浅/深主题都跟随 --soft/--muted，无需按主题各写一份。 */
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-thumb-hover); }
+::-webkit-scrollbar-thumb:active { background-color: var(--scrollbar-thumb-hover); }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
