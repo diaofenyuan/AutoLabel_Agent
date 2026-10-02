@@ -81,7 +81,12 @@ export default function AssetAnnotator({ asset, classes, taskType, templateSetti
 
   const hasClasses = classes.length > 0;
 
-  function change(next: Annotation[]) { setAnnotations(next); setDirty(true); setError(''); }
+  /** 脏 = 与已保存内容实际不同：撤销回原状应自动变干净，而不是让用户为「零改动」点一遍保存/确认。 */
+  function change(next: Annotation[]) {
+    setAnnotations(next);
+    setDirty(JSON.stringify(next) !== JSON.stringify(current.annotations));
+    setError('');
+  }
 
   async function save(confirm: boolean) {
     if (busy || pending || !dirty) return;

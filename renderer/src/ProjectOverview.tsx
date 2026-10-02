@@ -27,6 +27,26 @@ const PAGE_SIZE = 100;
 const CONFIRM_CONCURRENCY = 6;
 const versionStatusNames: Record<string, string> = { draft: '草稿', building: '生成中', ready: '已生成', failed: '生成失败', cancelled: '已取消' };
 
+/** 「更多」菜单是原生 details：点外部与 Esc 不会自动收起，与侧栏菜单保持一致的关闭行为。 */
+function useDismissMoreMenu() {
+  useEffect(() => {
+    const openMenu = () => document.querySelector('.overview-more-actions[open]');
+    const closeOnOutside = (event: MouseEvent) => {
+      const target = event.target as Element | null;
+      if (!target?.closest) return;
+      if (target.closest('.overview-more-actions')) return;
+      openMenu()?.removeAttribute('open');
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      const menu = openMenu();
+      if (menu && event.key === 'Escape') { event.preventDefault(); menu.removeAttribute('open'); }
+    };
+    document.addEventListener('mousedown', closeOnOutside);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => { document.removeEventListener('mousedown', closeOnOutside); window.removeEventListener('keydown', closeOnEscape); };
+  }, []);
+}
+
 /** 结果筛选：审核批量结果时先按状态把「要处理的」筛出来，再勾选一次确认。 */
 type ResultFilter = 'all' | 'candidate' | 'empty' | 'failed' | 'confirmed' | 'unlabeled';
 const filterNames: Record<ResultFilter, string> = { all: '全部', candidate: '有候选', empty: '无目标', failed: '失败', confirmed: '已确认', unlabeled: '未处理' };
@@ -56,6 +76,7 @@ async function forEachConcurrent<T>(items: T[], limit: number, worker: (item: T)
  * 这里不放任何编辑表单——标注修正、建版本、导出都在对话里发起；页面只聚合已经存在的结果。
  */
 export default function ProjectOverview() {
+  useDismissMoreMenu();
   const { project, notify, navigate, openProject, selectedAssetIds, setSelectedAssetIds } = useApp();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [total, setTotal] = useState(0);

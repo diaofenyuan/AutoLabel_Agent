@@ -48,11 +48,22 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
   // 新建项目走命名弹框：项目不再自动取名，名称由用户在这里确定。
   const [creatingProject, setCreatingProject] = useState(false);
   useEffect(() => {
-    if (!projectMenu) return;
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setProjectMenu(''); } };
+    if (!projectMenu && !headerMenu) return;
+    // 菜单是悬浮层，会挡住下方的项目行：点外部或 Esc 都必须能收起，
+    // 否则「会话管理」开着时用户点项目行会误触到菜单项（包括「清空全部对话」这种危险项）。
+    const closeOnOutside = (event: MouseEvent) => {
+      const target = event.target as Element | null;
+      if (!target?.closest) return;
+      if (target.closest('.sidebar-menu')) return;
+      // 触发按钮交给自己的 onClick 取反，避免「先关再开」把菜单又弹回来。
+      if (target.closest('button[aria-haspopup="menu"]')) return;
+      setHeaderMenu(false); setProjectMenu('');
+    };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setHeaderMenu(false); setProjectMenu(''); } };
+    document.addEventListener('mousedown', closeOnOutside);
     window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [projectMenu]);
+    return () => { document.removeEventListener('mousedown', closeOnOutside); window.removeEventListener('keydown', closeOnEscape); };
+  }, [projectMenu, headerMenu]);
 
   // 置顶按 pinOrder、其余按 lastMessageAt 倒序，Ctrl+1…9 与置顶共用同一序列。
   const ordered = useMemo(() => [...chatSessions].sort((a, b) => {

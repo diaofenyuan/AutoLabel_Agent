@@ -9,11 +9,13 @@ body {
 button:not(:disabled) { transition-duration: var(--motion-fast); }
 button:disabled { opacity: var(--state-disabled-opacity); }
 button[aria-busy="true"] { cursor: progress; }
-button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible {
+button:focus-visible, a:focus-visible, summary:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
-button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible { position: relative; z-index: 1; }
+button:focus-visible, a:focus-visible, summary:focus-visible { position: relative; z-index: 1; }
+/* 输入控件不进这条全局轮廓：它们的焦点表达是「边框变色 + 内圈软光晕」（styles.css），
+   叠加外圈硬轮廓会变成三层环，视觉过重。 */
 
 input, textarea, select {
   color: var(--color-text);
@@ -44,12 +46,23 @@ input:disabled, textarea:disabled, select:disabled {
 
 input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="true"] {
   border-color: var(--color-error);
-  box-shadow: var(--focus-ring-soft);
+  box-shadow: var(--focus-ring-error-soft);
 }
 
 .button {
   min-height: var(--control-height);
   border-radius: var(--radius-control);
+}
+
+/* 切换类按钮（画布工具、范围开关等）用 aria-pressed 表达开/关，这里给全局统一的选中态；
+   覆盖 .button.primary 时靠加载顺序：primary + aria-pressed 的组合当前不存在，出现时应单独设计。 */
+.button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-background));
+}
+.button[aria-pressed="true"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 18%, var(--color-background));
 }
 
 .icon-button {

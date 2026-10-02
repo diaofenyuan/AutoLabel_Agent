@@ -643,6 +643,9 @@
 .chat-home .chat-options{gap:6px}
 .chat-home .flow-picker>button,.chat-home .local-model-picker>button,.chat-home .model-picker-trigger{min-height:30px;padding:5px 8px;border:1px solid var(--border);border-radius:7px;background:var(--surface);font-size:11px;color:var(--muted)}
 .chat-home .flow-picker>button:hover:not(:disabled),.chat-home .local-model-picker>button:hover:not(:disabled),.chat-home .model-picker-trigger:hover:not(:disabled){background:var(--hover);color:var(--text)}
+/* 欢迎页 composer 居中偏上，弹层按默认向上展开会被视口顶部截断（首条流程/模型不可见）；
+   这里统一改为向下展开，下方是引导区，空间充裕。 */
+.chat-home .picker-popover{bottom:auto;top:calc(100% + 8px);max-height:min(52vh,430px)}
 .chat-home .composer-hint{font-size:11px}
 .onboarding-lanes{grid-template-columns:repeat(3,minmax(0,1fr));gap:0;max-width:820px;border-block:1px solid var(--border)}
 .onboarding-lane{gap:9px;padding:15px 14px;border:0;border-right:1px solid var(--border);border-radius:0;background:transparent}

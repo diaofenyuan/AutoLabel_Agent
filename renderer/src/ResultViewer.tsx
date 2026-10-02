@@ -1,4 +1,5 @@
 import { keypointEdges } from './keypointEdges';
+import { chipTextColor, chipTextWidth } from './canvasChip';
 import { taskNames, type Asset, type LabelClass } from './types';
 
 /**
@@ -21,11 +22,20 @@ export default function ResultViewer({ asset, classes, connectionTemplate, maxHe
         const color = label(shape.classId)?.color ?? '#4a83ff';
         const bbox = shape.bbox;
         return <g key={shape.id} className="result-shape" style={{ color }}>
-          {bbox && <g transform={shape.type === 'obb' ? `rotate(${shape.rotation ?? 0},${bbox.x + bbox.width / 2},${bbox.y + bbox.height / 2})` : undefined}>
-            <rect x={bbox.x} y={bbox.y} width={bbox.width} height={bbox.height} fill="transparent" stroke={color} strokeWidth={1.6 * unit} />
-            <rect x={bbox.x} y={Math.max(0, bbox.y - 22 * unit)} width={(label(shape.classId)?.name.length ?? 2) * 13 * unit + 16 * unit} height={22 * unit} rx={3 * unit} fill={color} />
-            <text x={bbox.x + 8 * unit} y={Math.max(0, bbox.y - 22 * unit) + 15 * unit} fontSize={12 * unit} fill="white">{label(shape.classId)?.name ?? '类别缺失'}</text>
-          </g>}
+          {bbox && (() => {
+            const name = label(shape.classId)?.name ?? '类别缺失';
+            const chipWidth = chipTextWidth(name, 12 * unit) + 16 * unit;
+            // 底板默认贴框上沿；X 夹在图片内（旋转框在自身坐标系里，不做图片边界夹取），
+            // 贴不到图片顶部时改放框内，右缘与顶部的框标签都不再被裁掉。
+            const chipX = shape.type === 'obb' ? bbox.x : Math.min(Math.max(0, bbox.x), Math.max(0, asset.width - chipWidth));
+            const aboveY = bbox.y - 22 * unit;
+            const chipY = aboveY >= 0 ? aboveY : bbox.y + 1.6 * unit;
+            return <g transform={shape.type === 'obb' ? `rotate(${shape.rotation ?? 0},${bbox.x + bbox.width / 2},${bbox.y + bbox.height / 2})` : undefined}>
+              <rect x={bbox.x} y={bbox.y} width={bbox.width} height={bbox.height} fill="transparent" stroke={color} strokeWidth={1.6 * unit} />
+              <rect x={chipX} y={chipY} width={chipWidth} height={22 * unit} rx={3 * unit} fill={color} />
+              <text x={chipX + 8 * unit} y={chipY + 15 * unit} fontSize={12 * unit} fontWeight={600} fill={chipTextColor(color)}>{name}</text>
+            </g>;
+          })()}
           {shape.points && <polygon points={shape.points.map(point => `${point.x},${point.y}`).join(' ')} fill={`${color}22`} stroke={color} strokeWidth={1.6 * unit} />}
           {shape.keypoints && <>
             {keypointEdges(shape.keypoints, connectionTemplate).map(([from, to], edge) => <line key={edge} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={color} strokeWidth={1.2 * unit} />)}
@@ -34,7 +44,11 @@ export default function ResultViewer({ asset, classes, connectionTemplate, maxHe
               <text x={point.x + 9 * unit} y={point.y - 8 * unit} fontSize={11 * unit} paintOrder="stroke" stroke="#fff" strokeWidth={2 * unit} fill={color}>{index + 1}</text>
             </g>)}
           </>}
-          {shape.type === 'classify' && <g><rect x={12 * unit} y={12 * unit} width={140 * unit} height={26 * unit} rx={5 * unit} fill={color} /><text x={22 * unit} y={30 * unit} fill="white" fontSize={13 * unit}>{label(shape.classId)?.name ?? '类别缺失'} · {taskNames[shape.type]}</text></g>}
+          {shape.type === 'classify' && (() => {
+            const text = `${label(shape.classId)?.name ?? '类别缺失'} · ${taskNames[shape.type]}`;
+            const chipWidth = Math.max(140 * unit, chipTextWidth(text, 13 * unit) + 20 * unit);
+            return <g><rect x={12 * unit} y={12 * unit} width={chipWidth} height={26 * unit} rx={5 * unit} fill={color} /><text x={22 * unit} y={30 * unit} fontSize={13 * unit} fontWeight={600} fill={chipTextColor(color)}>{text}</text></g>;
+          })()}
         </g>;
       })}
     </svg>

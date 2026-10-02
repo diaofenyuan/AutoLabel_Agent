@@ -6,6 +6,7 @@ import './foundation-samples.css';
 export default function FoundationSamples() {
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState('标准');
+  const [pressedTool, setPressedTool] = useState<'select' | 'draw'>('select');
   const [dark, setDark] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
   const [showToast, setShowToast] = useState(true);
@@ -19,6 +20,10 @@ export default function FoundationSamples() {
         <div><small>默认 / 悬停 / 焦点 / 按下</small><div className="foundation-sample-row"><Button>默认</Button><Button className="primary">主要操作</Button><IconButton label="搜索"><Search size={16}/></IconButton><TextButton>文本操作</TextButton></div></div>
         <div><small>禁用 / 加载</small><div className="foundation-sample-row"><Button disabled>不可用</Button><Button busy={busy} onClick={() => { setBusy(true); window.setTimeout(() => setBusy(false), 1200); }}>{busy ? '处理中' : '开始加载'}</Button></div></div>
         <div><small>焦点状态</small><div className="foundation-sample-row"><Button autoFocus>键盘焦点</Button><IconButton label="设置" active><Settings2 size={16}/></IconButton></div></div>
+        <div><small>切换选中（aria-pressed）</small><div className="foundation-sample-row">
+          <Button aria-pressed={pressedTool === 'select'} onClick={() => setPressedTool('select')}>选择</Button>
+          <Button aria-pressed={pressedTool === 'draw'} onClick={() => setPressedTool('draw')}>绘制</Button>
+        </div></div>
       </div>
     </section>
     <section className="foundation-sample-section">

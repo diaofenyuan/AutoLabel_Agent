@@ -23,7 +23,11 @@ export function ToastMessage({ message, error = false, action, onClose }: {
   action?: { label: string; onClick: () => void };
   onClose: () => void;
 }) {
-  return <div className={`toast ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'} aria-live={error ? 'assertive' : 'polite'}>
+  // 提示常常在自家弹窗（保存成功、导入结果、导出状态）触发时出现：原生 <dialog> 在 top layer，
+  // 普通 fixed 浮层永远被压在下面。popover="manual" 同样进 top layer 且不阻塞交互。
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { ref.current?.showPopover?.(); }, []);
+  return <div ref={ref} popover="manual" className={`toast ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'} aria-live={error ? 'assertive' : 'polite'}>
     {error ? <AlertCircle size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}
     <span>{message}</span>
     {action && <button className="toast-action" onClick={action.onClick}>{action.label}</button>}
