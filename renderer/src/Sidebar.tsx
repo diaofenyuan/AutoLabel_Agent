@@ -26,7 +26,6 @@ const mainEntries = [
  */
 const PROJECTS_VISIBLE = 6;
 const SESSIONS_PER_PROJECT = 3;
-const ORPHANED_VISIBLE = 3;
 
 type RenameTarget = { kind: 'session' | 'project'; id: string; value: string };
 
@@ -40,7 +39,6 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
   const [headerMenu, setHeaderMenu] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showAllProjects, setShowAllProjects] = useState(false);
-  const [showAllOrphaned, setShowAllOrphaned] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<string[]>([]);
   const [projectMenu, setProjectMenu] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
@@ -82,8 +80,7 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
     return { project: item, total: sessions.length,
       sessions: expandedProjects.includes(item.id) ? sessions : sessions.slice(0, SESSIONS_PER_PROJECT) };
   }), [projects, ordered, expandedProjects]);
-  // 来源项目已被删除的历史会话仍要能看到，单独成组；判据用会话自身状态，不靠项目列表是否已刷新。
-  const orphaned = ordered.filter(session => session.status === 'deleted-project');
+  // 来源项目已被删除的会话不再展示：项目删除时会话已一并移入回收站，这里不再有对应的分组。
   /** Ctrl+1…9 的序号与 `ordered` 一致；把它显示出来，这条既有能力才不用靠帮助文档才发现。 */
   const shortcutOf = useMemo(() => new Map(ordered.slice(0, 9).map((item, index) => [item.id, index + 1])), [ordered]);
 
@@ -152,7 +149,6 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
   const sessionRow = (session: ChatSessionSummary) => <div key={session.id} className={`sidebar-session ${activeSessionId === session.id ? 'selected' : ''}`}>
     <button className="sidebar-row" title={session.title} aria-current={page === 'chat' && activeSessionId === session.id ? 'page' : undefined} onClick={() => void openSession(session.id)}>
       <MessageSquare size={15} /><span className="sidebar-row-title truncate">{session.title}</span>
-      {session.status === 'deleted-project' && <span className="sidebar-tag" title="来源项目已删除">项目已删除</span>}
     </button>
     {/* 行尾提示与悬浮操作占同一位置：静止时给快捷键，悬浮时让位给操作按钮。 */}
     {shortcutOf.has(session.id) && <kbd className="sidebar-shortcut">{`Ctrl+${shortcutOf.get(session.id)}`}</kbd>}
@@ -208,13 +204,6 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
           </>
           : <p className="sidebar-empty">还没有项目，用一句话描述要标注什么就会建好。</p>}
       </div>
-      {orphaned.length > 0 && <div className="sidebar-group">
-        <div className="sidebar-group-head"><span className="sidebar-group-title">项目已删除</span></div>
-        {(showAllOrphaned ? orphaned : orphaned.slice(0, ORPHANED_VISIBLE)).map(sessionRow)}
-        {orphaned.length > ORPHANED_VISIBLE && <button className="sidebar-more" onClick={() => setShowAllOrphaned(value => !value)}>
-          {showAllOrphaned ? '收起' : `还有 ${orphaned.length - ORPHANED_VISIBLE} 条`}
-        </button>}
-      </div>}
     </div>
     <div className="sidebar-bottom">
       {/* 顶栏已经有一个引擎状态 chip，侧栏不再重复两行文案，只留一条能看清「本地 / 状态」的行。 */}

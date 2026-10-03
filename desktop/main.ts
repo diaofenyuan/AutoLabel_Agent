@@ -402,8 +402,8 @@ async function deleteProject(payload: Record<string, unknown>): Promise<unknown>
   }
   const result = await storage!.withMaintenance(operationId =>
     engine.request('project.delete', { ...payload, operationId })) as Record<string, unknown>;
-  // 历史对话保留，只标记来源项目已删除。
-  await chatStore.markProjectDeleted(projectId).catch(error => engine.log(`对话记录标记未更新：${error instanceof DesktopError ? error.code : 'CHAT_MARK_FAILED'}`));
+  // 项目删除后其对话一并移入回收站：已删除的项目不再展示历史，也不长期保留会话。
+  await chatStore.deleteByProject(projectId).catch(error => engine.log(`对话记录清理未完成：${error instanceof DesktopError ? error.code : 'CHAT_RECORD_FAILED'}`));
   // 备份可能不含已不可读取的历史外部原件（引擎把它们降级为警告）；不回传的话
   // 用户会默认备份是完整的，这正是删除前备份最容易误导人的地方。
   return backup

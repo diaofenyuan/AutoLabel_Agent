@@ -81,6 +81,22 @@ export async function checkDesktopComposer(window: BrowserWindow, output: string
     await js(`document.querySelector('.chat-panel .local-model-picker > button')?.click()`);
     await waitFor(`!document.querySelector('.chat-panel .local-model-menu')`);
 
+    // 任务流程菜单钉在视口内：它嵌在范围弹层（滚动容器）里，绝对定位会被裁剪且顶部溢出滚不回来，
+    // 七条流程只能看见尾巴。fixed 定位后无论向上还是向下展开，四边都不得越出视口。
+    await js(`document.querySelector('.chat-panel .composer-popover .flow-picker > button')?.click()`);
+    await waitFor(`!!document.querySelector('.chat-panel .flow-picker-menu')`);
+    const flowMenu = await js<{ visible: boolean; top: number; bottom: number; left: number; right: number; viewportW: number; viewportH: number; options: number }>(
+      `(()=>{const menu=document.querySelector('.chat-panel .flow-picker-menu');const r=menu.getBoundingClientRect();
+        return {visible:getComputedStyle(menu).visibility==='visible',top:Math.round(r.top),bottom:Math.round(r.bottom),left:Math.round(r.left),right:Math.round(r.right),
+          viewportW:innerWidth,viewportH:innerHeight,options:menu.querySelectorAll('.flow-option').length};})()`);
+    assert.equal(flowMenu.visible, true, '任务流程菜单应显示');
+    assert.equal(flowMenu.options, 7, '七条流程都应渲染');
+    assert.ok(flowMenu.top >= 0 && flowMenu.bottom <= flowMenu.viewportH && flowMenu.left >= 0 && flowMenu.right <= flowMenu.viewportW,
+      `任务流程菜单越出了视口：${json(flowMenu)}`);
+    checks.push({ check: 'flow-menu-in-viewport', ...flowMenu });
+    await js(`document.querySelector('.chat-panel .composer-popover .flow-picker > button')?.click()`);
+    await waitFor(`!document.querySelector('.chat-panel .flow-picker-menu')`);
+
     // ===== 改执行方式，摘要跟着改 =====
     await js(`([...document.querySelectorAll('.chat-panel .composer-popover .composer-choices button')].find(node=>node.innerText.trim()==='先看方案')).click()`);
     await waitFor(`document.querySelector('.chat-panel .composer-summary')?.innerText.includes('先看方案')`);

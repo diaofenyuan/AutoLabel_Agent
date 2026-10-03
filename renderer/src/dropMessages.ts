@@ -12,7 +12,13 @@ export interface DroppedFiles {
   overLimit: { limit: number; received: number } | null;
 }
 
-export const emptyDroppedFiles: DroppedFiles = { images: [], videos: [], directories: [], rejected: [], unresolved: [], overLimit: null };
+/**
+ * 每次调用返回全新数组。分类结果会直接 push 进这几个数组，
+ * 若是共享常量，上一次拖入的路径会残留到下一次：删掉的附件在下一次拖入时「复活」并越积越多。
+ */
+export function emptyDroppedFiles(): DroppedFiles {
+  return { images: [], videos: [], directories: [], rejected: [], unresolved: [], overLimit: null };
+}
 
 /**
  * 拒绝原因分组提示。

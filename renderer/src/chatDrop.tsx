@@ -45,6 +45,20 @@ export async function filesToAttachments(files: File[]): Promise<ChatAttachment[
   return attachments;
 }
 
+/** 随消息添加的素材写进消息文本：会话历史里才能看出当时发的是什么，不用凭记忆回忆。 */
+export function materialNote(attachments: ChatAttachment[]): string {
+  if (!attachments.length) return '';
+  // 名字之外补类型与数量：光秃秃一个目录名（例如「data」）看不出是文件夹、也不知道里面有多少能用。
+  const labels = attachments.map(item => {
+    if (item.kind === 'video') return `${item.name}（视频）`;
+    if (item.kind !== 'directory') return item.name;
+    const counts = [item.imageCount ? `${item.imageCount} 张图片` : '', item.videoCount ? `${item.videoCount} 个视频` : ''].filter(Boolean);
+    return counts.length ? `${item.name}（文件夹 · ${counts.join('、')}）` : `${item.name}（文件夹）`;
+  });
+  const shown = labels.slice(0, 8).join('、');
+  return `（随消息添加素材：${shown}${attachments.length > 8 ? ` 等 ${attachments.length} 个文件` : ''}）`;
+}
+
 /**
  * 对话区的拖放处理：拖入的文件变成聊天框附件条，发送时才导入并确定项目归属；
  * 不再「拖入即建项目即入库」。拒绝原因照旧如实说明，不静默忽略。
@@ -67,7 +81,11 @@ export function useChatFileDrop(onAttach: (attachments: ChatAttachment[]) => voi
         const images = await bridge.listDirectory?.({ path: directory, kind: 'images' });
         const videos = await bridge.listDirectory?.({ path: directory, kind: 'video' });
         const label = baseName(directory);
-        if (images?.files.length || videos?.files.length) push(directory, 'directory');
+        if (images?.files.length || videos?.files.length)
+          attachments.push({ id: crypto.randomUUID(), path: directory, kind: 'directory', name: label,
+            // 数量跟附件走：素材括注才能写明文件夹里有什么，而不是只报一个名字。
+            ...(images?.files.length ? { imageCount: images.files.length } : {}),
+            ...(videos?.files.length ? { videoCount: videos.files.length } : {}) });
         if (images?.files.length) {
           if (images.unsupported) notes.push(`「${label}」里另有 ${images.unsupported} 个文件不是 JPG / JPEG / PNG，不会导入。`);
           if (images.truncated) notes.push(`「${label}」过大，导入时只处理上限内的部分。`);

@@ -25,8 +25,15 @@ export async function classifyDrop(files: File[]): Promise<DroppedFiles> {
   // 授权由主进程按扩展名判定：拖入和文件选择器一样是用户动作，但类型不能被渲染层说了算。
   const approved = bridge.grantDroppedFiles ? await bridge.grantDroppedFiles(paths)
     : { granted: paths, rejected: [] as DropRejection[], overLimit: undefined };
-  const result: DroppedFiles = { ...emptyDroppedFiles, unresolved, rejected: [...approved.rejected], overLimit: approved.overLimit ?? null };
+  // 数组每次全新，不能从共享对象上展开引用；同一次拖入里系统重复交来的同一路径也在这里归并成一条。
+  const result = emptyDroppedFiles();
+  result.unresolved = unresolved;
+  result.rejected = [...approved.rejected];
+  result.overLimit = approved.overLimit ?? null;
+  const seen = new Set<string>();
   for (const path of approved.granted) {
+    if (seen.has(path)) continue;
+    seen.add(path);
     if (isImagePath(path)) result.images.push(path);
     else if (isVideoPath(path)) result.videos.push(path);
     else result.directories.push(path);

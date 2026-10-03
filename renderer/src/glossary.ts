@@ -50,11 +50,6 @@ export const glossary = {
     plain: '同一个对象在视频里的连续位置',
     detail: '关键帧是这条轨迹上人工确认过的时刻，其余帧由算法补出来待你复核。',
   },
-  thinkingDepth: {
-    term: '思考深度',
-    plain: '助手这次愿意花多少轮次',
-    detail: '快速档少轮次、不额外自检；深入档多轮次并在结束后做一次结构化自检。',
-  },
   structuredOutput: {
     term: '结构化输出',
     plain: '模型按约定好的格式交答案',

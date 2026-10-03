@@ -270,7 +270,7 @@ export const MEDIA_TOOL_DEFINITIONS: ToolDefinition[] = [
       return { job: jobSummary(source), jobId, section, ...pagination(result.total, offset, limit, items.length), parameters: screeningParameters(result.raw.parameters), summary: screeningSummary(result.raw.summary), items };
     } },
   { name: 'preview_image_screening', description: '对明确选择的 1～10000 张同项目素材提交后台筛选任务，返回真实 job，需后续查询结果。零 API 调用；仅建议，不删除文件、不改标注、不自动排除近重复或模糊素材。',
-    parameters: schema({ assetIds: { type: 'array', minItems: 1, maxItems: 10000, uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: 160 } }, parameters: schema(SCREENING_PARAMETER_PROPERTIES) }), mutation: true,
+    parameters: schema({ assetIds: { type: 'array', minItems: 1, maxItems: 10000, items: { type: 'string', minLength: 1, maxLength: 160 } }, parameters: schema(SCREENING_PARAMETER_PROPERTIES) }), mutation: true,
     async execute(args, env) {
       fields(args, ['assetIds', 'parameters']); const assetIds = uniqueIds(args.assetIds, '筛选素材'), parameters = screeningParameters(args.parameters);
       assertScope(assetIds, env); const pid = projectId(env);

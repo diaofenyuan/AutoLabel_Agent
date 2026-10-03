@@ -372,6 +372,11 @@ if (composerOnly) {
   assert.equal(localModelMenu?.visible, true, `内置模型菜单没有显示：${JSON.stringify(localModelMenu)}`);
   assert.ok(localModelMenu?.width > 0 && localModelMenu?.top >= 0 && localModelMenu?.right <= localModelMenu?.viewport,
     `内置模型菜单没有在输入卡附近展开：${JSON.stringify(localModelMenu)}`);
+  // 任务流程菜单钉在视口内：嵌在范围弹层里也不得被裁剪。
+  const flowMenu = byCheck.get('flow-menu-in-viewport');
+  assert.equal(flowMenu?.options, 7, `任务流程菜单条数不对：${JSON.stringify(flowMenu)}`);
+  assert.ok(flowMenu?.top >= 0 && flowMenu?.bottom <= flowMenu?.viewportH && flowMenu?.left >= 0 && flowMenu?.right <= flowMenu?.viewportW,
+    `任务流程菜单越出了视口：${JSON.stringify(flowMenu)}`);
   // 改选择后摘要跟着改。
   assert.ok(String(byCheck.get('composer-summary-follows-choice')?.summary ?? '').includes('先看方案'));
   // 主操作一眼可读：发送按钮不被挤成两行。

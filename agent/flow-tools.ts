@@ -14,7 +14,9 @@ const nullableString = { type: ['string', 'null'] };
 const nullableBoolean = { type: ['boolean', 'null'] };
 const number = (minimum: number, maximum: number) => ({ type: ['integer', 'null'], minimum, maximum });
 const choice = (values: string[], nullable = false) => ({ type: nullable ? ['string', 'null'] : 'string', enum: nullable ? [...values, null] : values });
-const idList = { type: ['array', 'null'], items: string, minItems: 1, maxItems: 10000, uniqueItems: true };
+// OpenAI 严格工具 schema 不接受 uniqueItems（整个工具清单会随每次对话 400）；
+// 去重由运行时校验兜底：idList 走 uniqueIds，textClasses/statuses 各自有显式查重。
+const idList = { type: ['array', 'null'], items: string, minItems: 1, maxItems: 10000 };
 const statuses = ['unlabeled', 'candidate', 'modified', 'confirmed', 'invalid', 'missing'];
 const dimension = { type: 'integer', minimum: 1, maximum: 20000 };
 const transformOperations = { type: ['array', 'null'], maxItems: 30, items: { anyOf: [
@@ -29,14 +31,14 @@ const stepParameters = {
     classMap: { type: ['array', 'null'], maxItems: 10000, description: '逐一列出模型全部类别；忽略类别也须明确设 projectClassId 为 null。',
       items: schema({ modelClassId: { type: 'string', pattern: '^(0|[1-9][0-9]*)$', maxLength: 32 }, projectClassId: nullableString }) },
     // 开放词汇模型的类别就是这份文本列表，classMap 的键是它的下标（0 起）。
-    textClasses: { type: ['array', 'null'], minItems: 1, maxItems: 200, uniqueItems: true, description: '开放词汇模型的文本类别名，顺序即类别号（0 起）；仅开放词汇模型可用。',
+    textClasses: { type: ['array', 'null'], minItems: 1, maxItems: 200, description: '开放词汇模型的文本类别名，顺序即类别号（0 起）；仅开放词汇模型可用，不能重复。',
       items: { type: 'string', minLength: 1, maxLength: 100 } },
     confidence: { type: ['number', 'null'], minimum: 0, maximum: 1 }, iou: { type: ['number', 'null'], minimum: 0, maximum: 1 },
     imageSize: number(32, 4096), maxDetections: number(1, 10000), timeoutMs: number(1000, 600000),
     reuseEnabled: { ...nullableBoolean, description: '是否复用匹配的历史本地输入结果；null 使用引擎默认 true。' },
     forceRerun: { ...nullableBoolean, description: '是否跳过复用并重新本地计算；null 使用引擎默认 false，不产生 API 请求或占用 API 预算。' },
     reuseMaxAgeSeconds: { ...number(1, Number.MAX_SAFE_INTEGER), description: '历史结果有效期，单位秒；null 表示不限制时间。' } },
-  filter: { assetIds: idList, statuses: { type: ['array', 'null'], items: choice(statuses), minItems: 1, maxItems: 6, uniqueItems: true },
+  filter: { assetIds: idList, statuses: { type: ['array', 'null'], items: choice(statuses), minItems: 1, maxItems: 6 },
     minWidth: number(1, 100000), minHeight: number(1, 100000), maxWidth: number(1, 100000), maxHeight: number(1, 100000), deduplicate: nullableBoolean,
     screening: { anyOf: [{ type: 'null' }, schema(SCREENING_PARAMETER_PROPERTIES)] },
     excludeAssetIds: { ...idList, description: '明确排除的素材 ID；不根据近重复或模糊提示自动填写，人工版本保护由引擎执行。' } },

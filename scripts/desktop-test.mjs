@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 const entries = [['desktop/security.test.ts', 'desktop/dist/security.test.cjs'], ['desktop/materials.test.ts', 'desktop/dist/materials.test.cjs'], ['desktop/transcode.test.ts', 'desktop/dist/transcode.test.cjs'], ['desktop/project-classes.test.ts', 'desktop/dist/project-classes.test.cjs'],
   // 渲染层的纯函数（拖入提示文案、术语人话化）也走这里：不依赖 Electron 与界面，直接断言最快。
   ['renderer/tests/drop-messages.test.ts', 'desktop/dist/drop-messages.test.cjs'],
+  ['renderer/tests/file-drop.test.ts', 'desktop/dist/file-drop.test.cjs'],
   ['renderer/tests/tool-labels.test.ts', 'desktop/dist/tool-labels.test.cjs'],
   ['renderer/tests/glossary.test.ts', 'desktop/dist/glossary.test.cjs'],
   ['renderer/tests/video-continuity.test.ts', 'desktop/dist/video-continuity.test.cjs'],
@@ -10,6 +11,7 @@ const entries = [['desktop/security.test.ts', 'desktop/dist/security.test.cjs'],
   // 桌面存储与业务边界单测统一登记，避免只有孤儿 runner 而未进入回归。
   ['desktop/storage.test.ts', 'desktop/dist/storage.test.cjs'],
   ['desktop/storage-paths.test.ts', 'desktop/dist/storage-paths.test.cjs'],
+  ['desktop/chat-store.test.ts', 'desktop/dist/chat-store.test.cjs'],
   ['desktop/flow.test.ts', 'desktop/dist/flow.test.cjs'],
   ['desktop/track-validation.test.ts', 'desktop/dist/track-validation.test.cjs'],
   ['desktop/media-execution.test.ts', 'desktop/dist/media-execution.test.cjs'],

@@ -1,7 +1,6 @@
 /** 对话记录共享类型：主进程按此落盘，界面按此分组与展示。 */
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 export type ChatTitleSource = 'auto' | 'user';
-export type ChatSessionStatus = 'active' | 'deleted-project';
 
 export interface ChatMessage {
   role: ChatRole;
@@ -25,7 +24,6 @@ export interface ChatSessionSummary {
   updatedAt: string;
   lastMessageAt: string;
   messageCount: number;
-  status: ChatSessionStatus;
   /** 仅供侧栏悬浮预览，不参与长期存储。 */
   preview?: string;
 }

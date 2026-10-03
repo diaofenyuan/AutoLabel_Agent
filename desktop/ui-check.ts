@@ -173,22 +173,20 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
   if (dock.missing || dock.height < 40) throw new Error('会话页缺少底部输入区');
   if (dock.gapBottom > 24) throw new Error(`输入区没有贴在页面最下方：距底部 ${dock.gapBottom}px`);
   results.push({ check: 'composer-dock', ...dock });
-  // 模型与思考深度收起成一行，点开才出现搜索、模型列表与档位。
+  // 模型选择器收起成一行，点开才出现搜索与模型列表。
   const picker = await window.webContents.executeJavaScript(`(async()=>{
     const settle=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     const trigger=document.querySelector('.chat-dock .model-picker-trigger')||document.querySelector('.chat-panel .model-picker-trigger');
-    if(!trigger)throw new Error('缺少模型与思考深度入口');
+    if(!trigger)throw new Error('缺少模型选择入口');
     const collapsed={text:trigger.innerText.trim(),open:!!document.querySelector('.picker-popover')};
     trigger.click(); await settle();
     const opened={popover:!!document.querySelector('.picker-popover'),search:!!document.querySelector('.picker-search input'),
-      effort:[...document.querySelectorAll('.picker-effort-options button')].map(b=>b.innerText.trim()),
       rows:document.querySelectorAll('.picker-row').length};
     document.body.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})); await settle();
     return {collapsed,opened,dismissed:!document.querySelector('.picker-popover')};
   })()`);
   if (picker.collapsed.open) throw new Error('模型选择器默认应当是收起状态');
   if (!picker.opened.popover || !picker.opened.search) throw new Error('模型选择器没有打开搜索与模型列表');
-  if (picker.opened.effort.join(',') !== '快速,标准,深入') throw new Error(`思考深度档位不正确：${picker.opened.effort.join('、')}`);
   if (!picker.dismissed) throw new Error('点击外部后模型选择器没有收起');
   results.push({ check: 'model-picker', ...picker });
   // 任务流程在对话里选：菜单要列出可选流程，选中只填进输入框，不直接执行。

@@ -175,7 +175,7 @@ async function dispatch(command: string, p: Record<string, unknown>): Promise<un
       if (!session) {
         session = { id: sessionId, title: String(p.title ?? '新对话') || '新对话', titleSource: 'auto', pinned: false, pinOrder: 0,
           ...(typeof p.projectId === 'string' && p.projectId ? { projectId: p.projectId } : {}), providerId: '', model: '',
-          createdAt: now(), updatedAt: now(), lastMessageAt: now(), messageCount: 0, status: 'active' };
+          createdAt: now(), updatedAt: now(), lastMessageAt: now(), messageCount: 0 };
         demoChatSessions.push(session);
       }
       return session;

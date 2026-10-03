@@ -35,7 +35,9 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 /** 拖进聊天框、等待随消息一起入库的文件：发送时才导入并确定项目归属。 */
-export interface ChatAttachment { id: string; path: string; kind: 'image' | 'video' | 'directory'; name: string }
+export interface ChatAttachment { id: string; path: string; kind: 'image' | 'video' | 'directory'; name: string;
+  /** 文件夹附件在拖入时数出的可导入数量；粘贴/点选拿不到，展示时省略数量。 */
+  imageCount?: number; videoCount?: number }
 
 export interface ChatSession {
   id: string; messages: Array<{ role: 'user'|'assistant'; content: string; failed?: boolean }>;
@@ -47,10 +49,10 @@ export interface ChatSession {
   /** 拖入聊天框的附件：展示在输入框上方，发送时才导入项目（不再拖入即建项目）。 */
   attachments?: ChatAttachment[];
   /**
-   * 会话级的模型与思考深度覆盖：只影响这一段对话，新会话回落到设置里的默认值。
+   * 会话级的模型覆盖：只影响这一段对话，新会话回落到设置里的默认值。
    * 未设置时取全局默认，因此这里只保存「用户显式改过」的值。
    */
-  providerId?: string; model?: string; depth?: import('./types').ThinkingDepth;
+  providerId?: string; model?: string;
   /** 先看方案时 agent 返回的待执行操作：确认卡片据此渲染，确认前不会执行任何写操作。 */
   planned?: import('./AgentActivity').AgentStep[];
 }

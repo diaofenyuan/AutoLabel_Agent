@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { ChevronDown, ListTodo } from 'lucide-react';
 
 /**
@@ -16,9 +16,14 @@ const FLOWS: Array<{ id: string; label: string; hint: string; prompt: string }> 
   { id: 'quality', label: '质量评测', hint: '用已发布真值比对运行', prompt: '用已发布的人工真值集评测最近一次运行：先预检可比较性，再固定指标并把分母与失败样本一起报给我。' },
 ];
 
+/** 七条流程加说明的完整高度约 390px：下方放得下就向下展开，否则哪边空间大往哪边开。 */
+const MENU_SPACE = 390;
+
 export default function FlowPicker({ disabled, onPick }: { disabled?: boolean; onPick: (prompt: string) => void }) {
   const [open, setOpen] = useState(false);
+  const [style, setStyle] = useState<CSSProperties>({});
   const root = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
@@ -27,11 +32,25 @@ export default function FlowPicker({ disabled, onPick }: { disabled?: boolean; o
     document.addEventListener('keydown', onKeyDown);
     return () => { document.removeEventListener('mousedown', onPointerDown); document.removeEventListener('keydown', onKeyDown); };
   }, [open]);
+  // 菜单用 fixed 定位钉在视口内：嵌在范围弹层（overflow 滚动容器）里时，绝对定位会被裁剪，
+  // 且滚动容器顶部方向的溢出滚不回来，前几条流程永远看不见。高度压在可视空间内，超出部分走菜单内滚。
+  useLayoutEffect(() => {
+    if (!open) return;
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = Math.min(310, window.innerWidth - 24);
+    const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+    const below = window.innerHeight - rect.bottom;
+    const openDown = below >= MENU_SPACE || below >= rect.top;
+    setStyle(openDown
+      ? { position: 'fixed', left, width, top: rect.bottom + 6, bottom: 'auto', maxHeight: Math.max(180, below - 12) }
+      : { position: 'fixed', left, width, top: 'auto', bottom: window.innerHeight - rect.top + 6, maxHeight: Math.max(180, rect.top - 12) });
+  }, [open]);
   return <div className="flow-picker" ref={root}>
-    <button type="button" disabled={disabled} aria-label="选择任务流程" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(value => !value)}>
+    <button ref={triggerRef} type="button" disabled={disabled} aria-label="选择任务流程" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(value => !value)}>
       <ListTodo size={13} />任务流程<ChevronDown size={11} />
     </button>
-    {open && <div className="picker-popover flow-picker-menu" role="dialog" aria-label="选择任务流程">
+    {open && <div className="picker-popover flow-picker-menu" style={style} role="dialog" aria-label="选择任务流程">
       {FLOWS.map(flow => <button key={flow.id} type="button" disabled={disabled} className="flow-option"
         onClick={() => { setOpen(false); onPick(flow.prompt); }}>
         <strong>{flow.label}</strong><small>{flow.hint}</small>

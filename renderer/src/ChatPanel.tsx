@@ -12,7 +12,7 @@ import LocalModelPicker from './LocalModelPicker';
 import ClassPicker from './ClassPicker';
 import DirectRun from './DirectRun';
 import { DropOverlay } from './fileDrop';
-import { VideoPickList, useChatFileDrop, importAttachments, filesToAttachments } from './chatDrop';
+import { VideoPickList, useChatFileDrop, importAttachments, filesToAttachments, materialNote } from './chatDrop';
 import { RichText } from './chatText';
 import { useEffect, useRef, useState } from 'react';
 import { MessageSquare, Settings2, FolderOpen, Sparkles, ChevronDown } from 'lucide-react';
@@ -74,7 +74,6 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
   // 会话级覆盖优先，未改过就用设置里的默认值（见实施计划 6.2）。
   const selectedProviderId = sessionOverride?.providerId ?? chatConfig.providerId;
   const selectedModel = sessionOverride?.model ?? chatConfig.model;
-  const depth = sessionOverride?.depth ?? prefs.chatThinkingDepth;
   // 新建会话先渲染空态，消息在首次发送或读盘后写入；工作台里的内嵌面板仍然以「当前图片」为默认范围。
   const session = key ? chats[key] ?? blankChatSession(key, compact && assetId ? 'current' : 'project') : undefined;
   const chatsRef = useRef(chats); chatsRef.current = chats;
@@ -141,6 +140,9 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     const attachments = session.attachments ?? [];
     const text = (overrides.message ?? session.input).trim() || (attachments.length ? `刚添加了 ${attachments.length} 个文件，请核对项目素材。` : '');
     if (!text || session.busy || assetsLoading) return;
+    // 素材名单跟消息一起落库：历史里才能看出当时发的是什么，而不只是「添加了 N 个文件」。
+    const note = materialNote(attachments);
+    const content = note ? `${text}\n${note}` : text;
     if (!selectedProviderId || !selectedModel) { notify('请先在设置里选择对话接口与对话模型。', { error: true, action: { label: '去配置', run: () => void navigate('settings', 'ai') } }); return; }
     // 模型校验按本次实际使用的接口来，配置里的其它问题（并发、请求上限）照旧拦下。
     const configIssue = chatConfig.issues.find(issue => issue.field !== 'model');
@@ -158,7 +160,7 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     }
     const assetIds = effectiveScope === 'current' ? [assetId!] : effectiveScope === 'page' ? assets.map(a => a.id) : effectiveScope === 'selected' ? [...selectedAssetIds] : undefined;
     if (assetIds && !assetIds.length) { notify('当前处理范围没有素材，请先选择图片。', { error: true, action: { label: '去勾选', run: () => void navigate('overview') } }); return; }
-    const next = [...session.messages, { role: 'user' as const, content: text }];
+    const next = [...session.messages, { role: 'user' as const, content }];
     const streamSinceSequence = events.at(-1)?.sequence ?? -1;
     const scopeLabel = effectiveScope === 'current' ? assets.find(a => a.id === assetId)?.name ?? '当前图片' : effectiveScope === 'project' ? `全项目 · ${assetTotal} 张` : `${effectiveScope === 'page' ? '当前页' : '已勾选（跨页）'} · ${assetIds!.length} 张`;
     update({ messages: next, input: '', busy: true, cancelRequested: false, runningScope: scopeLabel, streamingText: '', streamSinceSequence, planned: undefined });
@@ -167,7 +169,7 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
         sessionId: session.id, projectId: project?.id, providerId: selectedProviderId, model: selectedModel,
         // failed 是界面态标记，不属于 Agent 消息协议；重试时剥离，避免把本地展示字段送入严格校验。
         messages: next.map(({ role, content }) => ({ role, content })), autoExecute: overrides.autoExecute ?? session.autoExecute,
-        context: { depth, ...(session.referenceResources?.length?{referenceResources:session.referenceResources}:{}), ...(assetIds ? { assetIds } : {}), ...(annotationConfig.providerId&&annotationConfig.model ? { annotationProviderId:annotationConfig.providerId,annotationModel:annotationConfig.model } : {}), ...(annotationConfig.prompt?{prompt:annotationConfig.prompt}:{}), ...(session.exportDir ? { exportDir: session.exportDir } : {}), ...(annotationConfig.maxRequests!==undefined ? { maxRequests:annotationConfig.maxRequests} : {}), ...(annotationConfig.concurrency?{concurrency:annotationConfig.concurrency}:{}) },
+        context: { ...(session.referenceResources?.length?{referenceResources:session.referenceResources}:{}), ...(assetIds ? { assetIds } : {}), ...(annotationConfig.providerId&&annotationConfig.model ? { annotationProviderId:annotationConfig.providerId,annotationModel:annotationConfig.model } : {}), ...(annotationConfig.prompt?{prompt:annotationConfig.prompt}:{}), ...(session.exportDir ? { exportDir: session.exportDir } : {}), ...(annotationConfig.maxRequests!==undefined ? { maxRequests:annotationConfig.maxRequests} : {}), ...(annotationConfig.concurrency?{concurrency:annotationConfig.concurrency}:{}) },
       });
       // 先看方案时 agent 只给出待执行的操作：确认卡片据此渲染，写操作一个都没跑。
       update({ messages: [...next, { role: 'assistant', content: result.content || (result.status === 'cancelled' ? '对话已停止。' : '接口未返回文本。') }], planned: result.actions?.filter(action => action.status === 'planned'), streamingText: undefined, streamSinceSequence: undefined });
@@ -246,7 +248,9 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
       <Composer value={session.input} onChange={input => update({ input })} onSend={() => void send()} placeholder="描述你的标注任务…" busy={session.busy}
         onAttachFiles={files => void filesToAttachments(files).then(list => { if (list.length) update({ attachments: [...(session.attachments ?? []), ...list] }); }).catch(e => notify(errorMessage(e), true))}
         attachments={session.attachments} onRemoveAttachment={id => update({ attachments: (session.attachments ?? []).filter(item => item.id !== id) })}
-        onCancel={() => { if (session.cancelRequested) return; update({ cancelRequested: true }); void request('agent.cancel', { sessionId: session.id }).catch(e => { update({ cancelRequested: false }); notify(errorMessage(e), true); }); }}>
+        onCancel={() => { if (session.cancelRequested) return; update({ cancelRequested: true }); void request('agent.cancel', { sessionId: session.id }).catch(e => { update({ cancelRequested: false }); notify(errorMessage(e), true); }); }}
+        // Ctrl+Enter 已在发送键旁的 kbd 上，这里只补「Enter 换行」，不再重复一遍同样的快捷键。
+        hint={`Enter 换行${session.attachments?.length ? ` · 已添加 ${session.attachments.length} 个文件` : ''}`}>
         <div className="chat-options">
           <div className="composer-scope" ref={scopeRoot}>
             <button type="button" className="composer-summary" disabled={session.busy} title={session.busy ? '任务执行中不能改处理范围与执行方式' : undefined} aria-haspopup="dialog" aria-expanded={toolsOpen} onClick={() => setToolsOpen(value => !value)}>
@@ -270,14 +274,12 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
               </div>
             </div>}
           </div>
-          <ModelPicker providers={providers} providerId={selectedProviderId} model={selectedModel} depth={depth} disabled={session.busy}
+          <ModelPicker providers={providers} providerId={selectedProviderId} model={selectedModel} disabled={session.busy}
             onChange={choice => update({ providerId: choice.providerId, model: choice.model })}
-            onDepthChange={next => update({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} />
+            onConfigure={() => void navigate('settings', 'ai')} />
           {/* 直达标注：对话模型没配或不能调工具时，这里是唯一能真正开跑的路。 */}
           {project && <DirectRun project={project} annotationConfig={annotationConfig} selectedAssetIds={selectedAssetIds} disabled={session.busy} />}
         </div>
-        {/* Ctrl+Enter 已在发送键旁的 kbd 上，这里只补「Enter 换行」，不再重复一遍同样的快捷键。 */}
-        <span className="composer-hint">Enter 换行{session.attachments?.length ? ` · 已添加 ${session.attachments.length} 个文件` : ''}</span>
       </Composer>
     </footer>
     {/* 拖入多个视频时先给候选清单：原先只打开第一个，其余文件名连提都不提。 */}

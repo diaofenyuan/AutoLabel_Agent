@@ -1,15 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Search, Star } from 'lucide-react';
 import type { Provider } from './types';
-import { thinkingDepthNames, type ThinkingDepth } from './types';
 import { isDemo } from './bridge';
 
 /**
- * 模型与思考深度选择器：收起时只有一行小字（模型 · 深度），点开才出现搜索框、模型列表与档位。
+ * 模型选择器：收起时只有一行小字（模型名），点开才出现搜索框与模型列表。
  * 「常用」标记只影响这里的排序，存在本机；它不改变接口配置，也不代表服务商侧的任何状态。
  */
 const FAVORITES_KEY = 'autolabel.modelFavorites';
-const DEPTHS: ThinkingDepth[] = ['fast', 'standard', 'deep'];
 
 function readFavorites(): string[] {
   try { const raw = JSON.parse(localStorage.getItem(FAVORITES_KEY) ?? '[]'); return Array.isArray(raw) ? raw.filter(item => typeof item === 'string') : []; }
@@ -39,10 +37,9 @@ export function modelOptions(providers: Provider[], current?: { providerId?: str
   return options;
 }
 
-export default function ModelPicker({ providers, providerId, model, depth, disabled, onChange, onDepthChange, onConfigure }: {
-  providers: Provider[]; providerId?: string; model?: string; depth: ThinkingDepth; disabled?: boolean;
+export default function ModelPicker({ providers, providerId, model, disabled, onChange, onConfigure }: {
+  providers: Provider[]; providerId?: string; model?: string; disabled?: boolean;
   onChange: (choice: { providerId: string; model: string }) => void;
-  onDepthChange: (depth: ThinkingDepth) => void;
   onConfigure: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -74,13 +71,13 @@ export default function ModelPicker({ providers, providerId, model, depth, disab
       return next;
     });
   }
-  const label = model ? `${model} · ${thinkingDepthNames[depth]}` : '选择模型';
+  const label = model || '选择模型';
 
   return <div className="model-picker" ref={root}>
     <button type="button" className="model-picker-trigger" disabled={disabled} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(value => !value)}>
       <span className="truncate">{label}</span><ChevronDown size={13} />
     </button>
-    {open && <div className="picker-popover" role="dialog" aria-label="选择模型与思考深度">
+    {open && <div className="picker-popover" role="dialog" aria-label="选择模型">
       <label className="picker-search"><Search size={15} /><input autoFocus value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索模型" /></label>
       <div className="picker-list">{visible.map(item => <div key={item.key} className={`picker-row ${current?.key === item.key ? 'selected' : ''}`}>
         <button type="button" className="picker-choose" disabled={disabled} onClick={() => onChange(item)}>
@@ -91,13 +88,6 @@ export default function ModelPicker({ providers, providerId, model, depth, disab
         <button type="button" className={`picker-star ${favorites.includes(item.key) ? 'on' : ''}`} aria-pressed={favorites.includes(item.key)}
           aria-label={favorites.includes(item.key) ? `取消常用 ${item.model}` : `标为常用 ${item.model}`} onClick={() => toggleFavorite(item.key)}><Star size={15} /></button>
       </div>)}{matched.length > 8 && !showAllModels && <button type="button" className="local-model-more" onClick={() => setShowAllModels(true)}>还有 {matched.length - 8} 个 · 全部</button>}{!visible.length && <p className="quiet-empty">{providers.length ? '没有匹配的模型。' : '还没有配置接口。'}</p>}</div>
-      {/* 档位跟随当前模型：服务商没有统一定义 reasoning，档位改的是助手自身的投入。 */}
-      <div className="picker-effort">
-        <p className="muted tiny">思考深度 · {model ?? '未选择模型'}</p>
-        <div className="picker-effort-options">{DEPTHS.map(item => <button key={item} type="button" disabled={disabled}
-          className={depth === item ? 'selected' : ''} aria-pressed={depth === item}
-          onClick={() => { onDepthChange(item); setOpen(false); }}>{thinkingDepthNames[item]}</button>)}</div>
-      </div>
       <div className="picker-foot">
         <span className="muted tiny">{isDemo ? '浏览器演示不调用模型' : '模型与密钥在设置里配置；这里只选择本次对话用哪一个'}</span>
         <button type="button" className="text-button" onClick={() => { setOpen(false); onConfigure(); }}>配置</button>

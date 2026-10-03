@@ -73,7 +73,7 @@ export function ConfirmModal({ message, onYes, onNo }: { message: string; onYes:
   return <Modal title="请确认" onClose={onNo}><div className="form-stack"><p>{message}</p>
     <div className="modal-actions"><Button onClick={onNo}>取消</Button><Button className="primary" onClick={onYes}>确定</Button></div></div></Modal>;
 }
-export function Composer({ value, onChange, onSend, placeholder, busy, onCancel, children, attachments, onRemoveAttachment, onAttachFiles }: { value: string; onChange: (v: string) => void; onSend: () => void; placeholder: string; busy?: boolean; onCancel?: () => void; children?: ReactNode; attachments?: ChatAttachment[]; onRemoveAttachment?: (id: string) => void; onAttachFiles?: (files: File[]) => void }) {
+export function Composer({ value, onChange, onSend, placeholder, busy, onCancel, children, hint, attachments, onRemoveAttachment, onAttachFiles }: { value: string; onChange: (v: string) => void; onSend: () => void; placeholder: string; busy?: boolean; onCancel?: () => void; children?: ReactNode; hint?: ReactNode; attachments?: ChatAttachment[]; onRemoveAttachment?: (id: string) => void; onAttachFiles?: (files: File[]) => void }) {
   const hasAttachments = Boolean(attachments?.length);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const iconOf = (kind: ChatAttachment['kind']) => kind === 'image' ? <ImageIcon size={12} /> : kind === 'video' ? <Film size={12} /> : <Folder size={12} />;
@@ -99,5 +99,7 @@ export function Composer({ value, onChange, onSend, placeholder, busy, onCancel,
       <kbd className="composer-kbd">Ctrl + Enter</kbd>
       <button className="send-button" aria-label={busy ? '停止对话' : '发送'} disabled={!busy && !value.trim() && !hasAttachments} onClick={busy ? onCancel : onSend}>{busy ? <Square size={13} /> : <ArrowUp size={17} />}<span className="send-button-label">{busy ? '停止' : '发送'}</span></button>
     </div>
+    {/* 落点 / 快捷键这类说明独占一行放在工具行下方：混进工具行会和选择器抢宽度，把模型选择挤到第二行。 */}
+    {hint && <span className="composer-hint">{hint}</span>}
   </div>;
 }

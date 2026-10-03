@@ -10,7 +10,7 @@ import FlowPicker from './FlowPicker';
 import LocalModelPicker from './LocalModelPicker';
 import ProjectResolveDialog, { type ProjectChoice } from './ProjectResolveDialog';
 import { applyProjectDraft } from './projectSetup';
-import { VideoPickList, useChatFileDrop, importAttachments, filesToAttachments } from './chatDrop';
+import { VideoPickList, useChatFileDrop, importAttachments, filesToAttachments, materialNote } from './chatDrop';
 import { VIDEO_EXTENSION_LABEL } from '../../shared/mediaFormats';
 import { directoryName, folderName, sameNameProject } from './projectNaming';
 import type { Project } from './types';
@@ -51,10 +51,10 @@ export default function ChatHome() {
     const fresh = items.filter(item => !known.has(item.path));
     return fresh.length ? [...current, ...fresh] : current;
   }));
-  // 欢迎页还没有会话，选择模型与深度即写入默认值：新建会话与任务都以它为初值。
-  const choice = { providerId: prefs.chatProviderId, model: prefs.chatModel, depth: prefs.chatThinkingDepth ?? 'standard' };
+  // 欢迎页还没有会话，选择模型即写入默认值：新建会话与任务都以它为初值。
+  const choice = { providerId: prefs.chatProviderId, model: prefs.chatModel };
   async function saveChoice(next: Partial<typeof choice>) {
-    try { await savePrefs({ ...prefs, chatProviderId: next.providerId ?? choice.providerId, chatModel: next.model ?? choice.model, chatThinkingDepth: next.depth ?? choice.depth }); }
+    try { await savePrefs({ ...prefs, chatProviderId: next.providerId ?? choice.providerId, chatModel: next.model ?? choice.model }); }
     catch (e) { notify(errorMessage(e), true); }
   }
   // 最近更新的几个项目都留出入口：只给一个「继续」时，用户没法表达「我要接着另一个项目干」。
@@ -189,30 +189,34 @@ export default function ChatHome() {
             suggest: pendingName || folderName(attachments[0]?.path ?? ''),
             run: async target => {
               // 附件随首条消息一起落库：图片与目录进项目，视频交给会话页的抽帧面板。
+              // 素材名单写进消息文本：会话历史里才能看出开局发的是什么。
               if (attachments.length) {
                 const result = await importAttachments(target.id, attachments);
                 if (result.videos.length) setPendingVideoImports({ projectId: target.id, files: result.videos });
                 if (result.queued) notify(`这批有 ${result.total ?? 0} 张，导入量较大已转入后台任务：进度见「任务 · 素材任务」，可随时取消。`); else if (result.imported || result.skipped) notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`);
               }
-              await openProject(target, text || `刚添加了 ${attachments.length} 个文件，请核对项目素材。`);
+              const firstMessage = attachments.length
+                ? text ? `${text}\n${materialNote(attachments)}` : `刚添加了 ${attachments.length} 个文件，请核对项目素材。${materialNote(attachments)}`
+                : text;
+              await openProject(target, firstMessage);
               setInput(''); setAttachments([]);
             }
           });
         }} placeholder="例如：标注工地照片里的安全帽和人员…" busy={busy}
           attachments={attachments} onRemoveAttachment={id => setAttachments(list => list.filter(item => item.id !== id))}
-          onAttachFiles={files => void filesToAttachments(files).then(list => { if (list.length) setAttachments(previous => [...previous, ...list]); }).catch(e => notify(errorMessage(e), true))}>
+          onAttachFiles={files => void filesToAttachments(files).then(list => { if (list.length) setAttachments(previous => [...previous, ...list]); }).catch(e => notify(errorMessage(e), true))}
+          // 把落点写在发送之前：用户先知道这句话会落到哪个项目，而不是发完才发现又多了一个项目。
+          hint={pendingName
+            ? pendingExisting ? `将并入已有项目「${pendingExisting.name}」` : `将新建项目「${pendingName}」（发送时可改名）`
+            : '发送时确认项目名称'}>
           <div className="chat-options">
             <FlowPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
             {/* 本机模型与云端接口并列在工具行：不配 API Key 也能开始标注。 */}
             <LocalModelPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
             {/* 模型选择收进输入卡的工具行；默认值语义挂在悬浮提示里。 */}
-            <span title="这里的默认值用于新建的对话与任务"><ModelPicker providers={providers} providerId={choice.providerId} model={choice.model} depth={choice.depth} disabled={busy}
-              onChange={next => void saveChoice(next)} onDepthChange={next => void saveChoice({ depth: next })} onConfigure={() => void navigate('settings', 'ai')} /></span>
+            <span title="这里的默认值用于新建的对话与任务"><ModelPicker providers={providers} providerId={choice.providerId} model={choice.model} disabled={busy}
+              onChange={next => void saveChoice(next)} onConfigure={() => void navigate('settings', 'ai')} /></span>
           </div>
-          {/* 把落点写在发送之前：用户先知道这句话会落到哪个项目，而不是发完才发现又多了一个项目。 */}
-          <span className="composer-hint">{pendingName
-            ? pendingExisting ? `将并入已有项目「${pendingExisting.name}」` : `将新建项目「${pendingName}」（发送时可改名）`
-            : '发送时确认项目名称'}</span>
         </Composer>
       </footer>
       <OnboardingLanes busy={busy}

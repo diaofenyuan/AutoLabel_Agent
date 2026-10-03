@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentAction, AgentContext, AgentDepth, AgentNotification, AgentRequest, AgentResult, ChatMessage, EngineClient, ToolCall } from './types.ts';
+import type { AgentAction, AgentContext, AgentNotification, AgentRequest, AgentResult, ChatMessage, EngineClient, ToolCall } from './types.ts';
 import { findTool, modelTools } from './tools.ts';
 import { AgentError, fields, id, ids, integer, object, parseArguments, publicError, text } from './validation.ts';
 
@@ -20,14 +20,10 @@ const SYSTEM = `你是“自动标注小助手”的中文操作助手。帮助�
 给出简短明确的中文回答。模型能力未验证时仅提供对话，不声称已操作项目。`;
 
 /**
- * 思考深度档位。服务商侧没有统一的 reasoning 参数，所以档位改的是助手自身的投入：
- * 模型往返轮次、单轮操作数量，以及是否追加一段自检要求；不改模型、不改引擎请求参数。
+ * 助手单次对话的投入上限：模型往返最多 8 轮、累计操作最多 12 个。
+ * （原「思考深度」三档已取消，统一按标准档执行。）
  */
-const DEPTH: Record<AgentDepth, { rounds: number; actions: number; directive: string }> = {
-  fast: { rounds: 3, actions: 6, directive: '当前是快速档：直接执行最小必要步骤，回答保持简短，不做额外的核对回合。' },
-  standard: { rounds: 8, actions: 12, directive: '' },
-  deep: { rounds: 12, actions: 20, directive: '当前是深入档：执行前先核对必要信息，执行后对结果做一次结构化自检（数量、类别、范围、失败样本），并在回答中说明仍不确定的部分。' },
-};
+const MAX_ROUNDS = 8, MAX_ACTIONS = 12;
 
 interface ModelResult { content: string; toolCalls?: ToolCall[]; usage?: unknown }
 type Emit = (event: AgentNotification) => void;
@@ -48,13 +44,8 @@ function validateRequest(raw: AgentRequest): AgentRequest {
   if (characters > 120000) throw new AgentError('CONTEXT_TOO_LARGE', '对话过长，请新建对话后继续');
   if (messages.at(-1)?.role !== 'user') throw new AgentError('INVALID_ARGUMENT', '最后一条消息应为用户输入');
   const context = value.context == null ? {} : object(value.context, '项目上下文');
-  fields(context, ['annotationProviderId', 'annotationModel', 'assetIds', 'prompt', 'concurrency', 'maxRequests', 'exportDir', 'referenceAssetIds', 'referenceResources', 'depth']);
+  fields(context, ['annotationProviderId', 'annotationModel', 'assetIds', 'prompt', 'concurrency', 'maxRequests', 'exportDir', 'referenceAssetIds', 'referenceResources']);
   const parsedContext: AgentContext = {};
-  if (context.depth != null) {
-    if (context.depth !== 'fast' && context.depth !== 'standard' && context.depth !== 'deep')
-      throw new AgentError('INVALID_ARGUMENT', '思考深度只能是快速、标准或深入');
-    parsedContext.depth = context.depth;
-  }
   if (context.annotationProviderId != null) parsedContext.annotationProviderId = id(context.annotationProviderId, '标注接口');
   if (context.annotationModel != null) parsedContext.annotationModel = text(context.annotationModel, '标注模型', 200);
   if (context.assetIds != null) parsedContext.assetIds = ids(context.assetIds, '所选素材');
@@ -132,9 +123,8 @@ export class AgentController {
     if (this.active.has(request.sessionId)) throw new AgentError('SESSION_BUSY', '这段对话仍在处理上一条消息');
     const controller = new AbortController(); this.active.set(request.sessionId, controller);
     const budgetScopeId = randomUUID();
-    const depth = DEPTH[request.context?.depth ?? 'standard'];
     const actions: AgentAction[] = [];
-    const messages: ChatMessage[] = [{ role: 'system', content: depth.directive ? `${SYSTEM}\n${depth.directive}` : SYSTEM }, ...request.messages];
+    const messages: ChatMessage[] = [{ role: 'system', content: SYSTEM }, ...request.messages];
     const notify = (type: AgentNotification['type'], payload: Record<string, unknown>) => {
       try { this.emit({ sessionId: request.sessionId, type, payload }); } catch { /* 观察者异常不能改变已执行操作。 */ }
     };
@@ -155,7 +145,7 @@ export class AgentController {
       if (controller.signal.aborted) return cancelled();
       const completedCalls = new Map<string, AgentAction>();
       let toolCount = 0;
-      for (let round = 0; round < depth.rounds; round++) {
+      for (let round = 0; round < MAX_ROUNDS; round++) {
         if (controller.signal.aborted) return cancelled();
         let reply: ModelResult;
         try { reply = await this.engine.request<ModelResult>('chat.send', {
@@ -179,7 +169,7 @@ export class AgentController {
           return finish(content, 'completed');
         }
         if (!toolsVerified) return finish('当前模型的工具调用能力尚未验证。请在设置 · 软件 AI 配置里完成工具测试后再执行项目操作。', 'needs_input');
-        if (calls.length > depth.actions - toolCount) return finish('已达到本轮操作数量上限，请检查已完成操作后继续。', 'limited');
+        if (calls.length > MAX_ACTIONS - toolCount) return finish('已达到本轮操作数量上限，请检查已完成操作后继续。', 'limited');
         const callIds = new Set<string>();
         for (const call of calls) {
           if (!call || typeof call.id !== 'string' || !call.id || call.id.length > 200 || callIds.has(call.id) ||

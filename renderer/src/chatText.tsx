@@ -25,6 +25,9 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
 
 interface Line { kind: 'paragraph' | 'bullet' | 'ordered' | 'heading'; text: string }
 
+/** 随消息添加素材的括注行：materialNote 固定生成的格式，按元数据弱化展示，不参与 Markdown 分类。 */
+const MATERIAL_NOTE = /^（随消息添加素材：.+）$/;
+
 function classify(raw: string): Line {
   const text = raw.trimEnd();
   if (/^\s{0,3}#{1,4}\s+/.test(text)) return { kind: 'heading', text: text.replace(/^\s{0,3}#{1,4}\s+/, '') };
@@ -45,6 +48,7 @@ export function RichText({ text }: { text: string }) {
   };
   lines.forEach((raw, index) => {
     if (!raw.trim()) { flush(); return; }
+    if (MATERIAL_NOTE.test(raw.trim())) { flush(); blocks.push(<p className="chat-material-note" key={`note-${index}`}>{raw.trim()}</p>); return; }
     const line = classify(raw);
     if (line.kind === 'bullet' || line.kind === 'ordered') {
       // 列表项之间夹着空行或换行都算同一个列表，避免每一行都单独成块。

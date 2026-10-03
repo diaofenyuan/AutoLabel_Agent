@@ -6,7 +6,7 @@
 .page-chat{overflow:hidden}
 .chat-dock{flex:none;display:flex;flex-direction:column;gap:6px;padding-top:8px;background:linear-gradient(to top,var(--bg) 82%,transparent)}
 .chat-home .chat-dock{width:100%;max-width:760px;margin:0 auto;padding:0 24px 22px}
-.chat-panel.compact{padding:0;min-height:0;flex:1}.chat-messages{flex:1;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable;padding:0 2px 16px;min-height:0}.chat-panel .empty{min-height:250px;padding:25px 5px;gap:12px}.chat-panel .empty h2{font-size:14px}.chat-panel .empty p{font-size:11px}.chat-panel .empty .button{font-size:11px}.chat-panel.compact .chat-messages{display:none}.chat-message{font-size:12px;margin:0 0 20px;animation:page-in .18s}.chat-message small{font-weight:600;font-size:10px;color:var(--muted)}.chat-message p{margin-top:6px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.85}.chat-message.user{background:var(--surface);padding:10px 12px;border-radius:10px;margin-left:18px}.chat-wait{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:7px}.waiting-dots{animation:pulse 1.2s infinite;letter-spacing:2px}.chat-options{display:flex;align-items:center;justify-content:flex-start;gap:13px;flex:1;min-width:0;flex-wrap:wrap}.chat-panel .composer textarea{font-size:11px}.composer-hint{font-size:10px;color:var(--soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.global-chat-status{position:fixed;left:15px;bottom:77px;z-index:90;border:1px solid var(--border);border-radius:10px;padding:9px 12px;background:var(--bg);box-shadow:var(--shadow);display:flex;gap:8px;align-items:center;font-size:11px}.global-chat-status button{color:var(--accent)}
+.chat-panel.compact{padding:0;min-height:0;flex:1}.chat-messages{flex:1;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable;padding:0 2px 16px;min-height:0}.chat-panel .empty{min-height:250px;padding:25px 5px;gap:12px}.chat-panel .empty h2{font-size:14px}.chat-panel .empty p{font-size:11px}.chat-panel .empty .button{font-size:11px}.chat-panel.compact .chat-messages{display:none}.chat-message{font-size:12px;margin:0 0 20px;animation:page-in .18s}.chat-message small{font-weight:600;font-size:10px;color:var(--muted)}.chat-message p{margin-top:6px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.85}.chat-message.user{background:var(--surface);padding:10px 12px;border-radius:10px;margin-left:18px}.chat-wait{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:7px}.waiting-dots{animation:pulse 1.2s infinite;letter-spacing:2px}.chat-options{display:flex;align-items:center;justify-content:flex-start;gap:13px;flex:1;min-width:0;flex-wrap:wrap}.chat-panel .composer textarea{font-size:11px}.composer-hint{font-size:10px;color:var(--soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 /* 拖入聊天框的附件条：发送前只展示不落库，单枚可移除。 */
 .composer-attachments{display:flex;flex-wrap:wrap;gap:6px;margin:2px 1px 8px}
 .attachment-chip{display:inline-flex;align-items:center;gap:6px;min-width:0;padding:4px 8px;border:1px solid var(--border);border-radius:999px;background:var(--surface);font-size:11px;color:var(--muted)}
@@ -14,7 +14,7 @@
 .attachment-chip>.truncate{max-width:220px}
 .attachment-chip>button{display:grid;place-items:center;width:16px;height:16px;border-radius:50%;color:var(--soft);flex-shrink:0}
 .attachment-chip>button:hover{background:var(--hover);color:var(--text)}
-/* 模型与思考深度：收起时只有一行小字，点开才是搜索、模型列表与档位。模型选择现在住在输入卡的工具行里。 */
+/* 模型选择器：收起时只有一行小字，点开才是搜索与模型列表。模型选择住在输入卡的工具行里。 */
 .model-picker{position:relative;min-width:0}
 .model-picker-trigger{display:flex;align-items:center;gap:5px;max-width:340px;padding:2px 6px;border:0;border-radius:6px;background:none;color:var(--muted);font-size:11px}
 .model-picker-trigger:hover:not(:disabled){background:var(--surface);color:var(--text)}
@@ -44,11 +44,6 @@
 .picker-star{padding:6px;background:none;border:0;color:var(--soft)}
 .picker-star:hover{color:var(--text)}
 .picker-star.on{color:var(--warning)}
-.picker-effort{border-top:1px solid var(--border);padding:9px 10px 4px;flex-shrink:0}
-.picker-effort-options{display:flex;gap:5px;margin-top:7px;flex-wrap:wrap}
-.picker-effort-options button{padding:4px 11px;border:1px solid transparent;border-radius:7px;background:var(--surface);color:var(--muted);font-size:11px}
-.picker-effort-options button:hover:not(:disabled){background:var(--hover)}
-.picker-effort-options button.selected{background:var(--selected);border-color:color-mix(in srgb,var(--accent) 26%,transparent);color:var(--text)}
 .picker-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px 2px;border-top:1px solid var(--border);margin-top:6px;flex-shrink:0}
 .picker-foot .text-button{font-size:10px}
 /* 类别选择器：与模型选择器同一种紧凑触发 + 弹层；列表内部滚动，标题与底栏不动。 */
@@ -306,7 +301,7 @@
 .ai-quick-model{margin-top:4px;padding-top:12px;border-top:1px dashed var(--border)}
 .provider-list>button{position:relative;transition:background .15s,color .15s,transform .15s}.provider-list>button.selected{background:var(--accent-bg);color:var(--text)}.provider-list>button.selected::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px;background:var(--accent);animation:nav-mark-in .18s ease-out}.provider-list>button:hover:not(:disabled){transform:translateX(2px)}
 .settings-section>h2{display:flex;align-items:center;gap:10px}.settings-section>h2::before{content:"";width:3px;height:18px;flex:none;border-radius:999px;background:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent-bg) 80%,transparent);animation:nav-mark-in .2s ease-out}.setting-row{border-radius:10px;transition:background .16s,border-color .16s,transform .16s}.setting-row:hover{background:color-mix(in srgb,var(--surface) 72%,transparent)}.setting-row:focus-within{background:color-mix(in srgb,var(--accent-bg) 38%,transparent)}.segmented button.selected{box-shadow:inset 0 -2px var(--accent)}.switch.on{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent-bg) 72%,transparent)}
-.chat-panel .composer{transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease}.chat-panel .composer:focus-within{border-color:color-mix(in srgb,var(--accent) 55%,var(--border));box-shadow:0 0 0 3px color-mix(in srgb,var(--accent-bg) 78%,transparent),0 10px 26px color-mix(in srgb,var(--text) 7%,transparent);transform:translateY(-1px)}.chat-wait{padding:6px 9px;border:1px solid color-mix(in srgb,var(--accent) 18%,var(--border));border-radius:999px;background:color-mix(in srgb,var(--accent-bg) 52%,var(--bg));animation:chat-wait-in .2s ease-out}@keyframes chat-wait-in{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
+.chat-panel .composer{transition:border-color .18s ease,box-shadow .18s ease}.chat-panel .composer:focus-within{border-color:color-mix(in srgb,var(--accent) 55%,var(--border));box-shadow:0 0 0 3px color-mix(in srgb,var(--accent-bg) 78%,transparent),0 10px 26px color-mix(in srgb,var(--text) 7%,transparent)}.chat-wait{padding:6px 9px;border:1px solid color-mix(in srgb,var(--accent) 18%,var(--border));border-radius:999px;background:color-mix(in srgb,var(--accent-bg) 52%,var(--bg));animation:chat-wait-in .2s ease-out}@keyframes chat-wait-in{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
 /* 资源编辑器保持 Codex 式的上下文感：标题吸附、字段聚焦时只提供轻微位移。 */
 .resource-editor{position:relative;background:linear-gradient(180deg,color-mix(in srgb,var(--surface) 32%,transparent),transparent 180px)}
 .resource-editor>.section-toolbar{position:sticky;top:0;z-index:3;margin:0 -1px 26px;padding:14px 1px 15px;background:linear-gradient(var(--bg) 78%,color-mix(in srgb,var(--bg) 0%,transparent));backdrop-filter:blur(7px)}
@@ -562,6 +557,8 @@
 .chat-text li{margin:2px 0}
 .chat-text .chat-subheading{font-weight:600}
 .chat-text code{font-family:Consolas,monospace;font-size:.94em;padding:1px 4px;border-radius:4px;background:color-mix(in srgb,var(--accent) 10%,transparent)}
+/* 随消息添加素材的括注：是消息的元数据不是正文，弱化成小字，避免和用户写的内容混在一起。 */
+.chat-text .chat-material-note{margin-top:2px;font-size:11px;color:var(--muted)}
 @media (max-width:720px){.chat-recent-list{grid-template-columns:1fr}.ai-setup-progress ol{grid-template-columns:repeat(2,minmax(0,1fr))}.engine-gate{align-items:flex-start;flex-wrap:wrap}.engine-gate-copy{min-width:calc(100% - 58px)}.engine-gate-actions{width:100%;justify-content:flex-start;margin-left:57px}}
 
 /* 对话体验：把配置、消息和输入的层级收束在同一条视觉节奏里。 */

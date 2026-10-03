@@ -16,20 +16,25 @@ function validId(value: unknown): string {
   return value;
 }
 
-/** 首条用户消息压成单行并截断；侧栏单行展示不再二次处理。 */
+/** 首条用户消息压成单行并截断；侧栏单行展示不再二次处理。标题只取首行，消息尾部附带的素材括注不会进标题。 */
 export function autoTitle(text: string): string {
-  const flat = String(text ?? '').replace(/\s+/g, ' ').trim();
+  const firstLine = String(text ?? '').split('\n').map(line => line.trim()).find(Boolean) ?? '';
+  const flat = firstLine.replace(/\s+/g, ' ').trim();
   return flat.length > CHAT_TITLE_LIMIT ? `${flat.slice(0, CHAT_TITLE_LIMIT)}…` : flat;
 }
 
 function nowIso(): string { return new Date().toISOString(); }
 
-async function atomicWrite(filename: string, data: unknown): Promise<void> {
+async function atomicWriteText(filename: string, text: string): Promise<void> {
   await mkdir(path.dirname(filename), { recursive: true });
   const temporary = filename + '.tmp';
   const file = await open(temporary, 'w');
-  try { await file.writeFile(JSON.stringify(data)); await file.sync(); } finally { await file.close(); }
+  try { await file.writeFile(text); await file.sync(); } finally { await file.close(); }
   await rename(temporary, filename);
+}
+
+async function atomicWrite(filename: string, data: unknown): Promise<void> {
+  await atomicWriteText(filename, JSON.stringify(data));
 }
 
 async function readJson<T>(filename: string): Promise<T | undefined> {
@@ -56,7 +61,6 @@ function normalizeSummary(raw: unknown): ChatSessionSummary | undefined {
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
     lastMessageAt,
     messageCount: Number.isInteger(item.messageCount) && Number(item.messageCount) >= 0 ? Number(item.messageCount) : 0,
-    status: item.status === 'deleted-project' ? 'deleted-project' : 'active',
   };
 }
 
@@ -141,7 +145,7 @@ export class ChatStore {
     return {
       id: input.sessionId, title: input.title, titleSource: input.titleSource ?? 'auto', pinned: false, pinOrder: 0,
       ...(input.projectId ? { projectId: input.projectId } : {}), providerId: input.providerId, model: input.model,
-      createdAt: at, updatedAt: at, lastMessageAt: at, messageCount: 0, status: 'active',
+      createdAt: at, updatedAt: at, lastMessageAt: at, messageCount: 0,
     };
   }
 
@@ -287,7 +291,8 @@ export class ChatStore {
         if (sessions.some(item => item.id === summary.id)) throw new DesktopError('CHAT_RESTORE_CONFLICT', `「${summary.title}」已存在，无法从回收站恢复`);
         const messages = (raw?.messages ?? []).map(normalizeMessage).filter((item): item is ChatMessage => !!item);
         await mkdir(this.directory(), { recursive: true });
-        await atomicWrite(this.messageFile(summary.id), messages.map(message => JSON.stringify(message)).join('\n') + (messages.length ? '\n' : ''));
+        // 消息文件是逐行 JSONL，用文本写入；atomicWrite 会把入参整体 JSON.stringify，套在这里会把消息双重编码成一行。
+        await atomicWriteText(this.messageFile(summary.id), messages.map(message => JSON.stringify(message)).join('\n') + (messages.length ? '\n' : ''));
         sessions.push({ ...summary, messageCount: messages.length });
         await this.writeIndex(ChatStore.sorted(sessions));
         await rm(file, { force: true });
@@ -363,7 +368,9 @@ export class ChatStore {
   }
 
   /**
-   * 一次对话完成后幂等落盘：按 messageCount 追加未记录的消息，再追加助手回复。
+   * 一次对话完成后幂等落盘：本次提交的完整消息列表与已落库内容按前缀对齐，只追加未记录的消息，再追加助手回复。
+   * 按内容对齐而不是按索引计数截断：界面历史一旦比落库短（读盘失败、会话列表被清理），
+   * 计数截断会把新一轮发送连同回复整段丢掉；重复提交同一轮时两者等价，都不会产生重复消息。
    * 失败调用同样记一条带 error 的助手消息，保证索引计数与文件内容一致。
    */
   record(input: ChatRecordInput): Promise<void> {
@@ -371,17 +378,23 @@ export class ChatStore {
       const id = validId(input.sessionId);
       const sessions = await this.readIndex();
       const messages = input.messages.map(value => ({ role: value.role, content: value.content }));
-      const firstUser = messages.find(value => value.role === 'user')?.content ?? '';
       let entry = sessions.find(item => item.id === id);
+      const recorded = await this.readMessages(id);
       if (!entry) {
+        const firstUser = (recorded.find(value => value.role === 'user') ?? messages.find(value => value.role === 'user'))?.content ?? '';
         entry = await this.createEntry({ sessionId: id, ...(input.projectId ? { projectId: input.projectId } : {}),
           title: autoTitle(firstUser) || new Date().toISOString().slice(0, 16).replace('T', ' '), providerId: input.providerId, model: input.model });
         sessions.push(entry);
       }
-      const pending = messages.slice(entry.messageCount);
-      if (!pending.length && entry.messageCount > 0) {
-        // 同一轮重复提交：索引已包含该轮，直接返回，避免重复消息。
-        await this.writeIndex(ChatStore.sorted(sessions));
+      let aligned = 0;
+      while (aligned < messages.length && aligned < recorded.length) {
+        const role = roles.has(messages[aligned].role as ChatRole) ? messages[aligned].role as ChatRole : 'user';
+        if (recorded[aligned].role !== role || recorded[aligned].content !== messages[aligned].content) break;
+        aligned++;
+      }
+      const pending = messages.slice(aligned);
+      if (!pending.length) {
+        // 本次提交的每一条消息都已落库（同一轮重复提交）：直接返回，避免重复消息。
         return;
       }
       const at = nowIso();
@@ -389,14 +402,15 @@ export class ChatStore {
       appended.push(input.error
         ? { role: 'assistant', content: input.reply ?? '', createdAt: at, status: 'error', error: input.error }
         : { role: 'assistant', content: input.reply ?? '', createdAt: at });
-      // 用户改过标题则保持人工标题；自动标题只在首次写入时确定。
+      // 用户改过标题则保持人工标题；自动标题跟随落库内容的最早一条用户消息，历史短于落库时也不会漂移。
       if (entry.titleSource === 'auto') {
+        const firstUser = (recorded.find(value => value.role === 'user') ?? messages.find(value => value.role === 'user'))?.content ?? '';
         const generated = autoTitle(firstUser);
         if (generated) entry.title = generated;
       }
       entry.providerId = input.providerId; entry.model = input.model;
       if (input.projectId) entry.projectId = input.projectId;
-      entry.messageCount += appended.length;
+      entry.messageCount = recorded.length + appended.length;
       entry.lastMessageAt = at; entry.updatedAt = at;
       await mkdir(this.directory(), { recursive: true });
       await appendFile(this.messageFile(id), appended.map(message => JSON.stringify(message)).join('\n') + '\n');
@@ -404,17 +418,15 @@ export class ChatStore {
     });
   }
 
-  /** 项目删除后历史仍可查看，仅标记来源项目已删除。 */
-  markProjectDeleted(projectId: string): Promise<number> {
+  /**
+   * 项目删除时，该项目下的对话一并移入回收站：已删除的项目不再出现在侧栏，也不再长期保留会话。
+   * 移入回收站（而非直接抹掉）沿用「删除先进回收站」的统一规则，7 天内可从设置里恢复。
+   */
+  deleteByProject(projectId: string): Promise<number> {
     return this.serial(async () => {
       const sessions = await this.readIndex();
-      let changed = 0;
-      for (const entry of sessions) {
-        if (entry.projectId !== projectId || entry.status === 'deleted-project') continue;
-        entry.status = 'deleted-project'; entry.updatedAt = nowIso(); changed++;
-      }
-      if (changed) await this.writeIndex(ChatStore.sorted(sessions));
-      return changed;
+      const targets = sessions.filter(item => item.projectId === projectId);
+      return this.moveToTrash(sessions, targets);
     });
   }
 }

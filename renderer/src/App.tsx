@@ -287,7 +287,6 @@ export default function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [commandPalette, commandItems, commandSelection, navigate]);
-  const busyChat = Object.values(chats).find(chat => chat.busy);
   async function reconnect() {
     if (reconnecting) return;
     setReconnecting(true);
@@ -321,7 +320,5 @@ export default function App() {
       onClose={() => setToast(null)} />}
     {help && <Modal title="快捷键与帮助" onClose={() => setHelp(false)}><div className="help-content"><Keyboard size={26} /><p>人工标注在素材预览里完成：打开项目概览或对话结果中的任意素材，点「编辑标注」进入画布；画完点「保存」写入正式标注，核对无误再点「保存并确认」。也可以直接在对话里说明要改什么。</p><dl className="shortcuts">{[['完成当前多边形', 'Enter'], ['取消当前绘制', 'Escape'], ['删除选中的多边形顶点', 'Delete'], ['发送对话消息', 'Ctrl + Enter'], ['打开快速跳转', 'Ctrl + K'], ['切换到前九个对话', 'Ctrl + 1…9']].map(([label,key]) => <div key={label}><dt>{label}</dt><dd><kbd>{key}</kbd></dd></div>)}</dl><p className="muted">{isDemo ? '当前为隔离的浏览器演示。图片与标注保存在本浏览器；API 调用、真实任务及 YOLO 导出需要桌面引擎。' : '图片坐标以引擎提供的基准图为准。模型候选与人工确认分别记录。'}</p></div></Modal>}
     {commandPalette && <Modal title="快速跳转" onClose={() => setCommandPalette(false)}><div className="command-palette"><label className="command-search"><Search size={16} /><input autoFocus value={commandQuery} onChange={event => { setCommandQuery(event.target.value); setCommandSelection(0); }} placeholder="搜索页面…" /></label><div className="command-list">{commandItems.map((entry, index) => <button key={entry.key} className={index === commandSelection ? 'selected' : ''} aria-selected={index === commandSelection} onMouseEnter={() => setCommandSelection(index)} onClick={() => { setCommandPalette(false); void navigate(entry.key); }}><span className="command-icon"><entry.icon size={16} /></span><span>{entry.label}</span><ArrowRight size={14} /></button>)}{!commandItems.length && <p className="quiet-empty">没有匹配的页面。</p>}</div><p className="command-hint"><kbd>↑↓</kbd> 选择 · <kbd>Enter</kbd> 打开 · <kbd>Esc</kbd> 关闭</p></div></Modal>}
-    {busyChat && <div className="global-chat-status" role="status"><LoaderCircle size={14} className="spin" /><span>助手执行中 · {busyChat.runningScope}</span><ButtonCancel id={busyChat.id} notify={notify} /></div>}
   </Context.Provider>;
 }
-function ButtonCancel({ id, notify }: { id: string; notify: (message: string, error?: boolean) => void }) { return <button onClick={() => void request('agent.cancel', { sessionId: id }).catch(e => notify(errorMessage(e), true))}>停止</button>; }

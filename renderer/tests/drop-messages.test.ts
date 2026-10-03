@@ -6,7 +6,7 @@ import { dropRejectionNotice, emptyDroppedFiles, type DroppedFiles } from '../sr
  * 拖入拒绝提示是纯函数，直接断言最省事，也最容易在有人重新引入原始错误码时立刻失败。
  * 走查里用户看到的是「暂不支持这些文件：images」和「[INVALID_PAYLOAD] 拖入的文件数量无效」——两句都无法据此行动。
  */
-const files = (value: Partial<DroppedFiles>): DroppedFiles => ({ ...emptyDroppedFiles, ...value });
+const files = (value: Partial<DroppedFiles>): DroppedFiles => ({ ...emptyDroppedFiles(), ...value });
 
 test('拖入拒绝按原因分组，给出可执行下一步且不出现内部错误码', () => {
   // 四类输入必须给出互不相同的提示。

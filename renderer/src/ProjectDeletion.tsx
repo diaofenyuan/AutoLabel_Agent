@@ -104,7 +104,7 @@ export function ProjectDeletionDialog({ project, onClose, onDeleted }: {
             {!!result.fileFailures.length && `有 ${result.fileFailures.length} 个文件未能删除，请在存储位置中手动清理。`}
             {!!result.externalExportPaths.length && `位于数据目录外的 ${result.externalExportPaths.length} 个历史导出目录未被删除。`}
             {!!result.backupWarnings?.length && `备份已生成，但不含 ${result.backupWarnings.length} 个已不可读取的历史外部原件（不属于受管数据）。`}
-            对话历史仍然保留，并标记为「项目已删除」。
+            该项目的对话历史已一并移入回收站，7 天内可在 设置 → 对话记录 里恢复。
           </Notice>
         : step === 1
           ? <>
