@@ -93,8 +93,15 @@ export async function checkDesktopFrameScope(window: BrowserWindow, output: stri
     checks.push({ check: 'import-states-usable-scope', assets: imported.total, noticeVisible: true });
 
     // ===== 数据集版本预检：中文原因 + 真实出路，不出现原始码 =====
-    await js(`[...document.querySelectorAll('.sidebar-project')].find(g=>g.innerText.includes(${json(batch)})).querySelector('[title="项目概览"]').click()`);
+    // 侧栏项目行现在只有「项目操作」按钮，项目概览走它的菜单；旧的 [title="项目概览"] 已不存在。
+    await js(`(()=>{const project=[...document.querySelectorAll('.sidebar-project')].find(node=>node.innerText.includes(${json(batch)}));
+      const more=project?.querySelector('.sidebar-actions button[aria-label^="项目操作"]');
+      if(more) more.click(); else project?.querySelector('[title="项目概览"]')?.click();})()`);
+    await waitFor(`!!document.querySelector('[role="menu"]')||!!document.querySelector('.page-overview')`);
+    await js(`(()=>{if(document.querySelector('.page-overview'))return;[...document.querySelectorAll('[role="menu"] button')].find(node=>node.innerText.trim()==='项目概览')?.click();})()`);
     await waitFor(`!!document.querySelector('.page-overview')`);
+    // 「数据集版本」收在概览的「更多」折叠菜单里：收起时 innerText 读不到，先展开再点。
+    await js(`(()=>{const d=document.querySelector('.overview-more-actions');if(d)d.open=true;})()`);
     await button('数据集版本');
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('数据集版本')`);
     await button('新建版本', dialog);

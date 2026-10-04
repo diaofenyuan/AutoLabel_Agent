@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ListTodo } from 'lucide-react';
+import { usePopoverPosition } from './popoverPosition';
 
 /**
  * 任务流程：把长任务写成人话交给对话，选中的流程只是填进输入框的起手式，不会直接执行。
@@ -21,9 +22,10 @@ const MENU_SPACE = 390;
 
 export default function FlowPicker({ disabled, onPick }: { disabled?: boolean; onPick: (prompt: string) => void }) {
   const [open, setOpen] = useState(false);
-  const [style, setStyle] = useState<CSSProperties>({});
   const root = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
+  // 菜单用 fixed 定位钉在视口内：嵌在范围弹层（overflow 滚动容器）里时，绝对定位会被裁剪，
+  // 且滚动容器顶部方向的溢出滚不回来，前几条流程永远看不见。定位细节见 usePopoverPosition。
+  const { triggerRef, style } = usePopoverPosition(open, 310, MENU_SPACE);
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
@@ -31,20 +33,6 @@ export default function FlowPicker({ disabled, onPick }: { disabled?: boolean; o
     document.addEventListener('mousedown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
     return () => { document.removeEventListener('mousedown', onPointerDown); document.removeEventListener('keydown', onKeyDown); };
-  }, [open]);
-  // 菜单用 fixed 定位钉在视口内：嵌在范围弹层（overflow 滚动容器）里时，绝对定位会被裁剪，
-  // 且滚动容器顶部方向的溢出滚不回来，前几条流程永远看不见。高度压在可视空间内，超出部分走菜单内滚。
-  useLayoutEffect(() => {
-    if (!open) return;
-    const rect = triggerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const width = Math.min(310, window.innerWidth - 24);
-    const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
-    const below = window.innerHeight - rect.bottom;
-    const openDown = below >= MENU_SPACE || below >= rect.top;
-    setStyle(openDown
-      ? { position: 'fixed', left, width, top: rect.bottom + 6, bottom: 'auto', maxHeight: Math.max(180, below - 12) }
-      : { position: 'fixed', left, width, top: 'auto', bottom: window.innerHeight - rect.top + 6, maxHeight: Math.max(180, rect.top - 12) });
   }, [open]);
   return <div className="flow-picker" ref={root}>
     <button ref={triggerRef} type="button" disabled={disabled} aria-label="选择任务流程" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(value => !value)}>

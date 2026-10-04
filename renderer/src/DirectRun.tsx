@@ -5,11 +5,15 @@ import { formatModelBytes, type ModelLibraryEntry, type ModelLibraryState } from
 import type { LocalModel, LocalRuntimeState } from '../../shared/inference';
 import type { ResolvedConfiguration } from '../../shared/configuration';
 import type { Project } from './types';
-import { errorMessage, request } from './bridge';
+import { errorMessage, request, isDemo } from './bridge';
+import { usePopoverPosition } from './popoverPosition';
 import { useApp } from './context';
 import { Button, Field, Notice } from './ui';
 
 interface LocalChoice { entry: ModelLibraryEntry; model: LocalModel }
+
+/** 直达标注弹层完整内容的估算高度：够放就向下展开，否则哪边空间大往哪边开。 */
+const POPOVER_SPACE = 460;
 
 /** 本地推理优先选空闲 GPU；没有可用 GPU 时才回退 CPU，避免高性能机器默认浪费在 CPU 上。 */
 function preferredLocalDevice(runtime: Pick<LocalRuntimeState, 'devices' | 'slots'>): string {
@@ -69,6 +73,8 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const root = useRef<HTMLDivElement>(null);
+  // 触发器在输入卡工具行的最右侧，绝对定位弹层会顶出窗口右缘：同样钉在视口内。
+  const { triggerRef, style } = usePopoverPosition(open, 384, POPOVER_SPACE);
 
   const classes = project.classes;
   const rules = typeof project.settings?.rules === 'string' ? project.settings.rules : '';
@@ -91,6 +97,8 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
   }, [open]);
   useEffect(() => {
     if (!open || locals.length) return;
+    // 演示桥没有模型库与本机推理命令：展示成「没有可用模型」，而不是把不支持当错误报出来。
+    if (isDemo) { setTarget('cloud'); return; }
     setLoading(true);
     void Promise.all([
       request<ModelLibraryState>('model.library.status'),
@@ -199,11 +207,11 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
     : target === 'local' && !picked ? { text: '还没有启用可用的内置模型。', go: () => void navigate('settings', 'ai') }
     : null;
   return <div className="direct-run" ref={root}>
-    <button type="button" className="model-picker-trigger direct-run-trigger" disabled={disabled} aria-haspopup="dialog" aria-expanded={open}
+    <button ref={triggerRef} type="button" className="model-picker-trigger direct-run-trigger" disabled={disabled} aria-haspopup="dialog" aria-expanded={open}
       title="不经过对话，直接用选好的模型建标注任务" onClick={() => setOpen(value => !value)}>
       <Play size={12} />开始标注<ChevronDown size={12} />
     </button>
-    {open && <div className="picker-popover" role="dialog" aria-label="直接开始标注">
+    {open && <div className="picker-popover" style={style} role="dialog" aria-label="直接开始标注">
       <div className="class-picker-head"><strong>直接开始标注</strong><small className="muted">不经过对话，用选好的模型与范围直接建任务</small></div>
       <div className="direct-run-body">
         <p className="muted tiny">用哪个模型</p>

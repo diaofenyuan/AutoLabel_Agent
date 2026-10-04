@@ -29,11 +29,13 @@ export default function ModelCombobox({ value, onChange, options, placeholder, d
     return () => { document.removeEventListener('mousedown', onPointerDown); document.removeEventListener('keydown', onKeyDown); };
   }, [open]);
   // 弹层默认向下展开；下方放不下且上方更高（如页面底部的字段）时改向上，避免撑出整页滚动。
+  // 阈值取弹层真实可到的最大高度（.picker-popover 的 min(60vh,430px)），矮窗口不会误判成「下方放得下」。
   useLayoutEffect(() => {
     if (!open || !trigger.current) return;
     const rect = trigger.current.getBoundingClientRect();
     const below = window.innerHeight - rect.bottom;
-    setUp(below < 340 && rect.top > below);
+    const space = Math.min(window.innerHeight * 0.6, 430);
+    setUp(below < space && rect.top > below);
   }, [open]);
   function pick(name: string) { onChange(name); setOpen(false); setQuery(''); }
   return <div className="combo" ref={root}>

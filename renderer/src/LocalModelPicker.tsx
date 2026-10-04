@@ -5,10 +5,13 @@ import { deriveClassMap } from '../../shared/vocabulary';
 import type { LocalModel } from '../../shared/inference';
 import type { Project } from './types';
 import { request, errorMessage, isDemo } from './bridge';
+import { usePopoverPosition } from './popoverPosition';
 import { useApp } from './context';
 
 /** 直接列出的上限：超过就折进「还有 N 个 · 全部」，不让一屏全是模型名。 */
 const VISIBLE_LIMIT = 5;
+// 模型列表加映射说明的完整高度约 420px：够放就向下展开，否则哪边空间大往哪边开。
+const POPOVER_SPACE = 420;
 
 interface Choice { entry: ModelLibraryEntry; model?: LocalModel }
 
@@ -28,6 +31,8 @@ export default function LocalModelPicker({ project, disabled, onPick }: { projec
   const [loading, setLoading] = useState(false), [note, setNote] = useState('');
   const [expanded, setExpanded] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+  // 与「任务流程」同一套视口内定位：弹层嵌在范围弹层（滚动容器）里，绝对定位会被裁剪并顶出窗口右缘。
+  const { triggerRef, style } = usePopoverPosition(open, 384, POPOVER_SPACE);
   const { navigate } = useApp();
   useEffect(() => {
     if (!open) return;
@@ -90,11 +95,11 @@ export default function LocalModelPicker({ project, disabled, onPick }: { projec
   }
   const visible = expanded ? choices : choices.slice(0, VISIBLE_LIMIT);
   return <div className="local-model-picker" ref={root}>
-    <button type="button" disabled={disabled} aria-label="选择本机模型标注" aria-haspopup="dialog" aria-expanded={open}
+    <button ref={triggerRef} type="button" disabled={disabled} aria-label="选择本机模型标注" aria-haspopup="dialog" aria-expanded={open}
       onClick={() => { setOpen(value => !value); void load(); }}>
       <Boxes size={13} />内置模型{picked ? ` · ${picked.entry.name}` : ''}<ChevronDown size={11} />
     </button>
-    {open && <div className="picker-popover local-model-menu" role="dialog" aria-label="选择本机模型">
+    {open && <div className="picker-popover local-model-menu" style={style} role="dialog" aria-label="选择本机模型">
       {loading && <p className="muted tiny">正在读取模型库…</p>}
       {!loading && !choices.length && <p className="muted tiny">{note || '模型库里还没有可用的模型。'}</p>}
       {!loading && Boolean(choices.length) && <>

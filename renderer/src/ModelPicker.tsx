@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Search, Star } from 'lucide-react';
 import type { Provider } from './types';
 import { isDemo } from './bridge';
+import { usePopoverPosition } from './popoverPosition';
 
 /**
  * 模型选择器：收起时只有一行小字（模型名），点开才出现搜索框与模型列表。
@@ -46,6 +47,8 @@ export default function ModelPicker({ providers, providerId, model, disabled, on
   const [query, setQuery] = useState('');
   const [favorites, setFavorites] = useState<string[]>(readFavorites);
   const root = useRef<HTMLDivElement>(null);
+  // 触发器在输入卡工具行中间偏右，绝对定位弹层在窄窗口会顶出右缘：钉在视口内。
+  const { triggerRef, style } = usePopoverPosition(open, 384, 430);
   const options = useMemo(() => modelOptions(providers, { providerId, model }), [providers, providerId, model]);
   const nameOf = (item: ModelChoice) => `${providers.find(provider => provider.id === item.providerId)?.name ?? item.providerId} · ${item.model}`;
   const providerOf = (id: string) => providers.find(provider => provider.id === id);
@@ -74,10 +77,10 @@ export default function ModelPicker({ providers, providerId, model, disabled, on
   const label = model || '选择模型';
 
   return <div className="model-picker" ref={root}>
-    <button type="button" className="model-picker-trigger" disabled={disabled} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(value => !value)}>
+    <button ref={triggerRef} type="button" className="model-picker-trigger" disabled={disabled} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(value => !value)}>
       <span className="truncate">{label}</span><ChevronDown size={13} />
     </button>
-    {open && <div className="picker-popover" role="dialog" aria-label="选择模型">
+    {open && <div className="picker-popover" style={style} role="dialog" aria-label="选择模型">
       <label className="picker-search"><Search size={15} /><input autoFocus value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索模型" /></label>
       <div className="picker-list">{visible.map(item => <div key={item.key} className={`picker-row ${current?.key === item.key ? 'selected' : ''}`}>
         <button type="button" className="picker-choose" disabled={disabled} onClick={() => onChange(item)}>

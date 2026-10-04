@@ -42,9 +42,12 @@ export async function checkDesktopEditing(window: BrowserWindow, output: string)
     // ---- 模板：结构化属性与旧字段共存 ----
     await new Promise<void>(r => { window.webContents.once('did-finish-load', r); window.webContents.reload(); }); await wait(`!!document.querySelector('.sidebar')&&!document.querySelector('.connection-banner')`); await gotoWelcome({ js, wait });
     await openProjectOverview({ js, wait }, name);
+    // 模板/答案集入口收在「更多」折叠菜单里：收起时 innerText 读不到，先展开菜单再点。
+    // 每次点完菜单项菜单都会收起，所以每次进入前都要重新展开。
+    const openMoreMenu = `(()=>{const d=document.querySelector('.overview-more-actions');if(!d)return false;d.open=true;return d.querySelector('button').innerText.trim()==='类别与点位模板';})()`;
+    assert.equal(await js<boolean>(openMoreMenu), true);
     await button('类别与点位模板'); await button('保存模板'); await wait(`!document.querySelector('dialog[open]')`); let savedProject = await api('project.open', { projectId: project.id }); assert.deepEqual(savedProject.settings.attributes, legacy); assert.deepEqual(savedProject.settings.rules, rules);
-    await button('类别与点位模板'); await click('.template-section>summary'); await button('用结构化属性替换此说明');
-    for (const [i, type, label] of [[1, 'number', '数量'], [2, 'boolean', '遮挡'], [3, 'text', '描述'], [4, 'select', '情况']] as const) { await button('添加属性'); await fill(`[aria-label="属性定义${i}名称"]`, label); await select(`[aria-label="属性定义${i}类型"]`, type); if (i <= 2) await click(`[aria-label="属性定义${i}必填"]`); if (type === 'select') await fill(`[aria-label="属性定义${i}选项"]`, '正常\n模糊'); }
+    await js(openMoreMenu); await button('类别与点位模板'); await click('.template-section>summary'); await button('用结构化属性替换此说明');    for (const [i, type, label] of [[1, 'number', '数量'], [2, 'boolean', '遮挡'], [3, 'text', '描述'], [4, 'select', '情况']] as const) { await button('添加属性'); await fill(`[aria-label="属性定义${i}名称"]`, label); await select(`[aria-label="属性定义${i}类型"]`, type); if (i <= 2) await click(`[aria-label="属性定义${i}必填"]`); if (type === 'select') await fill(`[aria-label="属性定义${i}选项"]`, '正常\n模糊'); }
     await capture('-template.png', 'dialog[open] .template-section'); await button('保存模板'); await wait(`!document.querySelector('dialog[open]')`); savedProject = await api('project.open', { projectId: project.id }); const defs = savedProject.settings.attributes.definitions;
     assert.equal(defs.length, 4); assert.deepEqual(savedProject.settings.rules, rules);
     checks.push({ check: 'template-structured-attributes', definitions: defs.length, legacyRulesPreserved: true });
@@ -55,7 +58,7 @@ export async function checkDesktopEditing(window: BrowserWindow, output: string)
     const prompt = "document.querySelector('dialog[open]')"; await button('选择已有项目', prompt);
     const picked = await js<boolean>(`(()=>{const e=${prompt}.querySelector('select');if(!e)return false;e.value=${json(project.id)};e.dispatchEvent(new Event('change',{bubbles:true}));return true;})()`); assert.ok(picked, '项目确认框里没有可选的已有项目');
     await button('导入并继续', prompt); await wait(`!!document.querySelector('.chat-panel textarea')`);
-    await openProjectOverview({ js, wait }, name); await button('标准答案集'); await button('新建标准答案集'); await fill('dialog[open] .field input', '固定模板标准'); await click('dialog[open] .quality-asset-picks input'); await button('创建独立答案集'); await wait(`!!document.querySelector('.truth-asset-list button')`); await click('.truth-asset-list button'); await wait(`!!document.querySelector('.truth-editor img')&&document.querySelector('.truth-editor img').complete`);
+    await openProjectOverview({ js, wait }, name); await js(openMoreMenu); await button('标准答案集'); await button('新建标准答案集'); await fill('dialog[open] .field input', '固定模板标准'); await click('dialog[open] .quality-asset-picks input'); await button('创建独立答案集'); await wait(`!!document.querySelector('.truth-asset-list button')`); await click('.truth-asset-list button'); await wait(`!!document.querySelector('.truth-editor img')&&document.querySelector('.truth-editor img').complete`);
     await button('绘制标准多边形'); for (const p of square) await canvasClick('svg[aria-label="独立标准答案画布"]', p.x, p.y); await button('完成标准多边形'); await wait(`document.querySelectorAll('[data-quality-vertex]').length===4`);
     // 插入点与删除顶点依赖的画布工具按钮已随工作台移除，这里改成断言模板属性在真值编辑器里可用。
     await fill('.truth-properties [aria-label="属性 数量"]', '0'); await select('.truth-properties [aria-label="属性 遮挡"]', 'false'); await click('.truth-savebar input'); await button('保存独立标准答案'); await wait(`!document.querySelector('.truth-savebar input').checked`); await capture('-truth.png', '.truth-editor');

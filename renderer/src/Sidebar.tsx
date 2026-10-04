@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   ArrowRight, Eraser, FolderOpen, LayoutGrid, ListTodo, MessageSquare, MoreHorizontal, Pencil, Pin, PinOff, Plus, Scan, Search,
   Settings as SettingsIcon, Trash2, X,
@@ -61,6 +61,16 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
     document.addEventListener('mousedown', closeOnOutside);
     window.addEventListener('keydown', closeOnEscape);
     return () => { document.removeEventListener('mousedown', closeOnOutside); window.removeEventListener('keydown', closeOnEscape); };
+  }, [projectMenu, headerMenu]);
+  // 菜单锚在行内：行贴近侧栏可视区底部时菜单会被滚动容器裁掉，放不下就改为向上展开。
+  const [menuFlip, setMenuFlip] = useState(false);
+  useLayoutEffect(() => {
+    if (!projectMenu && !headerMenu) { setMenuFlip(false); return; }
+    const menu = document.querySelector('.sidebar-menu');
+    const scroller = menu?.closest('.sidebar-scroll');
+    if (!menu || !scroller) return;
+    const overflow = menu.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom;
+    setMenuFlip(overflow > 4);
   }, [projectMenu, headerMenu]);
 
   // 置顶按 pinOrder、其余按 lastMessageAt 倒序，Ctrl+1…9 与置顶共用同一序列。
@@ -175,7 +185,7 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
         <div className="sidebar-group-head"><span className="sidebar-group-title">项目</span>
           <button className="sidebar-group-more" title="新建项目" aria-label="新建项目" onClick={() => setCreatingProject(true)}><Plus size={15} /></button>
           <button className="sidebar-group-more" title="会话管理" aria-label="会话管理" aria-haspopup="menu" aria-expanded={headerMenu} onClick={() => setHeaderMenu(v => !v)}><MoreHorizontal size={15} /></button>
-          {headerMenu && <div className="sidebar-menu" role="menu">
+          {headerMenu && <div className={`sidebar-menu ${menuFlip ? 'flip' : ''}`} role="menu">
             <button role="menuitem" disabled={!chatSessions.length} title={!chatSessions.length ? '还没有对话可清空' : undefined} onClick={() => { setHeaderMenu(false); setConfirmClear(true); }}><Eraser size={14} />清空全部对话…</button>
             <button role="menuitem" onClick={() => { setHeaderMenu(false); void navigate('settings', 'chats'); }}><SettingsIcon size={14} />对话记录设置…</button>
           </div>}
@@ -187,7 +197,7 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
                 {/* 素材数直接写在项目行上：同名项目靠它区分，否则用户只能逐个点开看哪个有素材。 */}
                 <button className="sidebar-row" title={`${item.name} · ${item.assetCount} 张素材`} aria-pressed={project?.id === item.id} onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><FolderOpen size={15} /><span className="sidebar-row-title truncate">{item.name}</span><span className="sidebar-project-count">{item.assetCount} 张</span></button>
                 <span className="sidebar-actions"><button aria-label={`项目操作 ${item.name}`} aria-haspopup="menu" aria-expanded={projectMenu === item.id} title="项目操作" onClick={() => setProjectMenu(value => value === item.id ? '' : item.id)}><MoreHorizontal size={15} /></button></span>
-                {projectMenu === item.id && <div className="sidebar-menu" role="menu" aria-label={`${item.name} 的项目操作`}>
+                {projectMenu === item.id && <div className={`sidebar-menu ${menuFlip ? 'flip' : ''}`} role="menu" aria-label={`${item.name} 的项目操作`}>
                   <button role="menuitem" onClick={() => { setProjectMenu(''); void openOverview(item); }}><LayoutGrid size={14} />项目概览</button>
                   <button role="menuitem" onClick={() => { setProjectMenu(''); setRename({ kind: 'project', id: item.id, value: item.name }); }}><Pencil size={14} />重命名</button>
                   <button role="menuitem" onClick={() => { setProjectMenu(''); requestDeleteProject(item); }}><Trash2 size={14} />删除项目…</button>

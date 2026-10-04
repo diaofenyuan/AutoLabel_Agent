@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Plus, Trash2 } from 'lucide-react';
 import { errorMessage, request } from './bridge';
+import { usePopoverPosition } from './popoverPosition';
 import { Button, Field, Notice } from './ui';
 import type { LabelClass, Project } from './types';
 
 const MAX_NAME = 60;
 const RULES_LABEL = '标注要求（可选）';
+// 头部、类别行、添加行、要求输入与底栏的完整高度约 360px：够放就向下展开，否则哪边空间大往哪边开。
+const POPOVER_SPACE = 360;
 
 /**
  * 类别选择器：把「要标什么」放回输入卡这一层。
@@ -25,6 +28,8 @@ export default function ClassPicker({ project, disabled, onUpdated }: { project:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const root = useRef<HTMLDivElement>(null);
+  // 弹层钉在视口内：它嵌在处理范围弹层（overflow 滚动容器）里，绝对定位会被裁剪并顶出窗口右缘。
+  const { triggerRef, style } = usePopoverPosition(open, 384, POPOVER_SPACE);
   const rulesAreText = project.settings?.rules === undefined || typeof project.settings.rules === 'string';
   // 每次打开都从项目当前值重新取一遍：别把编辑期间的旧副本带进下一次打开。
   useEffect(() => {
@@ -68,11 +73,11 @@ export default function ClassPicker({ project, disabled, onUpdated }: { project:
   const names = (open ? classes : project.classes).map(item => item.name);
   const label = !names.length ? '还没有类别' : names.length <= 3 ? names.join('、') : `${names.slice(0, 2).join('、')} 等 ${names.length} 个`;
   return <div className="class-picker" ref={root}>
-    <button type="button" className="model-picker-trigger" disabled={disabled} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(value => !value)}
+    <button ref={triggerRef} type="button" className="model-picker-trigger" disabled={disabled} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(value => !value)}
       title="要标注的类别，以及给模型的区分口径">
       <span className="truncate">类别：{label}</span><ChevronDown size={13} />
     </button>
-    {open && <div className="picker-popover" role="dialog" aria-label="类别与标注要求">
+    {open && <div className="picker-popover" style={style} role="dialog" aria-label="类别与标注要求">
       <div className="class-picker-head"><strong>要标注的类别</strong><small className="muted">名称就是导出时写在标签里的类别名</small></div>
       <div className="class-picker-list">
         {classes.map((item, index) => <div className="class-chip" key={item.id}>
