@@ -1,11 +1,10 @@
-import type { MediaJob, ScreeningParameters, ScreeningSection } from '../shared/media.ts';
+import { MEDIA_JOB_KINDS, isMediaJobKind, type MediaJob, type ScreeningParameters, type ScreeningSection } from '../shared/media.ts';
 import type { ToolDefinition, ToolEnvironment } from './tools.ts';
 import { AgentError, fields, id, ids, integer, object, text } from './validation.ts';
 
 const schema = (properties: Record<string, unknown>) => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 const nullableBoolean = { type: ['boolean', 'null'] };
 const int = (minimum: number, maximum: number) => ({ type: ['integer', 'null'], minimum, maximum });
-const kinds = ['video_extract', 'image_screening'];
 const statuses = ['queued', 'running', 'cancelling', 'cancelled', 'completed', 'failed', 'interrupted'];
 const stages = ['queued', 'inspecting', 'extracting', 'validating', 'ready', 'importing', 'screening', 'done'];
 const sections: ScreeningSection[] = ['items', 'exactGroups', 'nearPairs', 'sourceLeakageGroups'];
@@ -96,7 +95,7 @@ function job(value: unknown, env: ToolEnvironment): MediaJob {
   const raw = object(value, '媒体任务');
   id(raw.id, '媒体任务');
   if (raw.projectId !== projectId(env)) throw new AgentError('PROJECT_SCOPE', '媒体任务不属于当前项目');
-  if (!kinds.includes(raw.kind as string) || !statuses.includes(raw.status as string) || !stages.includes(raw.stage as string)
+  if (!isMediaJobKind(raw.kind) || !statuses.includes(raw.status as string) || !stages.includes(raw.stage as string)
     || ['canCancel', 'canRetry', 'artifactCommitted', 'assetsCommitted', 'canImport'].some(key => typeof raw[key] !== 'boolean'))
     invalid('媒体任务状态或提交标记不完整');
   integer(raw.sequence, '媒体任务事件位置', 0, Number.MAX_SAFE_INTEGER);
@@ -119,15 +118,22 @@ function jobSummary(value: MediaJob) {
   const result: Record<string, unknown> = pick(raw, ['id', 'projectId', 'kind', 'status', 'stage', 'sequence', 'createdAt', 'updatedAt', 'completedAt',
     'canCancel', 'canRetry', 'artifactCommitted', 'assetsCommitted', 'canImport', 'originalJobId', 'sourceVideoId', 'sourceName']);
   result.progress = pick(progress, ['phase', 'completed', 'total', 'completedFrames', 'decodedFrames', 'sourceTimeSeconds', 'outputBytes']);
-  // ready 只描述产物阶段；素材是否入库始终读取独立的提交标记。
-  if (raw.summary != null) result.summary = pick(object(raw.summary), ['status', 'frameCount', 'importedAssets', 'inputCount', 'distinctContentCount', 'completedFrames', 'decodedFrames', 'outputBytes']);
   if (raw.error != null) result.error = pick(object(raw.error), ['code']);
-  if (value.kind === 'image_screening') result.parameters = screeningParameters(value.parameters);
-  else {
+  if (value.kind === 'image_screening') {
+    result.parameters = screeningParameters(value.parameters);
+    // ready 只描述产物阶段；素材是否入库始终读取独立的提交标记。
+    if (raw.summary != null) result.summary = pick(object(raw.summary), ['status', 'inputCount', 'distinctContentCount', 'completedFrames', 'decodedFrames', 'outputBytes']);
+  } else if (value.kind === 'asset_import') {
+    // 批量导入边导边入库：progress 带逐文件跳过/失败，summary 才是这批的真实结果；两者都不含文件路径。
+    result.progress = pick(progress, ['phase', 'completed', 'total', 'skipped', 'errors']);
+    result.parameters = pick(object(raw.parameters), ['mode', 'total']);
+    if (raw.summary != null) result.summary = pick(object(raw.summary), ['imported', 'skipped', 'errorsTotal', 'total', 'errorsFile', 'partial']);
+  } else {
     const parameters = object(raw.parameters);
     result.parameters = { ...pick(parameters, ['mode', 'intervalSeconds', 'everyNFrames', 'targetFps', 'format', 'jpegQuality', 'streamIndex', 'maxFrames', 'maxOutputBytes', 'timeoutMs']),
       ...(parameters.outputSize == null ? {} : { outputSize: pick(object(parameters.outputSize), ['width', 'height', 'fit']) }),
       ...(Array.isArray(parameters.ranges) ? { rangeCount: parameters.ranges.length, ranges: parameters.ranges.slice(0, 32).map(value => pick(object(value), ['start', 'end'])) } : {}) };
+    if (raw.summary != null) result.summary = pick(object(raw.summary), ['status', 'frameCount', 'importedAssets', 'completedFrames', 'decodedFrames', 'outputBytes']);
   }
   return result;
 }
@@ -204,11 +210,11 @@ function screeningRow(value: unknown, section: ScreeningSection, env: ToolEnviro
 }
 
 export const MEDIA_TOOL_DEFINITIONS: ToolDefinition[] = [
-  { name: 'list_media_jobs', description: '分页读取当前项目媒体任务的真实状态与提交标记。completed/ready 不代表素材已入库；assetsCommitted 才表示已入库。不会配置工具或读取文件路径。此工具只读：新建视频抽帧任务必须由用户点击「选择视频抽帧」或把视频拖进对话区发起，助手不能代选本地文件，也不要让用户去素材任务面板找创建入口。',
-    parameters: schema({ kind: { type: ['string', 'null'], enum: [...kinds, null] }, offset: int(0, 2147483647), limit: int(1, 100) }), mutation: false,
+  { name: 'list_media_jobs', description: '分页读取当前项目媒体任务的真实状态与提交标记。completed/ready 不代表素材已入库；assetsCommitted 才表示已入库。kind=asset_import 是「大批量导入转后台」的任务：它边导边分批入库，没有产物封存这一步，completed 即表示这批已处理完，结果看 summary 的 imported/skipped/errorsTotal，assetsCommitted 与 canImport 对它没有意义。不会配置工具或读取文件路径。此工具只读：新建视频抽帧任务必须由用户点击「选择视频抽帧」或把视频拖进对话区发起，助手不能代选本地文件，也不要让用户去素材任务面板找创建入口。',
+    parameters: schema({ kind: { type: ['string', 'null'], enum: [...MEDIA_JOB_KINDS, null] }, offset: int(0, 2147483647), limit: int(1, 100) }), mutation: false,
     async execute(args, env) {
       fields(args, ['kind', 'offset', 'limit']);
-      if (args.kind != null && !kinds.includes(args.kind as string)) throw new AgentError('INVALID_ARGUMENT', '媒体任务类型不受支持');
+      if (args.kind != null && !isMediaJobKind(args.kind)) throw new AgentError('INVALID_ARGUMENT', '媒体任务类型不受支持');
       const { offset, limit } = page(args, 100), result = checkedPage(await mediaRequest(env, 'media.job.list', { projectId: projectId(env), offset, limit, ...(args.kind == null ? {} : { kind: args.kind }) }), offset, limit);
       const records = result.items.map(value => job(value, env));
       if (new Set(records.map(value => value.id)).size !== records.length || args.kind != null && records.some(value => value.kind !== args.kind)) invalid('媒体任务分页重复或类型不匹配');

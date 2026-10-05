@@ -7,6 +7,7 @@ import { assertAgentCommand, validateCommand } from './validation';
 import { PathGrants, authorizeCommandPaths, assetIdFromUrl, mediaTargetFromUrl, isTrustedUrl, normalizeMedia, redact } from './security';
 import { SseDecoder } from './sse';
 import { DIRECTORY_SCAN_MAX_DEPTH, DIRECTORY_SCAN_MAX_FILES, IMAGE_EXTENSIONS, isImagePath, isVideoPath } from '../shared/mediaFormats';
+import { MEDIA_JOB_KINDS, isMediaJobKind } from '../shared/media';
 import { providerCapabilities, requiredProviderCapabilities } from '../shared/protocol';
 import { DialogFixtures } from './dialog-fixtures';
 
@@ -460,6 +461,12 @@ test('媒体抽帧和筛选严格校验范围，不接受私有路径与多种�
   assert.throws(() => validateCommand('media.video.frames', { jobId: 'job', limit: 501 }));
   assert.doesNotThrow(() => validateCommand('media.job.list', { limit: 100 }));
   assert.throws(() => validateCommand('media.job.list', { limit: 101 }));
+  // 三个媒体任务类型同库同列表：后端批量导入（asset_import）也必须能按类型读取，否则一个批量导入任务就会挡住整页。
+  for (const kind of MEDIA_JOB_KINDS) assert.doesNotThrow(() => validateCommand('media.job.list', { kind }));
+  assert.throws(() => validateCommand('media.job.list', { kind: 'video' }));
+  // 重试白名单与列表取值同源：抽帧、筛选与后台批量导入都能重跑；未知类型必须在桌面层就被挡住。
+  for (const kind of MEDIA_JOB_KINDS) assert.equal(isMediaJobKind(kind), true);
+  for (const kind of ['video', '', 1, null, undefined, {}]) assert.equal(isMediaJobKind(kind), false);
   assert.throws(() => validateCommand('media.job.resolve', { jobId: 'job' }));
   for (const field of ['ffmpegPath', 'ffprobePath', 'mediaFfmpegPath', 'mediaFfprobePath']) assert.throws(() => validateCommand('settings.save', { settings: { desktop: { nested: { [field]: 'C:\\tool.exe' } } } }));
   assert.throws(() => assertAgentCommand('media.runtime.configure', { ffmpegPath: null, ffprobePath: null }));

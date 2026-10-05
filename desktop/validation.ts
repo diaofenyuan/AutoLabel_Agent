@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { providerCapabilities } from '../shared/protocol';
+import { MEDIA_JOB_KINDS } from '../shared/media';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 /**
@@ -275,7 +276,7 @@ const schemas: Record<string, z.ZodType> = {
   'media.video.import': mediaJob,
   'media.video.frames': mediaJob.extend(mediaPage),
   'media.job.get': mediaJob,
-  'media.job.list': z.strictObject({ projectId: id.optional(), kind: z.enum(['video_extract', 'image_screening']).optional(), ...mediaPage, limit: z.number().int().min(1).max(100).optional() }),
+  'media.job.list': z.strictObject({ projectId: id.optional(), kind: z.enum(MEDIA_JOB_KINDS).optional(), ...mediaPage, limit: z.number().int().min(1).max(100).optional() }),
   'media.job.cancel': mediaJob,
   'media.job.retry': mediaJob,
   'media.screening.create': z.strictObject({ projectId: id, assetIds: flowAssetIds.optional(), parameters: screening }),
