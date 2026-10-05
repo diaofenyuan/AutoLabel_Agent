@@ -248,6 +248,47 @@ test('复核列表可按来源筛选，难例排序依据随条目回传', async
   await assert.rejects(findTool('list_review_items').execute({ offset: null, status: null, source: 'model_confidence' }, environment), /复核来源/);
 });
 
+test('助手只读读取复核建议卡，阈值与送训清单都不代为执行', async () => {
+  const calls: Array<{ command: string; payload: Record<string, unknown> }> = [];
+  const suggestions = {
+    confidenceThreshold: { suggested: 0.42, basis: '建议阈值取命中最低与多余最高的中点；只建议不自动改。', matchedCount: 3, extraCount: 2, internal: '内部依据原文' },
+    trainingSuggestion: { assetIds: Array.from({ length: 60 }, (_, index) => `asset-${index}`), count: 60, reason: '重标请求与难例最适合送训；只建议不自动改。', internal: '内部原文' },
+  };
+  const environment = { projectId: 'project-1', context: {}, openAsset() {}, engine: client((command, payload) => {
+    calls.push({ command, payload });
+    return suggestions;
+  }) };
+
+  const result = await findTool('get_review_suggestions').execute({ evaluationId: 'evaluation-1' }, environment) as Record<string, unknown>;
+  assert.equal(findTool('get_review_suggestions').mutation, false, '建议卡是只读查询，不能被当成写操作');
+  assert.deepEqual(calls.at(-1), { command: 'review.suggestions', payload: { projectId: 'project-1', evaluationId: 'evaluation-1' } });
+  const threshold = result.confidenceThreshold as Record<string, unknown>;
+  assert.equal(threshold.suggested, 0.42);
+  assert.equal(threshold.matchedCount, 3);
+  const training = result.trainingSuggestion as Record<string, unknown>;
+  assert.equal(training.count, 60);
+  assert.equal((training.assetIds as string[]).length, 50, '送训清单有界回传');
+  assert.equal(training.assetIdsTruncated, true, '清单被截断要如实标记');
+  assert.ok(!JSON.stringify(result).includes('内部依据原文') && !JSON.stringify(result).includes('内部原文'), '建议卡之外的内部分字段不回流');
+
+  // 清单与数量错位必须判响应不对：错位清单会让模型继续做出错误决策。
+  const inconsistent = { ...environment, engine: client(() => ({ confidenceThreshold: null,
+    trainingSuggestion: { assetIds: ['asset-1'], count: 3, reason: '只建议不自动改。' } })) };
+  await assert.rejects(findTool('get_review_suggestions').execute({ evaluationId: null }, inconsistent), /清单与数量不一致/);
+
+  // 没有评测时按项目整体回显空清单，仍要带 projectId 走项目范围。
+  const empty = { ...environment, engine: client(() => ({ confidenceThreshold: null,
+    trainingSuggestion: { assetIds: [], count: 0, reason: '暂无建议；只建议不自动改。' } })) };
+  const blank = await findTool('get_review_suggestions').execute({ evaluationId: null }, empty) as Record<string, unknown>;
+  assert.equal(blank.confidenceThreshold, null);
+  assert.equal((blank.trainingSuggestion as Record<string, unknown>).count, 0);
+
+  // 越界的建议阈值不能照抄给用户。
+  const invalid = { ...environment, engine: client(() => ({ confidenceThreshold: { suggested: 1.5, basis: '越界假设', matchedCount: 1, extraCount: 1 },
+    trainingSuggestion: { assetIds: [], count: 0, reason: '只建议不自动改。' } })) };
+  await assert.rejects(findTool('get_review_suggestions').execute({ evaluationId: null }, invalid), /建议阈值超出/);
+});
+
 test('固定评测集和已有运行必须属于当前项目且不超出所选素材范围', async () => {
   let submitted = false;
   let snapshot = { ...published, projectId: 'other-project' };

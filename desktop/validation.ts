@@ -577,8 +577,9 @@ const agentCommands = new Set(['provider.list', 'provider.capabilities', 'chat.s
   'export.format.list', 'export.format.get',
   'evaluationSet.list', 'evaluationSet.get', 'evaluation.list', 'evaluation.get', 'evaluation.results',
   // review.build 只按评测/运行排复核队列（难例优先队列只排队不改标注、不改真值、不重跑请求）；
+  // review.suggestions 只读回显两张建议卡，阈值设置与「导出 → 训练数据集」仍由用户显式执行；
   // 逐条复核结论（resolve）、随机抽查（sample）与真值读写仍只由用户显式提交。
-  'evaluation.preflight', 'evaluation.create', 'review.list', 'review.build',
+  'evaluation.preflight', 'evaluation.create', 'review.list', 'review.build', 'review.suggestions',
   'evaluation.rerun.preflight', 'evaluation.rerun.create', 'evaluation.rerun.get', 'evaluation.rerun.finish', 'budget.estimate', 'budget.get',
   'flow.capabilities', 'flow.preflight', 'flow.create', 'flow.get', 'flow.list', 'flow.artifact', 'flow.pause', 'flow.resume', 'flow.cancel', 'flow.retry', 'flow.rerun',
   'local.runtime.get', 'local.model.get', 'local.model.list', 'model.library.status', 'media.job.get', 'media.job.list', 'media.video.create', 'media.video.frames', 'media.screening.result', 'media.screening.create',

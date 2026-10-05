@@ -60,8 +60,9 @@ test('4C 人工真值需要显式来源和基线，Agent 只开放查询与既�
   for (const change of [{ source: 'confirmed' }, { source: 'model' }, { baseTruthVersion: undefined }, { annotations: undefined }, { confirm: true }]) {
     assert.throws(() => validateCommand('evaluationSet.saveTruth', { ...truth, ...change }), /格式不正确/);
   }
-  // review.build 只按评测/运行排复核队列（不改标注、不改真值），逐条结论与随机抽查仍不开放。
-  for (const command of ['evaluationSet.list', 'evaluationSet.get', 'evaluation.list', 'evaluation.get', 'evaluation.results', 'evaluation.preflight', 'evaluation.create', 'review.list', 'review.build']) {
+  // review.build 只按评测/运行排复核队列（不改标注、不改真值）；review.suggestions 只读回显建议卡；
+  // 逐条结论与随机抽查仍不开放。
+  for (const command of ['evaluationSet.list', 'evaluationSet.get', 'evaluation.list', 'evaluation.get', 'evaluation.results', 'evaluation.preflight', 'evaluation.create', 'review.list', 'review.build', 'review.suggestions']) {
     assert.doesNotThrow(() => assertAgentCommand(command));
   }
   for (const command of ['evaluationSet.create', 'evaluationSet.saveTruth', 'evaluationSet.publish', 'evaluationSet.getTruth', 'review.resolve', 'review.sample', 'annotation.save', 'system.prepareUpdate']) {

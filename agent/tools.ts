@@ -653,6 +653,36 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       return { total: page.total, offset, items: page.items.map(raw => reviewItemSummary(raw, env)) };
     },
   },
+  {
+    // 建议卡是复核回流的两张只读卡片：助手要能查询口径，但阈值设置与送训导出仍是用户显式操作
+    // （导出目录只来自用户选择），所以这里只回显、不生成任何文件或参数。
+    name: 'get_review_suggestions', description: '读取复核结果回流的两张建议卡：建议置信度阈值（含分界依据与命中/多余预测数）和建议送训练的素材清单（已去重）。只读回显，不代表阈值已生效或清单已送训：阈值须由用户手动设置后小批量验证，送训须由用户在复核面板确认后走「导出 → 训练数据集」链路。清单超过 50 个标识时只回传前 50 个，并把 assetIdsTruncated 记为 true。',
+    parameters: schema({ evaluationId: nullableString }), mutation: false,
+    async execute(args, env) {
+      fields(args, ['evaluationId']);
+      const evaluationId = args.evaluationId == null ? undefined : id(args.evaluationId, '评测标识');
+      const record = object(await env.engine.request('review.suggestions', {
+        projectId: projectId(env), ...(evaluationId ? { evaluationId } : {}),
+      }), '复核建议');
+      const threshold = record.confidenceThreshold == null ? null : (() => {
+        const value = object(record.confidenceThreshold, '阈值建议');
+        const suggested = value.suggested == null ? null : value.suggested;
+        if (suggested !== null && (typeof suggested !== 'number' || !Number.isFinite(suggested) || suggested < 0 || suggested > 1))
+          throw new AgentError('ENGINE_RESPONSE_INVALID', '建议阈值超出 0～1，请重新读取');
+        return { suggested, basis: text(value.basis, '阈值建议依据', 4000),
+          matchedCount: integer(value.matchedCount, '命中预测数', 0, 1_000_000),
+          extraCount: integer(value.extraCount, '多余预测数', 0, 1_000_000) };
+      })();
+      const training = object(record.trainingSuggestion, '送训建议');
+      const count = integer(training.count, '建议送训素材数', 0, 10_000);
+      const assetIds = ids(training.assetIds, '建议送训素材', 10_000);
+      // 清单与数量必须自洽：错位会让模型拿着残缺清单继续决策，宁可判响应不对。
+      if (assetIds.length !== count) throw new AgentError('ENGINE_RESPONSE_INVALID', '送训清单与数量不一致，请重新读取');
+      return { evaluationId: evaluationId ?? null, confidenceThreshold: threshold,
+        trainingSuggestion: { count, reason: text(training.reason, '送训建议依据', 4000),
+          assetIds: assetIds.slice(0, 50), assetIdsTruncated: assetIds.length > 50 } };
+    },
+  },
 ];
 
 export function modelTools() {
