@@ -39,7 +39,7 @@ function timeAgo(iso: string): string {
  * 描述或拖入的文件先确认项目归属（命名或选已有），发送后才建好项目并开始对话。
  */
 export default function ChatHome() {
-  const { projects, openProject, refreshProjects, notify, setMediaJob, setMediaTaskId, prefs, savePrefs, providers, navigate, setPendingVideoImports,
+  const { projects, project, openProject, refreshProjects, notify, setMediaJob, setMediaTaskId, prefs, savePrefs, providers, navigate, setPendingVideoImports,
     homeDraft: input, setHomeDraft: setInput, homeAttachments: attachments, setHomeAttachments: setAttachments } = useApp();
   const [busy, setBusy] = useState(false);
   // 欢迎页还没有项目时，用户点「选择视频抽帧」要先有一个项目承载抽帧产物；这里存下这次点击建好的项目与选中路径。
@@ -84,6 +84,19 @@ export default function ChatHome() {
     // run 里失败（例如附件导入被拒）不能变成未处理拒绝：如实通知，弹框关掉，输入与附件留在原地可重试。
     catch (e) { notify(errorMessage(e), true); }
     setProjectPrompt(null);
+  }
+  /**
+   * 抽帧任务建好后要落到项目概览：欢迎页此时可能还没有打开任何项目（或者还停在上一个项目），
+   * 直接切页会让「素材入库后出现在这里」指到别处，所以先把项目上下文切过去再切页。
+   * 注意 openProject 会清掉当前提示、也会清空上一个项目的抽帧跟踪，调用方必须把它排在
+   * 「播报结果」与「登记进度」之前。
+   */
+  async function showProjectOverview(projectId: string) {
+    const owner = projects.find(item => item.id === projectId);
+    try { if (owner && owner.id !== project?.id) await openProject(owner); }
+    // 切换失败（例如素材正在切换）不该把用户卡在欢迎页：概览照常打开，提示里已经说明了落点。
+    catch { /* 见上：继续切到概览。 */ }
+    await navigate('overview');
   }
   /** 「导入图片开始标注」：先选图，弹框确认项目归属后导入，最后开一条会话说明这批图。 */
   async function importImages() {
@@ -246,12 +259,12 @@ export default function ChatHome() {
       const batch = drop.batch;
       return <VideoBatchImport key={batch.projectId} projectId={batch.projectId} files={batch.files}
         onClose={drop.closeBatch}
-        onCreated={({ jobs, failed, stopped }) => {
-          setMediaTaskId(jobs[0].id); setMediaJob({ id: jobs[0].id, following: jobs.slice(1).map(job => job.id) });
+        onCreated={async ({ jobs, failed, stopped }) => {
           drop.closeBatch();
           const pending = stopped ? batch.files.length - jobs.length - failed : 0;
+          await showProjectOverview(batch.projectId);
+          setMediaTaskId(jobs[0].id); setMediaJob({ id: jobs[0].id, following: jobs.slice(1).map(job => job.id) });
           notify(`已为 ${jobs.length} 个视频创建抽帧任务，正在排队逐个处理${failed ? `，另有 ${failed} 个未能创建` : ''}${pending ? `，停止时还有 ${pending} 个未处理` : ''}；素材就绪后自动导入，进度见侧栏「任务」。`);
-          void navigate('overview');
         }} />;
     })()}
     {/* 发送 / 导入共用的项目归属确认框：用户在这里命名或选已有项目，确认后才执行真正的动作。 */}
@@ -262,13 +275,13 @@ export default function ChatHome() {
     {/* 拖入视频与点击「选择视频抽帧」都走同一个抽帧面板：区别只在于项目是拖放时建的还是按钮提前建好的。 */}
     {(drop.video ?? videoStart) && (() => {
       const source = drop.video ?? videoStart!;
-      const close = () => { if (drop.video) drop.closeVideo(); else setVideoStart(null); };
+      const close = () => { setVideoStart(null); drop.closeVideo(); };
       return <VideoImport key={source.path} projectId={source.projectId} initialSourcePath={source.path} onClose={close}
-        onCreated={(job, temporarySource) => {
-          setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource }); close();
-          // 抽帧在后台跑，用户先看到素材落点，再回对话说要标什么。
+        onCreated={async (job, temporarySource) => {
+          close();
+          await showProjectOverview(source.projectId);
+          setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource });
           notify('已创建抽帧任务，素材入库后出现在这里；进度可在侧栏「任务」里查看。');
-          void navigate('overview');
         }} />;
     })()}
   </div>;

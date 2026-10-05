@@ -73,6 +73,33 @@ export async function checkDesktopSidebar(window: BrowserWindow, output: string)
     await js(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
     await waitFor(`!document.querySelector('.sidebar-menu[role="menu"][aria-label^="城市场景与更多补充说明的第二批"]') && document.querySelector('.sidebar-project.selected [aria-label^="项目操作 "]')?.getAttribute('aria-expanded')==='false'`);
 
+    // ===== 会话的上下文属于项目：从别的项目点开一条会话时，必须先把项目切过去 =====
+    // 会话行在每个项目分组下都会出现，点它却只换会话不换项目的话，助手会拿另一个项目的素材回答。
+    const projectRow = (needle: string) => `[...document.querySelectorAll('.sidebar-project')].find(row=>row.querySelector('.sidebar-row-title')?.innerText.trim().includes(${json(needle)}))`;
+    let crossProject = { before: '', sessionTitle: '', clicked: false };
+    let afterSwitch = { project: '', sessionSelected: false, panel: false };
+    await js(`${projectRow('人工示例')}?.querySelector('.sidebar-row')?.click()`);
+    await waitFor(`document.querySelector('.sidebar-project.selected .sidebar-row-title')?.innerText.trim().includes('人工示例')`);
+    await waitFor(`!!${projectRow('人工示例')}?.parentElement?.querySelector('.sidebar-sublist .sidebar-session')`);
+    // 先把当前项目切到另一个，再从它的分组外面点开示例项目的会话：这条会话必须把项目一起带过去。
+    await js(`${projectRow('第二批')}?.querySelector('.sidebar-row')?.click()`);
+    await waitFor(`document.querySelector('.sidebar-project.selected .sidebar-row-title')?.innerText.trim().includes('第二批')`);
+    crossProject = await js<{ before: string; sessionTitle: string; clicked: boolean }>(`(()=>{
+      const group=${projectRow('人工示例')}?.parentElement;
+      const session=group?.querySelector('.sidebar-sublist .sidebar-session');
+      const row=session?.querySelector('.sidebar-row');
+      const before=document.querySelector('.sidebar-project.selected .sidebar-row-title')?.innerText.trim()??'';
+      row?.click();
+      return {before,sessionTitle:session?.querySelector('.sidebar-row-title')?.innerText.trim()??'',clicked:!!row};})()`);
+    await waitFor(`document.querySelector('.sidebar-project.selected .sidebar-row-title')?.innerText.trim().includes('人工示例') && !!document.querySelector('.chat-panel')`);
+    afterSwitch = await js<{ project: string; sessionSelected: boolean; panel: boolean }>(`(()=>{
+      const group=document.querySelector('.sidebar-project.selected')?.parentElement;
+      return {project:document.querySelector('.sidebar-project.selected .sidebar-row-title')?.innerText.trim()??'',
+        sessionSelected:!!group?.querySelector('.sidebar-sublist .sidebar-session.selected'),panel:!!document.querySelector('.chat-panel')};})()`);
+    assert.ok(crossProject.clicked, `示例项目分组下应有可点开的会话行：${JSON.stringify(crossProject)}`);
+    assert.ok(afterSwitch.project.includes('人工示例'), `点开别的项目下的会话后，当前项目应切到会话所属项目，实际是「${afterSwitch.project}」`);
+    assert.ok(afterSwitch.sessionSelected && afterSwitch.panel, `被点开的会话应成为当前会话并显示对话页：${JSON.stringify(afterSwitch)}`);
+
     // 侧栏搜索只找项目/会话；顶栏 Ctrl+K 快速跳转只找页面，避免两个入口打开同一个页面列表。
     await js(`document.querySelector('.sidebar-top [aria-label="搜索项目和会话"]').click()`);
     await waitFor(`!!document.querySelector('dialog[open] input[aria-label="搜索项目和会话"]')`);
@@ -139,6 +166,7 @@ export async function checkDesktopSidebar(window: BrowserWindow, output: string)
       { check: 'sidebar-name-readable', ...resting, actionButtons: padding.buttons, padding },
       { check: 'project-actions-in-more-menu', items: projectMenuItems },
       { check: 'sidebar-search-and-page-jump-are-distinct', projectSearch, jumpSearch },
+      { check: 'session-opens-its-own-project', ...crossProject, ...afterSwitch },
       { check: 'mobile-drawer-modal-semantics', ...drawerModal! },
     ], passed: true }));
   } catch (error) {

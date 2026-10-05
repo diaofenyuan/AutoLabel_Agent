@@ -132,7 +132,19 @@ export class AgentController {
       notify('agent.finished', { status });
       return { content, messages: messages.filter(message => message.role !== 'system'), actions, status, budgetScopeId };
     };
-    const cancelled = () => finish('已停止后续操作。已发出的请求和已提交的任务可在任务中心查看。', 'cancelled');
+    const cancelled = () => {
+      // 中途取消时这一轮的 assistant 消息已经带着全部 tool_calls 入列，而工具是逐个执行的：没轮到的调用
+      // 必须补一条回复，否则历史里 tool_calls 与 tool 消息对不上（现在没有代码重放这段历史，但它就是
+      // 交给上层的历史记录，缺回复的形态在兼容 OpenAI 的接口上是非法请求）。
+      const answered = new Set(messages.filter(message => message.role === 'tool').map(message => message.tool_call_id));
+      const pending = messages.flatMap(message => message.role === 'assistant' ? message.tool_calls ?? [] : []).map(call => call.id);
+      for (const callId of pending) {
+        if (answered.has(callId)) continue;
+        answered.add(callId);
+        messages.push({ role: 'tool', tool_call_id: callId, content: JSON.stringify({ status: 'cancelled', message: '用户已停止，该操作未执行' }) });
+      }
+      return finish('已停止后续操作。已发出的请求和已提交的任务可在任务中心查看。', 'cancelled');
+    };
     notify('agent.started', { budgetScopeId });
     try {
       let toolsVerified = false;
@@ -143,10 +155,12 @@ export class AgentController {
         toolsVerified = capabilities.tools === 'verified';
       } catch { /* 未验证能力只开放对话，不能因查询失败默认放开工具。 */ }
       if (controller.signal.aborted) return cancelled();
-      const completedCalls = new Map<string, AgentAction>();
       let toolCount = 0;
       for (let round = 0; round < MAX_ROUNDS; round++) {
         if (controller.signal.aborted) return cancelled();
+        // 写操作去重只在单轮内成立（见下方「单轮内重复的写操作」）：放到循环外会让第二轮
+        // 一模一样的写操作直接复用上一轮的结果，模型于是以为任务做过了，实际一次都没执行。
+        const completedCalls = new Map<string, AgentAction>();
         let reply: ModelResult;
         try { reply = await this.engine.request<ModelResult>('chat.send', {
           projectId: request.projectId, providerId: request.providerId, model: request.model,

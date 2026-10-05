@@ -113,8 +113,9 @@ export function inspectVideoContinuity(assets: Asset[]): VideoContinuityIssue[] 
       while (before >= 0 && !frames[before].boxes.length && index - before <= 3) before--;
       let after = index + 1;
       while (after < frames.length && !frames[after].boxes.length && after - index <= 3) after++;
-      const left = frames[before];
-      const right = frames[after];
+      // 循环条件判的是「刚跨过的那一帧」，落点本身可能已经越过窗口（相邻第 4 帧），这里再收一次口。
+      const left = before >= 0 && index - before <= 3 ? frames[before] : undefined;
+      const right = after < frames.length && after - index <= 3 ? frames[after] : undefined;
       const leftGap = left && elapsedSeconds(left, current);
       const rightGap = right && elapsedSeconds(current, right);
       const sharedClass = left && right && left.boxes.some(box => right.boxes.some(value => value.classId === box.classId));

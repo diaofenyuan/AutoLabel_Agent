@@ -156,6 +156,14 @@ export function normalizeMedia(value: unknown): unknown {
           } catch { /* 忽略无效的引擎媒体字段，由界面明确显示图片不可用。 */ }
           continue;
         }
+        if (key === 'thumbnailUrl' && typeof child === 'string' && child.startsWith('autolabel-media://thumb')) {
+          // 缩略图地址必须保留缩略图身份：降级成原图会让列表静默退化为整图加载。
+          try {
+            const target = mediaTargetFromUrl(child);
+            if (target.kind === 'thumb') output[key] = `autolabel-media://thumb/${target.assetId}`;
+          } catch { /* 无效缩略图地址不能降级为原图，由界面回退或显示图片不可用。 */ }
+          continue;
+        }
         const id = typeof item.id === 'string' ? item.id : item.assetId;
         if (typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id)) output[key] = `autolabel-media://asset/${id}`;
       } else output[key] = normalizeMedia(child);

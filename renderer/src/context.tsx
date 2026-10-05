@@ -84,8 +84,9 @@ export interface AppState {
   setMediaJob: React.Dispatch<React.SetStateAction<{ id: string; temporarySource?: string; timelineId?: string; following?: string[] } | null>>;
   setAssets: React.Dispatch<React.SetStateAction<Asset[]>>;
   setProject: React.Dispatch<React.SetStateAction<Project | null>>;
-  /** 第二个参数是随项目一起发出的首条消息：用于「描述即建项目」后立刻开始第一条对话。 */
-  openProject: (project: Project, firstMessage?: string) => Promise<void>;
+  /** 第二个参数是随项目一起发出的首条消息：用于「描述即建项目」后立刻开始第一条对话。
+   *  第三个参数是落点页：未指定时进入对话（挑选/新建会话），指定为概览等页时只切上下文、不动会话。 */
+  openProject: (project: Project, firstMessage?: string, to?: Page) => Promise<void>;
   refreshProjects: () => Promise<void>; refreshAssets: () => Promise<void>;
   prefs: Preferences; setPrefs: React.Dispatch<React.SetStateAction<Preferences>>; savePrefs: (prefs: Preferences) => Promise<void>;
   providers: Provider[]; refreshProviders: () => Promise<void>;
@@ -102,6 +103,11 @@ export interface AppState {
   setActiveSessionId: (id: string) => void;
   /** 新建对话：会话必须挂在项目下，这里把界面交回欢迎页，由描述建好项目后再开会话。 */
   startProjectChat: () => Promise<void>;
+  /**
+   * 打开一条已有会话。会话是按项目存上下文的：从别的项目点开这条会话时，
+   * 必须先把项目切过去，否则助手会拿当前项目的素材与设置去回答另一条会话。
+   */
+  openChatSession: (sessionId: string) => Promise<void>;
   /** 欢迎页发送时拖了视频：抽帧面板要等进入项目会话后才打开，队列在这里中转。 */
   pendingVideoImports: { projectId: string; files: string[] } | null;
   setPendingVideoImports: (value: { projectId: string; files: string[] } | null) => void;

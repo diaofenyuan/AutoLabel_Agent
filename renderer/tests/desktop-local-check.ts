@@ -101,22 +101,33 @@ export async function checkDesktopLocal(window: BrowserWindow, output: string): 
     // 旧路径经由流程编排页的「本地预标注」单步执行，该页已移除；本地推理本身仍在（local.run.create）。
     // 类别映射是必填项：引擎要求逐一列出模型全部类别（忽略也要显式写 null），不能替用户猜。
     const localParameters = { projectId: project.id, assetIds: [assetId], modelId: model.id, modelVersion: model.version, device: 'cpu', failurePolicy: 'continue' as const, classMap: { '0': 'person' } };
+    // 目标框贴近画面边缘时引擎会记一条「需核对」几何问题，候选照旧保留，任务因此报「完成，有需处理项」。
+    // 这是产品定义的成功终态（文案见 renderer/src/types.ts），但必须同时证明没有失败或未知样本，
+    // 否则真实的推理失败会被这句放宽的断言掩盖。
+    const assertLocalRunSucceeded = (run: any) => {
+      assert.ok(['completed', 'completed_with_errors'].includes(run.status), json(run));
+      assert.equal(run.statistics.failed, 0, '本地推理不应有失败样本');
+      assert.equal(run.statistics.unknown, 0, '本地推理不应有未知样本');
+      assert.equal(run.samples.every((sample: any) => sample.status === 'succeeded'), true, json(run.samples));
+      if (run.status === 'completed_with_errors') assert.equal(run.samples.every((sample: any) => sample.requiresGeometryReview === true), true, '报「有需处理项」时样本必须标记为需人工核对');
+    };
+
     const firstRun = await api<{ id: string }>('local.run.create', localParameters);
     await wait(`window.autoLabel.request('run.get',{runId:${json(firstRun.id)}}).then(r=>['completed','completed_with_errors','failed','needs_attention','cancelled'].includes(r.status))`, 60000);
-    const first = await api<any>('run.get', { runId: firstRun.id }); assert.equal(first.status, 'completed', json(first)); assert.equal(first.kind, 'local'); assert.equal(first.modelId, model.id); assert.equal(first.modelVersion, model.version); assert.equal(first.device, 'cpu'); assert.equal(first.statistics.requestsUsed, 0); assert.equal(first.statistics.reused, 0); assert.equal(first.statistics.succeeded, 1);
+    const first = await api<any>('run.get', { runId: firstRun.id }); assertLocalRunSucceeded(first); assert.equal(first.kind, 'local'); assert.equal(first.modelId, model.id); assert.equal(first.modelVersion, model.version); assert.equal(first.device, 'cpu'); assert.equal(first.statistics.requestsUsed, 0); assert.equal(first.statistics.reused, 0); assert.equal(first.statistics.succeeded, 1);
     for (const field of ['baselineTotal', 'baselineCompleted', 'inputTotal', 'inputCompleted']) assert.equal(first.statistics[field], 1, field);
     assert.equal(first.samples.length, 1); const firstSample = first.samples[0]; assert.ok(firstSample.inputId); assert.ok(firstSample.resultId);
     const firstResult = await api<any>('run.result.get', { resultId: firstSample.resultId }); assert.equal(firstResult.source, 'local'); assert.equal(firstResult.status, 'succeeded'); assert.ok(firstResult.annotations?.length); assert.equal(firstResult.requiresGeometryReview, false);
     for (const a of firstResult.annotations) { assert.equal(a.type, 'pose'); assert.equal(a.keypoints?.length, keypointNames.length); assert.equal(a.classId, 'person'); }
-    checks.push({ check: 'native-pose-single-run', runId: first.id, inputId: firstSample.inputId, resultId: firstSample.resultId, objects: firstResult.annotations.length, keypointsPerObject: keypointNames.length, statistics: first.statistics });
+    checks.push({ check: 'native-pose-single-run', runId: first.id, runStatus: first.status, inputId: firstSample.inputId, resultId: firstSample.resultId, objects: firstResult.annotations.length, keypointsPerObject: keypointNames.length, statistics: first.statistics });
 
     const secondRun = await api<{ id: string }>('local.run.create', localParameters);
     await wait(`window.autoLabel.request('run.get',{runId:${json(secondRun.id)}}).then(r=>['completed','completed_with_errors','failed','needs_attention','cancelled'].includes(r.status))`, 60000);
-    const second = await api<any>('run.get', { runId: secondRun.id }); assert.equal(second.status, 'completed', json(second)); assert.equal(second.statistics.requestsUsed, 0); assert.equal(second.statistics.succeeded, 1); assert.equal(second.statistics.reused, 1);
+    const second = await api<any>('run.get', { runId: secondRun.id }); assertLocalRunSucceeded(second); assert.equal(second.statistics.requestsUsed, 0); assert.equal(second.statistics.succeeded, 1); assert.equal(second.statistics.reused, 1);
     const secondSample = second.samples[0], source = secondSample.inputReusedFrom; assert.equal(secondSample.reused, true); assert.ok(source);
     assert.equal(source.source, 'local'); assert.equal(source.sourceResultId, firstResult.id); assert.equal(source.sourceRunId, first.id); assert.equal(source.sourceInputId, firstResult.inputId); assert.equal(source.sourceModelVersion, model.version); assert.equal(source.sourceModelId, model.id);
     const secondResult = await api<any>('run.result.get', { resultId: secondSample.resultId }); assert.notEqual(secondResult.id, firstResult.id); assert.equal(secondResult.source, 'reuse'); assert.deepEqual(secondResult.provenance.reusedFrom, source);
-    checks.push({ check: 'same-configuration-local-input-reuse', runId: second.id, resultId: secondResult.id, source, statistics: second.statistics });
+    checks.push({ check: 'same-configuration-local-input-reuse', runId: second.id, runStatus: second.status, resultId: secondResult.id, source, statistics: second.statistics });
     const after = await api('asset.get', { assetId }); assert.equal(after.version, original.version); assert.deepEqual(after.annotations, original.annotations); assert.equal(after.status, original.status); assert.equal(after.source, original.source);
     await writeFile(output, json({ passed: true, mode: 'local-pose-ui', projectId: project.id, newApiRequests: 0, checks }));
   } catch (e) { await writeFile(output.replace(/\.json$/, '-failure.png'), (await window.webContents.capturePage()).toPNG()); await writeFile(output, json({ passed: false, mode: 'local-pose-ui', checks, error: e instanceof Error ? e.message : String(e), body: await js('document.body.innerText') })); throw e; }

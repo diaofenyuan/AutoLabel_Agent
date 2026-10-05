@@ -110,7 +110,9 @@ export async function checkDesktopDirectoryImport(window: BrowserWindow, output:
     const rows = await js<number>(`${dialog}.querySelectorAll('.board-row').length`);
     assert.equal(rows, 2, `视频文件夹应列出 2 个候选，实际 ${rows}`);
     const pickerText = await js<string>(`${dialog}.innerText`);
-    assert.ok(pickerText.includes('一次处理一个'), `候选清单应说明逐个处理，实际：${pickerText.slice(0, 300)}`);
+    // 清单上必须同时说清两条路径：逐个点「抽帧」进单个面板调参数，或一键抽帧按默认参数整批排队。
+    assert.ok(pickerText.includes('逐个点「抽帧」'), `候选清单应说明逐个处理，实际：${pickerText.slice(0, 300)}`);
+    assert.ok(pickerText.includes(`一键抽帧（${rows} 个）`), `候选清单应给出整批入口与真实数量，实际：${pickerText.slice(0, 300)}`);
     await button('抽帧', dialog);
     // 抽帧面板必须真的打开，而不是点完没反应。
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('1920 × 1080')`, 60000);
@@ -119,7 +121,7 @@ export async function checkDesktopDirectoryImport(window: BrowserWindow, output:
     const sizeFields = await js<{ width: string; height: string; resize: boolean }>(`(()=>{const w=document.querySelector('[aria-label="视频输出宽度"]');const h=document.querySelector('[aria-label="视频输出高度"]');const l=[...${dialog}.querySelectorAll('.checkbox-row')].find(e=>e.textContent.includes('指定输出尺寸'));return {width:w?.value??'',height:h?.value??'',resize:Boolean(l?.querySelector('input')?.checked)};})()`);
     assert.deepEqual([sizeFields.width, sizeFields.height], ['1024', '576'], `1920×1080 应等比降到长边 1024，实际：${json(sizeFields)}`);
     assert.equal(sizeFields.resize, true, '降采样必须真的写进抽帧参数，而不是只显示一句提示');
-    checks.push({ check: 'video-folder-picker', candidates: rows, sequential: true, panelOpened: true, downsampled: sizeFields });
+    checks.push({ check: 'video-folder-picker', candidates: rows, batchEntry: pickerText.includes('一键抽帧'), panelOpened: true, downsampled: sizeFields });
     await writeFile(output, json({ checks, passed: true }));
   } catch (error) {
     await writeFile(output.replace(/\.json$/, '-failure.png'), (await window.webContents.capturePage()).toPNG());

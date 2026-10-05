@@ -64,12 +64,41 @@ public final class EngineTest {
         if(args.length>0&&args[0].equals("five-task")){MultiTaskEvaluationTest.run(root);System.out.println("PASS "+assertions+" five-task evaluation assertions; independent geometry and local protocol only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("resource-integration")){ResourceIntegrationTest.run(root);System.out.println("PASS "+assertions+" resource integration assertions; local protocol only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("payload")){PayloadImagesTest.run(root.resolve("payload"));System.out.println("PASS "+assertions+" payload assertions; local protocol fixtures only.\nVERIFICATION_DIR="+root);return;}
-        if(args.length==0||!args[0].equals("transport")){mediaAndExports();queueAndProtocols();ReviewHardTest.run(root.resolve("review-hard"));PayloadImagesTest.run(root.resolve("payload"));DatasetVersionsTest.run(root.resolve("dataset-versions"));MediaRecipesTest.run(root.resolve("media-recipes"));httpProcess();}transportLimits();iccProfile();cancelWaiting();System.out.println("PASS "+assertions+" assertions; controlled local protocol verification only.");System.out.println("VERIFICATION_DIR="+root);
+        if(args.length==0||!args[0].equals("transport")){mediaAndExports();thumbnails();queueAndProtocols();ReviewHardTest.run(root.resolve("review-hard"));PayloadImagesTest.run(root.resolve("payload"));DatasetVersionsTest.run(root.resolve("dataset-versions"));MediaRecipesTest.run(root.resolve("media-recipes"));httpProcess();}transportLimits();iccProfile();cancelWaiting();System.out.println("PASS "+assertions+" assertions; controlled local protocol verification only.");System.out.println("VERIFICATION_DIR="+root);
     }
     static JsonObject project(Engine e,String type)throws Exception{return command(e,"project.create",Json.obj("name","测试 "+type,"taskType",type,"classes",Json.arr(Json.obj("id","item","name","物品","color","#3b82f6")),"settings",Json.obj("keypointNames",Json.arr("left","right"))));}
     static JsonObject label(String type){JsonObject a=Json.obj("id",Json.id(),"type",type,"classId","item");if(Set.of("detect","pose","obb").contains(type))a.add("bbox",Json.obj("x",200,"y",180,"width",200,"height",120));
         if(type.equals("obb"))a.addProperty("rotation",20);if(type.equals("segment"))a.add("points",Json.arr(Json.obj("x",200,"y",180),Json.obj("x",400,"y",180),Json.obj("x",380,"y",300),Json.obj("x",220,"y",280)));
         if(type.equals("pose"))a.add("keypoints",Json.arr(Json.obj("name","left","x",220,"y",220,"visibility",2),Json.obj("name","right","x",360,"y",220,"visibility",1)));return a;}
+    /**
+     * 缩略图：长边封顶 256、按内容哈希定址缓存、大图按整数倍降采样解码、异常哈希不越出缓存目录。
+     * 降采样那几条是「全量串跑时偶发缩略图 500」的护栏：解码内存不能随原图大小增长。
+     */
+    static void thumbnails()throws Exception{
+        Path data=root.resolve("thumb-data");Path source=data.resolve("source");Files.createDirectories(source);
+        Path large=source.resolve("large.png");BufferedImage image=new BufferedImage(3000,2000,BufferedImage.TYPE_INT_RGB);
+        var graphics=image.createGraphics();graphics.setColor(Color.ORANGE);graphics.fillRect(0,0,3000,2000);graphics.dispose();
+        check(ImageIO.write(image,"png",large.toFile()),"large thumbnail fixture written");image.flush();
+        int step=Thumbnails.subsampleStep(3000,2000);check(step==6,"large image decodes at an integer subsample step: "+step);
+        check(Thumbnails.subsampleStep(400,300)==1,"small images decode as-is");
+        check(Thumbnails.subsampleStep(Thumbnails.LONG_EDGE,Thumbnails.LONG_EDGE)==1,"thumbnail-sized images decode as-is");
+        String hash="a1b2c3d4e5f60718293a4b5c6d7e8f90";
+        Path cached=Thumbnails.file(data,large,hash);
+        check(cached.getFileName().toString().equals("a1b2c3d4e5f60718.jpg"),"thumbnail cache keyed by content hash: "+cached.getFileName());
+        BufferedImage thumbnail=ImageIO.read(cached.toFile());
+        check(thumbnail!=null,"cached thumbnail decodes");
+        check(Math.max(thumbnail.getWidth(),thumbnail.getHeight())==Thumbnails.LONG_EDGE,"thumbnail long edge is 256: "+thumbnail.getWidth()+"x"+thumbnail.getHeight());
+        check(thumbnail.getWidth()==256&&Math.abs(thumbnail.getHeight()-171)<=1,"thumbnail keeps the source aspect ratio: "+thumbnail.getWidth()+"x"+thumbnail.getHeight());
+        thumbnail.flush();
+        check(Thumbnails.file(data,large,hash).equals(cached),"second request reuses the cached file");
+        Path shortHash=Thumbnails.file(data,large,"abc");
+        check(shortHash.getFileName().toString().equals("abc.jpg"),"short content hash is usable: "+shortHash.getFileName());
+        Path escaped=Thumbnails.file(data,large,"../../escape");
+        check(escaped.getParent().equals(data.resolve("thumbnail-cache")),"hash characters cannot escape the cache directory: "+escaped);
+        Path broken=source.resolve("broken.png");Files.writeString(broken,"not an image");
+        try{Thumbnails.file(data,broken,"ff00");throw new AssertionError("Expected media_invalid");}catch(ApiError expected){check(expected.code.equals("media_invalid"),"undecodable image rejected: "+expected.code);}
+        try{Thumbnails.file(data,large,"");throw new AssertionError("Expected media_invalid");}catch(ApiError expected){check(expected.code.equals("media_invalid"),"missing content hash rejected: "+expected.code);}
+    }
     static JsonArray importSamples(Engine e,String pid,int count)throws Exception{Path dir=root.resolve("input-"+pid);Files.createDirectories(dir);JsonArray files=new JsonArray();for(int i=0;i<count;i++){Path path=dir.resolve("image-"+i+".png");Media.sample(path,i);files.add(path.toString());}
         JsonObject result=command(e,"asset.import",Json.obj("projectId",pid,"paths",files));check(Json.integer(result,"imported",0)==count,"import sample count");return Json.array(result,"assetIds");}
     static void mediaAndExports()throws Exception{

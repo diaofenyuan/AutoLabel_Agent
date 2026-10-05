@@ -8,7 +8,7 @@ import type { LocalModel, LocalRuntimeState } from '../../shared/inference';
 import type { ModelLibraryState } from '../../shared/model-library';
 import { deriveClassMap } from '../../shared/vocabulary';
 import { statusNames } from '../src/types';
-import { gotoSettings, gotoWelcome, openPythonPicker, openSelectedProjectOverview, waitForIdle } from './desktop-navigation';
+import { gotoSettings, gotoWelcome, navItem, openPythonPicker, openSelectedProjectOverview, waitForIdle } from './desktop-navigation';
 
 interface ProjectRow { id: string; name: string; classes: Array<{ id: string; name: string }> }
 interface AssetRow { id: string; version: number; status: string; annotations: Array<{ id: string; classId: string; type: string }> }
@@ -332,7 +332,7 @@ export async function checkDesktopLocalAnnotate(window: BrowserWindow, output: s
       paired: evaluation.pairedComparableSamples, cost: scheme.cost, averageImageMs: scheme.averageImageMs, candidateSource: results.items[0].candidateSource });
 
     // 表里那一行：本机方案必须写 ¥0，而不是「币种未定 0」。
-    await js(`[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='任务').click()`);
+    await js(`(${navItem('任务')}).click()`);
     await wait(`!!document.querySelector('.task-kind-tabs')`, 30000);
     await button('评测与复核');
     await wait(`!!document.querySelector('.quality-body')`);

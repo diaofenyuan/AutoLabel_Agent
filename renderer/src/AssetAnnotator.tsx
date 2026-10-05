@@ -60,8 +60,14 @@ export default function AssetAnnotator({ asset, classes, taskType, templateSetti
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [pending, setPending] = useState(false);
-  // 带初始标注进来（历史版本载入）时就是脏的：没保存之前不能当成已落库的结果。
-  const [dirty, setDirty] = useState(Boolean(initialAnnotations));
+  // 脏 = 与「打开时载入的那份内容」不同。基线必须是画布真正载入的内容（历史版本 / 草稿 / 已保存标注），
+  // 不能拿 current.annotations：素材带草稿时后者是更早的一版，用户改回原样（甚至什么都没做）也会被当成有改动，
+  // 关窗时白问一次「是否放弃未保存的改动」。
+  const [baseline, setBaseline] = useState<Annotation[]>(() => structuredClone(initialAnnotations ?? asset.draft ?? asset.annotations));
+  const [changed, setChanged] = useState(false);
+  // 历史版本载入的内容还没落库：画布跟载入时一样也得保存过才算干净。
+  const [unpersisted, setUnpersisted] = useState(Boolean(initialAnnotations));
+  const dirty = changed || unpersisted;
   const [error, setError] = useState('');
   const dirtySource = 'asset-annotate:' + asset.id;
   const unsaved = dirty || pending;
@@ -74,17 +80,18 @@ export default function AssetAnnotator({ asset, classes, taskType, templateSetti
     let live = true; setLoading(true);
     void request<Asset>('asset.get', { assetId: asset.id }).then(fresh => {
       if (!live) return;
-      setCurrent(fresh); setAnnotations(structuredClone(fresh.draft ?? fresh.annotations)); setDirty(false); onSaved(fresh);
+      setCurrent(fresh); const loaded = structuredClone(fresh.draft ?? fresh.annotations);
+      setAnnotations(loaded); setBaseline(loaded); setChanged(false); onSaved(fresh);
     }).catch(e => { if (live) setError(errorMessage(e)); }).finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
   }, [asset.id]);
 
   const hasClasses = classes.length > 0;
 
-  /** 脏 = 与已保存内容实际不同：撤销回原状应自动变干净，而不是让用户为「零改动」点一遍保存/确认。 */
+  /** 脏 = 与打开时的基线实际不同：撤销回原状应自动变干净，而不是让用户为「零改动」点一遍保存/确认。 */
   function change(next: Annotation[]) {
     setAnnotations(next);
-    setDirty(JSON.stringify(next) !== JSON.stringify(current.annotations));
+    setChanged(JSON.stringify(next) !== JSON.stringify(baseline));
     setError('');
   }
 
@@ -96,14 +103,15 @@ export default function AssetAnnotator({ asset, classes, taskType, templateSetti
     try {
       // confirm 决定这次写入是「人工修改」还是「已确认」，沿用候选 → 正式标注的既有语义，不新造状态。
       const saved = await request<Asset>('annotation.save', { assetId: current.id, baseVersion: current.version, annotations, confirm });
-      setCurrent(saved); setAnnotations(structuredClone(saved.annotations)); setDirty(false); onSaved(saved);
+      setCurrent(saved); setAnnotations(structuredClone(saved.annotations)); setBaseline(structuredClone(saved.annotations)); setChanged(false); setUnpersisted(false); onSaved(saved);
       notify(confirm ? `已保存并确认，版本 ${saved.version}。` : `已保存为版本 ${saved.version}。`);
     } catch (e) {
       const message = errorMessage(e);
       if (message.includes('annotation_version_conflict') || message.includes('标注版本已变化')) {
         try {
           const fresh = await request<Asset>('asset.get', { assetId: current.id });
-          setCurrent(fresh); setAnnotations(structuredClone(fresh.draft ?? fresh.annotations)); setDirty(false); onSaved(fresh);
+          const reloaded = structuredClone(fresh.draft ?? fresh.annotations);
+          setCurrent(fresh); setAnnotations(reloaded); setBaseline(reloaded); setChanged(false); setUnpersisted(false); onSaved(fresh);
           setError('这张素材的标注已被改动（可能是助手刚写入的结果），已载入最新版本，请核对后重新编辑。');
         } catch (inner) { setError(errorMessage(inner)); }
       } else setError(message);
@@ -145,7 +153,7 @@ export default function AssetAnnotator({ asset, classes, taskType, templateSetti
   return <div className="asset-annotator">
     <div className="asset-annotator-bar">
       <span className="muted tiny">{current.name} · 当前版本 {current.version} · {current.annotations.length} 个对象{dirty ? ' · 有未保存改动' : ''}</span>
-      <Button disabled={busy} onClick={async () => { if (dirty && !(await confirmDialog('有未保存的改动，确定返回预览？'))) return; setDirty(false); setAnnotations(structuredClone(current.annotations)); setMode('view'); }}><Eye size={14} />返回预览</Button>
+      <Button disabled={busy} onClick={async () => { if (dirty && !(await confirmDialog('有未保存的改动，确定返回预览？'))) return; setUnpersisted(false); setChanged(false); setAnnotations(structuredClone(baseline)); setMode('view'); }}><Eye size={14} />返回预览</Button>
     </div>
     <CandidateGeometryReview asset={current}/>
     <VideoContinuityReview issues={continuityIssues}/>

@@ -2,6 +2,7 @@ import type { BrowserWindow } from 'electron';
 import assert from 'node:assert/strict';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { navItem } from './desktop-navigation';
 
 /**
  * 视频帧与数据集版本的关系验收（D-1 决定维持硬规则）。
@@ -81,7 +82,7 @@ export async function checkDesktopFrameScope(window: BrowserWindow, output: stri
     checks.push({ check: 'frames-auto-imported', jobId: job.id, projectId: project!.id, assets: imported.total, stripVisible: true });
 
     // ===== 入库那一刻的告知：能导出、不进数据集版本、原因 =====
-    await js(`[...document.querySelectorAll('.sidebar-bottom .nav-item')].find(b=>b.innerText.trim()==='任务').click()`);
+    await js(`(${navItem('任务')}).click()`);
     await waitFor(`!!document.querySelector('.task-kind-tabs')`);
     await button('素材任务');
     await waitFor(`!!document.querySelector('.media-job-row')`);

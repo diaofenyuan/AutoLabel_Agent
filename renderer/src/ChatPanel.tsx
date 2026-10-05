@@ -100,13 +100,19 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     document.addEventListener('keydown', onKeyDown);
     return () => { document.removeEventListener('mousedown', onPointerDown); document.removeEventListener('keydown', onKeyDown); };
   }, [toolsOpen]);
+  const [historyReload, setHistoryReload] = useState(0);
+  const historyRetries = useRef(0);
+  const historyRetryKey = useRef('');
   useEffect(() => {
+    if (historyRetryKey.current !== key) { historyRetryKey.current = key; historyRetries.current = 0; }
     if (!key || loadedKey.current === key) return;
-    loadedKey.current = key;
-    if (chatsRef.current[key]) return;
+    if (chatsRef.current[key]) { loadedKey.current = key; return; }
     let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     void request<StoredChatSession>('chat.history.get', { sessionId: key }).then(record => {
       if (!active) return;
+      // 只有读成功才算「已加载」：失败也粘住的话这条会话会一直空着，历史再也读不回来。
+      loadedKey.current = key;
       const messages = record.messages.filter(message => message.role === 'user' || message.role === 'assistant')
         .map(message => ({ role: message.role as 'user' | 'assistant', content: message.content }));
       setChats(state => {
@@ -115,9 +121,14 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
         if (current?.messages.length) return state;
         return { ...state, [key]: { ...(current ?? blankChatSession(key)), messages } };
       });
-    }).catch(() => undefined);
-    return () => { active = false; };
-  }, [key, setChats]);
+    }).catch(() => {
+      // 读盘失败可能只是一次抖动：退避重试几次；超过次数就停手，不能无限打转。
+      if (!active || historyRetries.current >= 3) return;
+      historyRetries.current += 1;
+      timer = setTimeout(() => { if (active) setHistoryReload(value => value + 1); }, 500 * historyRetries.current);
+    });
+    return () => { active = false; if (timer) clearTimeout(timer); };
+  }, [key, setChats, historyReload]);
   // 欢迎页把首条消息随会话交过来：挂载后自动发出一次，用户不必再按一次发送。
   // 条件还没就绪（例如打开项目时素材仍在切换）就先留着，等条件满足再发，不能白白把这次发送丢掉。
   useEffect(() => {
@@ -231,7 +242,9 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     {!compact && <DropOverlay visible={dropActive} />}
     <div className="chat-messages" role="log" aria-label="对话消息">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><Button onClick={() => void navigate('settings', 'ai')}><Settings2 size={14} />配置对话模型</Button><div className="chat-examples">{sampleRequests.map(text => <button key={text} type="button" onClick={() => editComposer(text)}>{text}</button>)}</div></Empty> : <>{session.messages.length > MESSAGE_FOLD && <button type="button" className="text-button chat-history-fold" onClick={() => setShowAllHistory(true)}>更早的 {session.messages.length - MESSAGE_FOLD} 条历史已折叠 · 展开</button>}{session.messages.slice(showAllHistory ? 0 : -MESSAGE_FOLD).map((message, i, folded) => {
       const previousUser = [...folded.slice(0, i)].reverse().find(item => item.role === 'user')?.content;
-      return <ChatMessage key={i} message={message} previousUser={previousUser} onEdit={editComposer} onRetry={retryMessage} onCopy={copyMessage} />;
+      // key 用消息在整段历史里的绝对位置：折叠展开或新消息追加时都不会换身份。
+      // 用切片内的下标当 key，展开历史会把最多 200 条消息重新挂载到别的消息上（复制/重试这类行内状态跟错人）。
+      return <ChatMessage key={session.messages.length - folded.length + i} message={message} previousUser={previousUser} onEdit={editComposer} onRetry={retryMessage} onCopy={copyMessage} />;
     })}</>}{session.busy && session.streamingText && <div className="chat-message assistant streaming"><div className="chat-message-head"><span className="chat-avatar assistant" aria-hidden="true"><Sparkles size={12} /></span><small>标注助手</small></div><div className="chat-text"><RichText text={session.streamingText}/></div></div>}{session.busy && <div className="chat-wait" role="status" aria-live="polite"><span className="waiting-dots">•••</span>{session.cancelRequested ? '正在请求停止 · 已发送请求的结果仍需核对' : chatStatus(events, session.id)} · {session.runningScope}</div>}
       {/* 结果卡片跟着会话走：已经有回复且绑定了项目时才展开实际结果，避免空转读取。 */}
       {!compact && <AgentSteps steps={steps} busy={session.busy} />}

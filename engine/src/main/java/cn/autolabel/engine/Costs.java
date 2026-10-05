@@ -90,7 +90,7 @@ final class Costs {
             if(!usage.has(inputKey)||!usage.has(outputKey))continue;
             try{input+=integer(usage,inputKey,0,1_000_000_000_000L);output+=integer(usage,outputKey,0,1_000_000_000_000L);samples++;}catch(Exception ignored){}
         }
-        return samples==0?null:Json.obj("input",input/samples,"output",output/samples,"samples",samples);
+        return samples==0?null:Json.obj("input",Math.round((double)input/samples),"output",Math.round((double)output/samples),"samples",samples);
     }
     /** token 假设：用户没给的项按历史实际用量均值自动填（可改）；缓存项永不自动填——省略不等于按零计。 */
     static JsonObject estimate(Connection c,JsonObject provider,JsonObject p)throws Exception{

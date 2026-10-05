@@ -26,10 +26,22 @@ export async function waitForIdle(driver: UiDriver): Promise<void> {
   await driver.wait(`document.querySelector('main.page')?.getAttribute('aria-busy')==='false'`);
 }
 
+/**
+ * 导航项的查找式（按名字，不按序号）。
+ *
+ * 有进行中任务时「任务」按钮里会多出一个计数徽标（`Sidebar.tsx` 的 `.nav-badge`），
+ * 按钮的 innerText 因此变成「任务\n1」：直接比 innerText 会 `find` 到 undefined，
+ * 紧接着的 `.click()` 在渲染进程里抛错，验收表现为「Script failed to execute」，
+ * 而且只在恰好有任务在跑时复现。这里改成比按钮自己的 title 或它内部任一 span 的文本。
+ */
+export function navItem(label: string): string {
+  return `[...document.querySelectorAll('.nav-item')].find(node=>!node.disabled&&(node.title===${q(label)}||[...node.querySelectorAll('span')].some(span=>span.innerText.trim()===${q(label)})))`;
+}
+
 /** 按名字点主导航项。 */
 export async function gotoNav(driver: UiDriver, label: string): Promise<void> {
-  await driver.wait(`[...document.querySelectorAll('.nav-item')].some(node=>node.innerText.trim()===${q(label)}&&!node.disabled)`);
-  await driver.js(`([...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()===${q(label)})).click()`);
+  await driver.wait(`!!${navItem(label)}`);
+  await driver.js(`(${navItem(label)}).click()`);
 }
 
 /** 回到欢迎页。 */

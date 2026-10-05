@@ -296,12 +296,14 @@ export class EngineManager extends EventEmitter {
    */
   private async enterQueue(): Promise<void> {
     if (this.inFlight < MAX_IN_FLIGHT_COMMANDS) { this.inFlight += 1; return; }
+    // 槽位由 leaveQueue 直接转交（见下），这里醒过来即视为已持槽，绝不能再自增：
+    // 「先减后加」之间新请求会看到空位同时进来，上限就被突破了。
     await new Promise<void>(resolve => this.waiting.push(resolve));
-    this.inFlight += 1;
   }
   private leaveQueue(): void {
+    const next = this.waiting.shift();
+    if (next) { next(); return; }
     if (this.inFlight > 0) this.inFlight -= 1;
-    this.waiting.shift()?.();
   }
   private async fetchJson(endpoint: string, body?: unknown, timeout = 10000): Promise<unknown> {
     if (!this.port) throw new DesktopError('ENGINE_UNAVAILABLE', this.status.message ?? '本地引擎尚未就绪');
@@ -387,6 +389,9 @@ export class EngineManager extends EventEmitter {
           if (!Number.isSafeInteger(snapshot.sequence)) throw new Error('INVALID_SNAPSHOT');
           this.cursor = snapshot.sequence;
           this.setStatus({ ...this.status, state: 'disconnected', message: '事件历史已更新，正在重新同步状态快照' });
+          // 重新同步后仍可能再被判为过期（游标被连续裁剪、引擎刚重启）：必须退避，
+          // 否则 continue 会绕过循环末尾的等待，把重连变成无延迟热请求。
+          await sleep(retry); retry = Math.min(retry * 2, 10000);
           continue;
         }
         if (!response.ok || !response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new Error('SSE_UNAVAILABLE');

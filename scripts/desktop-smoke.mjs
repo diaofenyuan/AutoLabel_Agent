@@ -229,6 +229,10 @@ if (sidebarOnly) {
   assert.deepEqual(byCheck.get('project-actions-in-more-menu')?.items, ['项目概览', '重命名', '删除项目…']);
   assert.deepEqual(byCheck.get('sidebar-search-and-page-jump-are-distinct')?.projectSearch, { project: true, pageOnly: false });
   assert.deepEqual(byCheck.get('sidebar-search-and-page-jump-are-distinct')?.jumpSearch, { page: '任务', count: 1 });
+  // 会话行按项目分组出现，点开别的项目下的会话必须把项目一起切过去。
+  assert.ok(byCheck.get('session-opens-its-own-project')?.project?.includes('人工示例'));
+  assert.equal(byCheck.get('session-opens-its-own-project')?.sessionSelected, true);
+  assert.equal(byCheck.get('session-opens-its-own-project')?.panel, true);
   console.log(`侧栏可读性检查通过：${output}`); process.exit(0);
 }
 if (errorActionOnly) {
@@ -463,8 +467,9 @@ if (directoryImportOnly) {
   // 含 webp 与 txt 的文件夹只导入 2 张，且扫描如实报出 2 个用不上的文件。
   assert.equal(byCheck.get('image-folder-import')?.assets, 2);
   assert.equal(byCheck.get('image-folder-import')?.unsupported, 2);
-  // 视频文件夹先列候选再逐个发起，点「抽帧」真的打开抽帧面板。
+  // 视频文件夹先列候选：清单同时给出逐个抽帧与一键整批两条路径，点「抽帧」真的打开抽帧面板。
   assert.equal(byCheck.get('video-folder-picker')?.candidates, 2);
+  assert.equal(byCheck.get('video-folder-picker')?.batchEntry, true);
   assert.equal(byCheck.get('video-folder-picker')?.panelOpened, true);
   // 大尺寸来源默认降采样：1920×1080 应等比降到 1024×576 并写进抽帧参数。
   assert.deepEqual([byCheck.get('video-folder-picker')?.downsampled?.width, byCheck.get('video-folder-picker')?.downsampled?.height], ['1024', '576']);
@@ -551,6 +556,9 @@ if (annotateOnly) {
   assert.equal(byCheck.get('annotate-save-writes-annotation')?.x, 77);
   assert.equal(byCheck.get('annotate-save-writes-annotation')?.status, 'modified');
   assert.equal(byCheck.get('annotate-undo-redo-restores-geometry')?.redoneX, 77);
+  // 叠加层必须与图片共用同一个盒子：只压图片的高度会让画布坐标整体偏移（放大后才会明显暴露）。
+  assert.ok(Math.abs(byCheck.get('annotate-canvas-matches-image-box')?.zoomDx ?? 99) <= 1);
+  assert.ok(Math.abs(byCheck.get('annotate-canvas-matches-image-box')?.zoomDy ?? 99) <= 1);
   assert.equal(byCheck.get('annotate-save-and-confirm')?.status, 'confirmed');
   assert.ok(byCheck.get('annotate-reopen-visible')?.historyVersions >= 3);
   // 文案不再宣传不可用快捷键。
@@ -640,4 +648,7 @@ assert.equal(result.status.state, 'ready'); assert.equal(result.receivedCommitte
 assert.equal(result.media.loaded, true); assert.equal(result.workerResponded, true);
 assert.equal(result.credentialEncryptedAtRest, true); assert.equal(result.credentialRoundtrip, true);
 if (packaged) assert.equal(result.diagnostics.packaged, true);
+// 导出面板声明排除「个人绝对路径」：诊断内容里不允许出现盘符路径或 UNC 共享（引擎日志在写入时已过 redact）。
+const diagnosticText = JSON.stringify(result.diagnostics ?? {});
+assert.equal(/[A-Za-z]:[\\/]|\\\\/.test(diagnosticText), false, `诊断导出包含本地绝对路径：${diagnosticText.slice(0, 400)}`);
 console.log(`桌面验收通过：${output}`);

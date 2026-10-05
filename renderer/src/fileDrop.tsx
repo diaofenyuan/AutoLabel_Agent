@@ -48,7 +48,7 @@ export const droppableExtensions = { imagesLabel: IMAGE_EXTENSION_LABEL, videoLa
  * 拖放区：把图片、视频与文件夹直接拖进对话。
  * 用进出计数判断悬浮态，避免拖过子元素时反复闪烁。
  */
-export function useFileDrop(onFiles: (files: DroppedFiles) => void | Promise<void>) {
+export function useFileDrop(onFiles: (files: DroppedFiles) => void | Promise<void>, onError?: (error: unknown) => void) {
   const [active, setActive] = useState(false);
   const [, setDepth] = useState(0);
   const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes('Files');
@@ -58,7 +58,12 @@ export function useFileDrop(onFiles: (files: DroppedFiles) => void | Promise<voi
       onDragEnter: (event: DragEvent) => { if (!hasFiles(event)) return; event.preventDefault(); setDepth(value => { const next = value + 1; if (next === 1) setActive(true); return next; }); },
       onDragOver: (event: DragEvent) => { if (hasFiles(event)) event.preventDefault(); },
       onDragLeave: (event: DragEvent) => { if (!hasFiles(event)) return; setDepth(value => { const next = Math.max(0, value - 1); if (next === 0) setActive(false); return next; }); },
-      onDrop: (event: DragEvent) => { if (!hasFiles(event)) return; event.preventDefault(); setDepth(0); setActive(false); void classifyDrop([...(event.dataTransfer?.files ?? [])]).then(onFiles); },
+      // 分类要问主进程授权，失败时不能只留一条无人处理的 rejection：拖入无回应比报错更难判断。
+      onDrop: (event: DragEvent) => {
+        if (!hasFiles(event)) return;
+        event.preventDefault(); setDepth(0); setActive(false);
+        void classifyDrop([...(event.dataTransfer?.files ?? [])]).then(onFiles, error => { if (onError) onError(error); else console.error(error); });
+      },
     },
   };
 }

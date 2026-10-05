@@ -22,6 +22,10 @@ const importing = new Set<string>();
 
 const autoImportFailed = new Set<string>();
 
+/** 哨兵每轮翻页大小与最多处理的任务数：上限兜住超大历史，避免稳态下退化成整表翻页。 */
+const SWEEP_PAGE = 100;
+const SWEEP_MAX_JOBS = 1000;
+
 /**
  * 全局自动导入哨兵（无界面）。进度条只跟踪界面发起的任务，助手或重试等途径创建的抽帧
  * 完成后会一直停在「待导入」，必须有人记得去任务页点一下——这正是「明明抽完了、项目里
@@ -36,23 +40,28 @@ export function AutoImportWatcher() {
     let live = true, timer: ReturnType<typeof setTimeout>, imported = 0;
     async function sweep() {
       try {
-        const list = await request<MediaJobList>('media.job.list', { kind: 'video_extract', limit: 100 });
-        if (!live) return;
-        for (const job of importableVideoJobs(list.items)) {
-          if (importing.has(job.id) || autoImportFailed.has(job.id)) continue;
-          importing.add(job.id);
-          try {
-            await request<MediaJob>('media.video.import', { jobId: job.id });
-            imported++;
-            await Promise.all([refreshAssets(), refreshProjects()]);
-            // 与进度条同一条「导入即建轴」约定；只给当前打开的项目建，其他项目打开时由轨迹页补。
-            if (project && project.id === job.projectId && ['detect', 'pose'].includes(project.taskType)) {
-              try { await request<{ id: string }>('track.timeline.create', { projectId: project.id, mediaJobId: job.id }); }
-              catch { /* 建轴失败不影响素材已经入库这件事 */ }
-            }
-          } catch { autoImportFailed.add(job.id); }
-          finally { importing.delete(job.id); }
+        // media.job.list 按 rowid 倒序、单页最多 100：只看第一页会让积压（例如关掉自动导入一段时间后
+        // 再打开）里排在 100 条之外的就绪产物永远没人导入。这里按页扫到末尾，并保留一个任务数上限。
+        for (let offset = 0; offset < SWEEP_MAX_JOBS; offset += SWEEP_PAGE) {
+          const list = await request<MediaJobList>('media.job.list', { kind: 'video_extract', limit: SWEEP_PAGE, offset });
           if (!live) return;
+          for (const job of importableVideoJobs(list.items)) {
+            if (importing.has(job.id) || autoImportFailed.has(job.id)) continue;
+            importing.add(job.id);
+            try {
+              await request<MediaJob>('media.video.import', { jobId: job.id });
+              imported++;
+              await Promise.all([refreshAssets(), refreshProjects()]);
+              // 与进度条同一条「导入即建轴」约定；只给当前打开的项目建，其他项目打开时由轨迹页补。
+              if (project && project.id === job.projectId && ['detect', 'pose'].includes(project.taskType)) {
+                try { await request<{ id: string }>('track.timeline.create', { projectId: project.id, mediaJobId: job.id }); }
+                catch { /* 建轴失败不影响素材已经入库这件事 */ }
+              }
+            } catch { autoImportFailed.add(job.id); }
+            finally { importing.delete(job.id); }
+            if (!live) return;
+          }
+          if (!list.items.length || offset + list.items.length >= list.total) break;
         }
       } catch { /* 引擎未就绪或请求失败：静默等下一轮，不打扰用户 */ }
       if (live) {

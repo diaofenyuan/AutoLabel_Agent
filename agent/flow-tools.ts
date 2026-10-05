@@ -48,7 +48,10 @@ const stepParameters = {
     forceRerun: { ...nullableBoolean, description: '是否跳过复用并重新请求；null 使用引擎默认 false，真实请求仍受共享预算约束。' },
     reuseMaxAgeSeconds: { ...number(1, Number.MAX_SAFE_INTEGER), description: '历史结果有效期，单位秒；null 表示不限制时间。' } },
   review: { buildIssues: nullableBoolean, randomSample: { anyOf: [{ type: 'null' }, schema({ count: { type: 'integer', minimum: 1, maximum: 1000 }, seed: { type: 'string', minLength: 1, maxLength: 256 } })] }, waitForHuman: nullableBoolean },
-  export: { trainRatio: { type: ['number', 'null'], exclusiveMinimum: 0, exclusiveMaximum: 1 }, onlyConfirmed: nullableBoolean, annotationSelection: choice(['protected', 'candidate'], true) },
+  export: { trainRatio: { type: ['number', 'null'], exclusiveMinimum: 0, exclusiveMaximum: 1 }, onlyConfirmed: nullableBoolean, annotationSelection: choice(['protected', 'candidate'], true),
+    // 只引用已保存或内置的导出格式标识；null 表示沿用内置 YOLO 默认布局。流程不内嵌自定义目录模板。
+    formatId: { ...nullableString, description: '导出格式标识（用 list_export_formats 查看可用的内置/已保存格式）；null 使用内置 YOLO 默认布局。' },
+    formatVersion: number(0, 2147483647) },
 };
 const definitionSchema = schema({ version: { type: 'integer', enum: [1] }, name: { type: 'string', minLength: 1, maxLength: 200 },
   steps: { type: 'array', minItems: 1, maxItems: 30, items: { anyOf: Object.entries(stepParameters).map(([kind, parameters]) => schema({
@@ -382,8 +385,11 @@ async function artifactPage(artifactId: string, env: ToolEnvironment, offset = 0
 async function artifactScope(artifactId: string, env: ToolEnvironment, collect = false) {
   const first = await artifactPage(artifactId, env);
   const allowed = selection(env);
-  if (!allowed && !collect) return { first, assetIds: undefined };
-  const total = integer(first.total, '产物总数', 0, 10000);
+  const total = integer(first.total, '产物总数', 0, Number.MAX_SAFE_INTEGER);
+  // 条目过多时逐页核对（每页 500 条）不划算：这里必须说清是产物本身过大，而不是把它报成
+  // 「参数应为 0～10000 的整数」。原先这条判定只挂在「助手有选中素材」的分支上，同一个产物
+  // 会因为当前有没有选择而得到两种结果，所以改成一视同仁。
+  if (total > 10000) throw new AgentError('FLOW_ARTIFACT_INVALID', `流程产物条目过多（${total} 条），无法完整核对，请缩小输入范围后重试`);
   const assetIds = new Set<string>(), itemIds = new Set<string>();
   let offset = 0, page = first;
   while (offset < total) {
@@ -401,7 +407,9 @@ async function artifactScope(artifactId: string, env: ToolEnvironment, collect =
     if (offset < total) page = await artifactPage(artifactId, env, offset);
   }
   if (!total && (first.items as unknown[]).length) throw new AgentError('FLOW_ARTIFACT_INVALID', '流程产物总数与内容不一致');
-  return { first, assetIds: [...assetIds] };
+  // 没有选择范围、调用方也没要求清单时仍不外传资产列表：这条产物只做「固定输入」的比对基准，
+  // 外传会让视频导入、筛选这类步骤凭空多出一条「必须已属于输入产物」的限制。
+  return { first, assetIds: allowed || collect ? [...assetIds] : undefined };
 }
 async function normalizeInput(raw: unknown, env: ToolEnvironment): Promise<{ input: FlowInput; targetIds?: string[] }> {
   const input = object(raw, '流程输入');
@@ -539,6 +547,11 @@ async function normalizeDefinition(raw: unknown, env: ToolEnvironment, execution
       }
       if (value.onlyConfirmed != null) parameters.onlyConfirmed = bool(value.onlyConfirmed, '仅导出已确认');
       if (value.annotationSelection != null) parameters.annotationSelection = enumValue(value.annotationSelection, ['protected', 'candidate'], '标注版本选择');
+      // 格式标识交给引擎解析（不存在/任务不匹配会在预检暴露）；版本缺省时由引擎取当前版本。
+      if (value.formatId != null) {
+        parameters.formatId = text(value.formatId, '导出格式标识', 128);
+        if (value.formatVersion != null) parameters.formatVersion = integer(value.formatVersion, '导出格式版本', 0, 2147483647);
+      }
     }
     steps.push({ id: sid, kind, enabled, parameters });
   }

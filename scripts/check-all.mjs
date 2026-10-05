@@ -12,12 +12,13 @@ const skipSlow = process.argv.includes('--skip-slow');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const steps = [
   ['类型检查（桌面）', npm, ['run', 'check:desktop']],
+  ['类型检查（界面）', npm, ['run', 'check:renderer']],
   ['类型检查（助手）', npm, ['run', 'check:agent']],
   ['桌面单测', npm, ['run', 'test:desktop']],
   ['助手单测', npm, ['run', 'test:agent']],
   ['引擎测试', 'powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/engine-build.ps1', '-Test']],
 ];
-// 27 条手工 UI 验收（与 desktop-smoke.mjs 的 MANUAL_CHECKS 对应）+ 开发态三项桌面检查。
+// 29 条手工 UI 验收（与 desktop-smoke.mjs 的 MANUAL_CHECKS 对应）+ 两条一键准备检查。
 // 一键准备两条会真实下载几百 MB、本机标注两条跑真实推理：默认计入，--skip-slow 可跳过。
 const manual = ['update-ui', 'usability-ui', 'run-controls', 'media-ui', 'reason-ui', 'annotate-ui', 'unknown-retry-ui', 'frame-scope-ui',
   'project-identity-ui', 'directory-import-ui', 'onboarding-ui', 'ai-preset-ui', 'composer-ui', 'settings-ui', 'error-action-ui',
@@ -26,6 +27,11 @@ const manual = ['update-ui', 'usability-ui', 'run-controls', 'media-ui', 'reason
 const slow = new Set(['runtime-setup-ui', 'runtime-setup-offline-ui', 'local-annotate-ui', 'builtin-five-ui', 'five-ui']);
 const setupChecks = ['runtime-setup-ui', 'runtime-setup-offline-ui'];
 if (!skipUi) {
+  // UI 验收跑的是构建产物（renderer/dist 与 desktop/dist 的 main/agent/preload），不是源码：
+  // 串跑前必须先构建，否则「改完源码没重建」会得到一次假绿灯——界面检查全绿，用户看到的还是旧界面。
+  // 构建同时补上 renderer 的类型检查（build:renderer 就是 tsc -b && vite build）。
+  steps.push(['构建界面产物', npm, ['run', 'build:renderer']]);
+  steps.push(['构建桌面主进程', npm, ['run', 'build:desktop']]);
   for (const name of manual) if (!(skipSlow && slow.has(name))) steps.push([`UI 验收 ${name}`, npm, ['run', `check:${name}`]]);
   for (const name of setupChecks) if (!skipSlow) steps.push([`UI 验收 ${name}`, npm, ['run', `check:${name}`]]);
   steps.push(['UI 验收 主导航与人工示例', 'node', ['scripts/desktop-smoke.mjs', '--ui']]);

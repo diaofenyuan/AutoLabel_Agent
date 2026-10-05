@@ -78,7 +78,11 @@ function checkedPage(value: unknown, offset: number, limit: number) {
   return { raw, items: raw.items.map(value => object(value)), total };
 }
 function unique(rows: Row[], key: string) {
-  const values = rows.map(row => id(row[key], key));
+  // 这里的行来自引擎，标识不合法是「响应不对」而不是「助手传错了参数」：
+  // 报成 INVALID_ARGUMENT 会把模型引去改一个它根本没传的字段。
+  const values = rows.map(row => {
+    try { return id(row[key], key); } catch { return invalid(`轨迹分页中的${key}不合法`); }
+  });
   if (new Set(values).size !== values.length) invalid('轨迹分页包含重复身份');
 }
 function pagination(total: number, offset: number, limit: number, length: number) {
@@ -129,7 +133,10 @@ async function getTrack(env: ToolEnvironment, trackId: string) {
   return { track: track(raw, source), timeline: source };
 }
 function sameTimeline(before: Row, after: Row) {
-  if (['id', 'projectId', 'mediaJobId', 'sourceVideoId', 'version', 'frameCount', 'sequence'].some(key => before[key] !== after[key])) conflict();
+  // templateHash / taskType 必须一起比：分页读取期间模板被换掉时，光看 id、版本号与帧数
+  // 会认为还是同一条时间轴，后面的关键帧就会按另一套模板去解释。
+  if (['id', 'projectId', 'mediaJobId', 'sourceVideoId', 'version', 'frameCount', 'sequence', 'taskType', 'templateHash']
+    .some(key => before[key] !== after[key])) conflict();
 }
 function frame(value: Row, source: Row) {
   id(value.frameId); id(value.assetId); id(value.sourceFrameId);

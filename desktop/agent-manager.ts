@@ -29,10 +29,25 @@ export class AgentManager extends EventEmitter {
         }
       }
     });
-    worker.once('exit', () => {
-      if (this.worker === worker) this.worker = undefined;
-      for (const value of this.pending.values()) { clearTimeout(value.timer); value.reject(new DesktopError('AGENT_EXITED', '对话工作进程已退出；已发送的任务请到任务中心核对')); }
+    // 一个失败进程会先 'error' 再 'exit'。若第一个回调已解引用并让随后的请求换上新 worker，
+    // 第二个回调再无条件清空 pending，会把新 worker 在途的请求一起判失败。
+    // 两个回调都只在「当前仍是这个 worker」时清理，用同一身份判定隔开这两次回调。
+    const failPending = (code: string, message: string) => {
+      for (const value of this.pending.values()) { clearTimeout(value.timer); value.reject(new DesktopError(code, message)); }
       this.pending.clear();
+    };
+    // 启动失败（入口缺失、被安全软件拦下）只在 'error' 上报。EventEmitter 没有 'error' 监听器时
+    // 会把异常抛到事件循环外层，直接掀掉主进程；这里必须接住并让等待中的请求拿到明确错误。
+    worker.on('error', error => {
+      if (this.worker !== worker) { console.error('agent_worker_failed', error); return; }
+      this.worker = undefined;
+      failPending('AGENT_UNAVAILABLE', '对话工作进程无法启动；请重启应用后重试');
+      console.error('agent_worker_failed', error);
+    });
+    worker.once('exit', () => {
+      if (this.worker !== worker) return;
+      this.worker = undefined;
+      failPending('AGENT_EXITED', '对话工作进程已退出；已发送的任务请到任务中心核对');
     });
     return worker;
   }

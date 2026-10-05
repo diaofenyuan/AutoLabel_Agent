@@ -11,7 +11,9 @@ import { useApp } from './context';
  * 只统计引擎真实报告的状态，轮询而不是合成进度；引擎未就绪时保持 0。
  */
 const ACTIVE_RUN = ['running', 'queued', 'paused', 'pausing', 'needs_attention'];
-const ACTIVE_FLOW = ['running', 'queued', 'paused', 'pausing', 'needs_attention'];
+// 流程运行有独立的 cancelling 态（媒体任务也有，已在 ACTIVE_MEDIA 里）；漏掉它会让「正在取消」
+// 的流程不计入进行中，侧栏徽标在取消收尾阶段提前归零。
+const ACTIVE_FLOW = ['running', 'queued', 'paused', 'pausing', 'cancelling', 'needs_attention'];
 const ACTIVE_MEDIA = ['queued', 'running', 'cancelling'];
 
 export function useActiveTaskCount() {

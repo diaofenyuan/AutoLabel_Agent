@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight, Eraser, FolderOpen, LayoutGrid, ListTodo, MessageSquare, MoreHorizontal, Pencil, Pin, PinOff, Plus, Scan, Search,
   Settings as SettingsIcon, Trash2, X,
@@ -31,7 +31,7 @@ type RenameTarget = { kind: 'session' | 'project'; id: string; value: string };
 
 /** Codex 式侧栏：顶部 / 主入口 / 置顶 / 项目 / 最近 / 底部六段，会话来自 chat.history.list。 */
 export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: boolean; drawer?: boolean; onClose: () => void }) {
-  const { page, navigate, project, projects, openProject, refreshProjects, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, requestDeleteProject, notify, engine, setProject } = useApp();
+  const { page, navigate, project, projects, openProject, refreshProjects, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, openChatSession, requestDeleteProject, notify, engine } = useApp();
   // 侧栏「任务」徽标：进行中的长任务数量，切页也能看见还有多少在跑。
   const activeTasks = useActiveTaskCount();
   const [rename, setRename] = useState<RenameTarget | null>(null);
@@ -63,14 +63,18 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
     return () => { document.removeEventListener('mousedown', closeOnOutside); window.removeEventListener('keydown', closeOnEscape); };
   }, [projectMenu, headerMenu]);
   // 菜单锚在行内：行贴近侧栏可视区底部时菜单会被滚动容器裁掉，放不下就改为向上展开。
-  const [menuFlip, setMenuFlip] = useState(false);
+  // 「会话管理」与「项目操作」可以同时开着（各自的按钮只切自己的状态），两个菜单的位置不同，
+  // 必须分别判定：只量先出现的那个，贴在侧栏底部的项目菜单仍会被裁掉，菜单项点不到。
+  const [menuFlip, setMenuFlip] = useState({ header: false, project: false });
   useLayoutEffect(() => {
-    if (!projectMenu && !headerMenu) { setMenuFlip(false); return; }
-    const menu = document.querySelector('.sidebar-menu');
-    const scroller = menu?.closest('.sidebar-scroll');
-    if (!menu || !scroller) return;
-    const overflow = menu.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom;
-    setMenuFlip(overflow > 4);
+    const overflows = (selector: string) => {
+      const menu = document.querySelector(selector);
+      const scroller = menu?.closest('.sidebar-scroll');
+      if (!menu || !scroller) return false;
+      return menu.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom > 4;
+    };
+    const next = { header: headerMenu ? overflows('.sidebar-menu.header-menu') : false, project: projectMenu ? overflows('.sidebar-menu.project-menu') : false };
+    setMenuFlip(current => current.header === next.header && current.project === next.project ? current : next);
   }, [projectMenu, headerMenu]);
 
   // 置顶按 pinOrder、其余按 lastMessageAt 倒序，Ctrl+1…9 与置顶共用同一序列。
@@ -94,13 +98,22 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
   /** Ctrl+1…9 的序号与 `ordered` 一致；把它显示出来，这条既有能力才不用靠帮助文档才发现。 */
   const shortcutOf = useMemo(() => new Map(ordered.slice(0, 9).map((item, index) => [item.id, index + 1])), [ordered]);
 
-  async function openSession(id: string) { setActiveSessionId(id); setHeaderMenu(false); await navigate('chat'); }
-  /** 项目概览需要先把这个项目设为当前上下文，否则概览页拿不到数据。 */
+  /**
+   * 会话属于项目：点开某条会话时要连同它的归属项目一起切过去，
+   * 否则「置顶」或别的项目分组里的会话会在当前项目的上下文里被打开。
+   */
+  const openSession = useCallback(async (id: string) => {
+    setHeaderMenu(false);
+    await openChatSession(id).catch(error => notify(errorMessage(error), true));
+  }, [openChatSession, notify]);
+  const openSessionRef = useRef(openSession); openSessionRef.current = openSession;
+  /**
+   * 项目概览需要先把这个项目设为当前上下文，否则概览页拿不到数据。
+   * 走 openProject 的同一套上下文切换（素材首屏、跨页勾选、抽帧跟踪一起重置），落点改为概览；
+   * 概览不是会话页，因此不挑选也不新建会话。
+   */
   async function openOverview(target: Project) {
-    await run(async () => {
-      setProject(await request<Project>('project.open', { projectId: target.id }));
-      await navigate('overview');
-    });
+    await run(async () => { await openProject(target, undefined, 'overview'); });
   }
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -111,13 +124,13 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
       const target = ordered[index - 1];
       if (!target) return;
       event.preventDefault();
-      setActiveSessionId(target.id);
-      setHeaderMenu(false);
-      void navigate('chat');
+      // 快捷键与点击走同一条路径：跨项目开会话同样要先切项目上下文。
+      void openSessionRef.current(target.id);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [ordered, navigate, setActiveSessionId]);
+    // 会话本身由 ref 提供：快捷键只跟 `ordered` 的顺序绑定，避免每次渲染都换一个监听器。
+  }, [ordered]);
 
   async function run(action: () => Promise<void>, message?: string) {
     if (busy) return;
@@ -185,7 +198,7 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
         <div className="sidebar-group-head"><span className="sidebar-group-title">项目</span>
           <button className="sidebar-group-more" title="新建项目" aria-label="新建项目" onClick={() => setCreatingProject(true)}><Plus size={15} /></button>
           <button className="sidebar-group-more" title="会话管理" aria-label="会话管理" aria-haspopup="menu" aria-expanded={headerMenu} onClick={() => setHeaderMenu(v => !v)}><MoreHorizontal size={15} /></button>
-          {headerMenu && <div className={`sidebar-menu ${menuFlip ? 'flip' : ''}`} role="menu">
+          {headerMenu && <div className={`sidebar-menu header-menu ${menuFlip.header ? 'flip' : ''}`} role="menu">
             <button role="menuitem" disabled={!chatSessions.length} title={!chatSessions.length ? '还没有对话可清空' : undefined} onClick={() => { setHeaderMenu(false); setConfirmClear(true); }}><Eraser size={14} />清空全部对话…</button>
             <button role="menuitem" onClick={() => { setHeaderMenu(false); void navigate('settings', 'chats'); }}><SettingsIcon size={14} />对话记录设置…</button>
           </div>}
@@ -197,7 +210,7 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
                 {/* 素材数直接写在项目行上：同名项目靠它区分，否则用户只能逐个点开看哪个有素材。 */}
                 <button className="sidebar-row" title={`${item.name} · ${item.assetCount} 张素材`} aria-pressed={project?.id === item.id} onClick={() => void openProject(item).catch(e => notify(errorMessage(e), true))}><FolderOpen size={15} /><span className="sidebar-row-title truncate">{item.name}</span><span className="sidebar-project-count">{item.assetCount} 张</span></button>
                 <span className="sidebar-actions"><button aria-label={`项目操作 ${item.name}`} aria-haspopup="menu" aria-expanded={projectMenu === item.id} title="项目操作" onClick={() => setProjectMenu(value => value === item.id ? '' : item.id)}><MoreHorizontal size={15} /></button></span>
-                {projectMenu === item.id && <div className={`sidebar-menu ${menuFlip ? 'flip' : ''}`} role="menu" aria-label={`${item.name} 的项目操作`}>
+                {projectMenu === item.id && <div className={`sidebar-menu project-menu ${menuFlip.project ? 'flip' : ''}`} role="menu" aria-label={`${item.name} 的项目操作`}>
                   <button role="menuitem" onClick={() => { setProjectMenu(''); void openOverview(item); }}><LayoutGrid size={14} />项目概览</button>
                   <button role="menuitem" onClick={() => { setProjectMenu(''); setRename({ kind: 'project', id: item.id, value: item.name }); }}><Pencil size={14} />重命名</button>
                   <button role="menuitem" onClick={() => { setProjectMenu(''); requestDeleteProject(item); }}><Trash2 size={14} />删除项目…</button>

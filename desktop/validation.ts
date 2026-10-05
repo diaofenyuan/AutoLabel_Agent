@@ -130,7 +130,9 @@ const flowApi = z.strictObject({ providerId: id, model: name,
 });
 const flowReview = z.strictObject({ buildIssues: z.boolean().optional(), waitForHuman: z.boolean().optional(),
   randomSample: z.strictObject({ count: count.min(1).max(1000), seed: z.string().min(1).max(256).refine(value => !!value.trim()) }).optional() });
-const flowExport = z.strictObject({ outputDir: z.string().min(1).max(32767), trainRatio: finite.gt(0).lt(1).optional(), onlyConfirmed: z.boolean().optional(), annotationSelection: z.enum(['protected', 'candidate']).optional() });
+// 流程导出可引用已保存/内置的导出格式（与 export.create 同一对字段）；流程快照不内嵌自定义目录模板。
+const flowExport = z.strictObject({ outputDir: z.string().min(1).max(32767), trainRatio: finite.gt(0).lt(1).optional(), onlyConfirmed: z.boolean().optional(), annotationSelection: z.enum(['protected', 'candidate']).optional(),
+  formatId: builtinId.optional(), formatVersion: resourceVersion.optional() });
 const flowStep = z.union([
   z.strictObject({ id: stepId, kind: z.literal('import'), enabled: z.boolean(), parameters: flowImport }),
   z.strictObject({ id: stepId, kind: z.literal('filter'), enabled: z.boolean(), parameters: flowFilter }),

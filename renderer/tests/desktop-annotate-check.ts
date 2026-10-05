@@ -131,6 +131,31 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
     await js(`document.querySelector('.asset-annotator [aria-label="重做标注改动"]').click()`);
     await waitFor(`document.querySelector('.asset-annotator [aria-label="标注对象x"]')?.value==='77'`);
     checks.push({ check: 'annotate-undo-redo-restores-geometry', originalX: 40, undoneX: 40, redoneX: 77 });
+    // 画布上的坐标换算依赖「svg 与图片共用同一个盒子」（见 pages.css 的不变式注释）：图片一旦被
+    // 单独按 max-height 缩小，svg 仍按整个容器居中绘制，点击与拖框就会整体偏移。这里直接量盒子，
+    // 并且必须在放大之后量一次：封顶只在放大时才会让图片与容器分道扬镳。
+    await waitFor(`(()=>{const img=document.querySelector('.asset-annotator .quality-image-stage img');return !!img&&img.complete&&img.naturalWidth>0;})()`);
+    type CanvasBox = { imageW: number; imageH: number; stageW: number; dx: number; dy: number; aspect: number };
+    const measureBoxes = () => js<CanvasBox>(
+      `(()=>{const round=v=>Math.round(v*100)/100;const box=el=>{const r=el.getBoundingClientRect();return {w:r.width,h:r.height,left:r.left,top:r.top};};
+        const stage=document.querySelector('.asset-annotator .quality-image-stage'),img=box(stage.querySelector('img')),svg=box(stage.querySelector('svg'));
+        return {imageW:round(img.w),imageH:round(img.h),stageW:round(stage.getBoundingClientRect().width),
+          dx:round(img.left-svg.left),dy:round(img.top-svg.top),aspect:round((img.w/img.h)/(svg.w/svg.h))};})()`);
+    const baseBox = await measureBoxes();
+    assert.ok(baseBox.imageH <= 561, `编辑画布必须按高度封顶，实际图片 ${baseBox.imageH} 高`);
+    assert.ok(Math.abs(baseBox.imageW - baseBox.stageW) <= 1,
+      `图片必须撑满画布容器，实际图片 ${baseBox.imageW} 宽、容器 ${baseBox.stageW} 宽`);
+    await js(`document.querySelector('.asset-annotator [aria-label="放大画布"]').click()`);
+    await waitFor(`document.querySelector('.asset-annotator .zoom-controls span')?.innerText.trim()==='125%'`);
+    const zoomedBox = await measureBoxes();
+    assert.ok(Math.abs(zoomedBox.dx) <= 1 && Math.abs(zoomedBox.dy) <= 1,
+      `放大后叠加层必须仍与图片重合，实际偏移 ${zoomedBox.dx} × ${zoomedBox.dy}`);
+    assert.ok(Math.abs(zoomedBox.aspect - 1) < 0.01, `放大后叠加层与图片的宽高比必须一致，实际 ${zoomedBox.aspect}`);
+    assert.ok(Math.abs(zoomedBox.imageW - zoomedBox.stageW) <= 1,
+      `放大后图片仍须撑满画布容器，实际图片 ${zoomedBox.imageW} 宽、容器 ${zoomedBox.stageW} 宽`);
+    checks.push({ check: 'annotate-canvas-matches-image-box', baseW: baseBox.imageW, baseH: baseBox.imageH, zoomDx: zoomedBox.dx, zoomDy: zoomedBox.dy, zoomW: zoomedBox.imageW, zoomStageW: zoomedBox.stageW });
+    await js(`document.querySelector('.asset-annotator [aria-label="复位画布缩放"]').click()`);
+    await waitFor(`document.querySelector('.asset-annotator .zoom-controls span')?.innerText.trim()==='100%'`);
     assert.equal(await enabled('保存'), true, '有改动后「保存」应可用');
     await button('保存', dialog);
     await waitFor(`window.autoLabel.request('asset.get',{assetId:${json(target.id)}}).then(a=>a.version>${seeded.version})`);

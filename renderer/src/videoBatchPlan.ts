@@ -5,6 +5,15 @@ import { VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_DOWNSAMPLE_THRESHOLD, VIDEO_MAX_FRAME
  * 场景变化采样、PNG 输出；长边超过阈值时等比缩到目标长边（不留黑边）。
  * 纯参数计算单独成模块：回归测试不需要界面与引擎（bridge/ui 在 node 里不可导入）。
  */
+/**
+ * 一键抽帧面板下一次「开始」还要处理的条目：已经排上队的视频必须跳过。
+ * 面板在停止后或建完任务后仍会显示开始按钮，重复处理同一个视频会给它建第二个抽帧任务，
+ * 抽出的帧再由自动导入哨兵入库，用户得到的是同一段视频的两份素材。失败项不跳过：那是重试。
+ */
+export function remainingBatchItems<T extends { state: { kind: string } }>(items: T[]): T[] {
+  return items.filter(item => item.state.kind !== 'queued');
+}
+
 export function batchExtractionPlan(inspection: VideoInspection): { parameters: VideoExtractionParameters; note?: string } | { error: string } {
   // 时长未知时引擎要求显式时间范围，批量场景没人填：这段只能退回单个面板手动处理。
   if (inspection.durationSeconds === null) return { error: '视频时长未知，无法按默认参数抽帧；请在单个抽帧面板里指定时间范围。' };
@@ -13,6 +22,8 @@ export function batchExtractionPlan(inspection: VideoInspection): { parameters: 
   const downsampled = longEdge > VIDEO_DOWNSAMPLE_THRESHOLD && inspection.width > 0 && inspection.height > 0;
   const scale = VIDEO_DOWNSAMPLE_LONG_EDGE / longEdge;
   // 场景模式候选帧按每 minInterval 秒一个估算，超过引擎单次上限整单会失败：退到按间隔采样并留出余量。
+  // 边界按「上限内」算（ceil，D 正好是 minInterval 的整数倍时仍用场景模式）：最后一个候选落在 t=D 上，
+  // 而视频末帧的 PTS 一定小于时长，实际不会多出那一帧。
   const overLimit = Math.ceil(duration / VIDEO_SCENE_MIN_INTERVAL_SECONDS) > VIDEO_MAX_FRAMES;
   const intervalSeconds = Math.max(1, Math.ceil(duration / Math.max(1, VIDEO_MAX_FRAMES - 1)));
   const parameters: VideoExtractionParameters = {

@@ -2,6 +2,7 @@ import type { BrowserWindow } from 'electron';
 import assert from 'node:assert/strict';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { navItem } from './desktop-navigation';
 
 /**
  * 首屏上手路径验收。
@@ -137,7 +138,7 @@ export async function checkDesktopOnboarding(window: BrowserWindow, output: stri
     const attachment = await js<{ name: string; removeLabel: string | null }>(`(()=>{const chip=document.querySelector('.chat-home .composer-attachments .attachment-chip');return {name:chip?.innerText.trim()??'',removeLabel:chip?.querySelector('button')?.getAttribute('aria-label')??null};})()`);
     assert.ok(attachment.name.includes('首页验收附件.png'));
     assert.equal(attachment.removeLabel, '移除 首页验收附件.png');
-    await js(`[...document.querySelectorAll('.sidebar-bottom .nav-item')].find(node=>node.innerText.trim()==='任务').click()`);
+    await js(`(${navItem('任务')}).click()`);
     await waitFor(`location.hash==='#tasks'&&!!document.querySelector('.tasks-page')`);
     await js(`[...document.querySelectorAll('#app-sidebar nav .nav-item')].find(node=>node.innerText.trim()==='新对话').click()`);
     await waitFor(`document.querySelector('.chat-home textarea')?.value===${json(draft)}`);

@@ -21,6 +21,8 @@ const TIMEOUT_MS = 15 * 60 * 1000;
  */
 export class VideoTranscoder {
   private children = new Set<ReturnType<typeof spawn>>();
+  /** 应用退出时置位：此刻被杀掉的 FFmpeg 不是「转码失败」，报错必须说明是退出导致的中断。 */
+  private stopping = false;
   constructor(private tools: () => Promise<MediaToolPaths>, private directory: string, private log: (message: string) => void) {}
   get busy(): boolean { return this.children.size > 0; }
 
@@ -48,8 +50,14 @@ export class VideoTranscoder {
       const child = spawn(ffmpeg, args, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
       this.children.add(child);
       let stderr = '';
-      const timer = setTimeout(() => child.kill('SIGKILL'), TIMEOUT_MS);
+      let settled = false;
+      // 超时要用自己的标记：child.killed 在退出时被 stop() 也会置位，拿它判超时会把「应用退出」
+      // 报成「转码太慢」，用户再打开应用会看到一句根本没发生过的超时。
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, TIMEOUT_MS);
       const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer); this.children.delete(child);
         if (error) reject(error); else resolve();
       };
@@ -57,8 +65,11 @@ export class VideoTranscoder {
       child.stderr?.on('data', chunk => { if (stderr.length < 4000) stderr += String(chunk); });
       child.once('error', () => finish(new DesktopError('media_runtime_missing', '本机 FFmpeg 无法启动，请到「设置 · 视频工具」重新选择。')));
       child.once('close', (code) => {
+        // 启动失败（ENOENT）也会走 close（退出码 null）：此时已经结算过，别把 null 当成 FFmpeg 的线索记进日志。
+        if (settled) return;
         if (code === 0) return finish();
-        if (child.killed) return finish(new DesktopError('transcode_timeout', '转码耗时过长，已停止。可以只抽取其中一段，或改用图片导入。'));
+        if (timedOut) return finish(new DesktopError('transcode_timeout', '转码耗时过长，已停止。可以只抽取其中一段，或改用图片导入。'));
+        if (this.stopping) return finish(new DesktopError('transcode_cancelled', '应用正在退出，转码已停止。'));
         this.log(`视频转码未完成（退出码 ${code}）：${stderr.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0] ?? '没有错误输出'}`);
         finish(new DesktopError('transcode_failed', '本机 FFmpeg 未能完成转码，可以复制命令到终端手动执行，或改用图片导入。'));
       });
@@ -82,6 +93,7 @@ export class VideoTranscoder {
 
   /** 退出时杀掉仍在跑的 FFmpeg，不留占着文件与磁盘的孤儿进程。 */
   stop(): void {
+    this.stopping = true;
     for (const child of this.children) child.kill('SIGKILL');
     this.children.clear();
   }

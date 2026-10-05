@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer, type ServerResponse } from 'node:http';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { navItem } from './desktop-navigation';
 
 /**
  * 结果未知的补救出口验收。
@@ -79,7 +80,11 @@ export async function checkDesktopUnknownRetry(window: BrowserWindow, output: st
     assert.ok(settled.statistics.unknown > 0, `应有结果未知样本，实际：${json(settled.statistics)}`);
 
     // ===== 任务区：unknown>0 / failed=0 时的按钮可用性与下一步 =====
-    await js(`[...document.querySelectorAll('.sidebar-bottom .nav-item')].find(b=>b.innerText.trim()==='任务').click()`);
+    // 有进行中任务时「任务」按钮里会多出计数徽标（`.nav-badge`），按钮的 innerText 变成「任务\n9」。
+    // 这里注入一个假徽标把这一刻固定下来：按名字导航必须照样命中，旧的 innerText 精确比较则必须失效。
+    const badgeProbe = await js<{ legacy: boolean; current: boolean }>(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>[...node.querySelectorAll('span')].some(span=>span.innerText.trim()==='任务'));const badge=document.createElement('span');badge.className='nav-badge';badge.textContent='9';item.append(badge);const legacy=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='任务');const current=${navItem('任务')};badge.remove();return {legacy:!!legacy,current:!!current};})()`);
+    assert.deepEqual(badgeProbe, { legacy: false, current: true }, `任务按钮带计数徽标时导航仍应按名字命中，实际：${json(badgeProbe)}`);
+    await js(`(${navItem('任务')}).click()`);
     await waitFor(`!!document.querySelector('.task-kind-tabs')`);
     await button('标注任务');
     // 列表由事件驱动刷新，可能比引擎状态晚一拍；等这一行自己写出「需要处理」再点，

@@ -143,7 +143,7 @@ export function useChatFileDrop(onAttach: (attachments: ChatAttachment[]) => voi
       if (notes.length) notify(notes.join(' '));
     } catch (e) { notify(errorMessage(e), true); }
   }
-  const drop = useFileDrop(handle);
+  const drop = useFileDrop(handle, error => notify(errorMessage(error), true));
   return {
     active: drop.active, handlers: drop.handlers, video, closeVideo: () => setVideo(null),
     openVideo: (value: DropVideo) => setVideo(value),

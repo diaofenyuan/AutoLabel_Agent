@@ -46,7 +46,7 @@ const kindNotes: Record<TaskKind, ReactNode> = {
   tracks: <>轨迹标注：视频时间轴上的<Term name="tracks" />、关键帧与待复核候选。</>
 };
 export default function Tasks() {
-  const { events, engine, notify, navigate, assets, project, mediaTaskId, mediaJob, setActiveSessionId } = useApp();
+  const { events, engine, notify, navigate, assets, project, mediaTaskId, mediaJob, openChatSession } = useApp();
   const [kind, setKind] = useState<TaskKind>(mediaTaskId ? 'media' : mediaJob?.timelineId ? 'tracks' : 'flow');
   useEffect(() => {
     if (mediaTaskId) setKind('media');
@@ -79,7 +79,7 @@ export default function Tasks() {
     }
     const run=await request<Run>(`run.${action}`,payload);setSelected(run);setRetryingUnknown(false);await refresh();notify(`操作已提交，任务状态：${stageNames[run.status]??run.status}。`);}catch(e){notify(errorMessage(e),true);}finally{setBusy(false);}}
   /** 回到发起这段任务的会话：任务记录里没有对话标识，靠发起时记下的对应关系跳转。 */
-  async function backToSession(taskId:string){const sessionId=taskOrigin(taskId);if(!sessionId){notify('这段任务不是从对话发起的，没有可跳回的会话。');return;}setActiveSessionId(sessionId);await navigate('chat');}
+  async function backToSession(taskId:string){const sessionId=taskOrigin(taskId);if(!sessionId){notify('这段任务不是从对话发起的，没有可跳回的会话。');return;}await openChatSession(sessionId).catch(e=>notify(errorMessage(e),true));}
   async function askInChat(){await navigate('chat');document.querySelector<HTMLTextAreaElement>('.chat-panel textarea, .chat-home textarea')?.focus();}
   async function reconnect(){if(isDemo||reconnecting)return;setReconnecting(true);try{const status=await (await getBridge()).restartEngine();notify(status.message??(status.state==='ready'?'引擎已连接。':'引擎尚未就绪。'),status.state!=='ready');}catch(e){notify(errorMessage(e),true);}finally{setReconnecting(false);}}
   // 搜索使用任务名、模型和 ID，任务名才是用户在列表里记住的主线索。

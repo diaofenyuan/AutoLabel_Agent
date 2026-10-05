@@ -95,15 +95,19 @@ final class Media {
     }
     static void sample(Path target,int index)throws IOException{
         BufferedImage image=new BufferedImage(960,640,BufferedImage.TYPE_INT_RGB);Graphics2D g=image.createGraphics();
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);
-        g.setPaint(new GradientPaint(0,0,new Color(232,239,244),960,640,new Color(197,211,220)));g.fillRect(0,0,960,640);
-        g.setColor(new Color(180,194,202));g.fillRect(0,480,960,160);
-        int x=170+index*27,y=155+index*13;
-        g.setColor(new Color(42,56,74,30));g.fillOval(x-25,440,480,65);
-        g.setColor(index%2==0?new Color(66,118,196):new Color(199,141,73));g.fillRoundRect(x,y,360,260,18,18);
-        g.setColor(new Color(255,255,255,65));g.fillRoundRect(x+18,y+18,324,15,8,8);
-        g.setColor(new Color(238,242,245));g.fillRoundRect(x+100,y+80,160,95,10,10);
-        g.setColor(new Color(47,62,82));g.setFont(new Font(Font.SANS_SERIF,Font.BOLD,28));g.drawString("SAMPLE "+(index+1),x+107,y+137);
-        g.dispose();ImageIO.write(image,"png",target.toFile());image.flush();
+        try{
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);
+            g.setPaint(new GradientPaint(0,0,new Color(232,239,244),960,640,new Color(197,211,220)));g.fillRect(0,0,960,640);
+            g.setColor(new Color(180,194,202));g.fillRect(0,480,960,160);
+            int x=170+index*27,y=155+index*13;
+            g.setColor(new Color(42,56,74,30));g.fillOval(x-25,440,480,65);
+            g.setColor(index%2==0?new Color(66,118,196):new Color(199,141,73));g.fillRoundRect(x,y,360,260,18,18);
+            g.setColor(new Color(255,255,255,65));g.fillRoundRect(x+18,y+18,324,15,8,8);
+            g.setColor(new Color(238,242,245));g.fillRoundRect(x+100,y+80,160,95,10,10);
+            g.setColor(new Color(47,62,82));g.setFont(new Font(Font.SANS_SERIF,Font.BOLD,28));g.drawString("SAMPLE "+(index+1),x+107,y+137);
+        }finally{g.dispose();}
+        // 编码器不可用时 ImageIO.write 只返回 false：不校验会留下空文件，导入时再报难以定位的解码错误。
+        if(!ImageIO.write(image,"png",target.toFile()))throw new IOException("PNG 编码器不可用，示例图未能写出：" + target.getFileName());
+        image.flush();
     }
 }

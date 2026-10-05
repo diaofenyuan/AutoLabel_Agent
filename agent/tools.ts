@@ -102,6 +102,17 @@ function scopedRecord(value: unknown, environment: ToolEnvironment, label: strin
   if (record.projectId !== projectId(environment)) throw new AgentError('PROJECT_SCOPE', `${label}不属于当前项目`);
   return record;
 }
+/**
+ * 列表类工具的引擎分页必须自洽：条数超过自己请求的 limit、越过总数、或者说好还有下一页却给了空页，
+ * 都会让模型拿着一份错位的清单继续决策，所以这里直接判成「响应不对」而不是继续往下走。
+ */
+function checkedItems<T>(value: { items: T[]; total: number }, offset: number, limit: number, label: string) {
+  const total = integer(value.total, `${label}总数`, 0, Number.MAX_SAFE_INTEGER);
+  const items: T[] = Array.isArray(value.items) ? value.items : [];
+  if (!Array.isArray(value.items) || items.length > limit || (offset < total && (!items.length || offset + items.length > total))
+    || (offset >= total && items.length)) throw new AgentError('ENGINE_RESPONSE_INVALID', `${label}分页响应不完整，请重新读取`);
+  return { items, total };
+}
 function evaluationSummary(value: Record<string, unknown>) {
   const summary = pick(value, ['id', 'projectId', 'setId', 'setVersionId', 'comparisonId', 'status', 'source', 'taskType',
     'createdAt', 'sampleCount', 'match', 'algorithmVersion', 'metrics', 'coverage', 'nearDuplicateCheck', 'pairedComparableSamples']);
@@ -284,7 +295,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       const result = await env.engine.request<{ items: Asset[]; total: number }>('asset.list', {
         projectId: projectId(env), offset, limit: 50, ...(status ? { status } : {}),
       });
-      return { total: result.total, offset, items: result.items.map(assetSummary) };
+      const page = checkedItems(result, offset, 50, '素材');
+      // 素材同样要过项目范围：引擎分页一旦串了项目，模型会拿着别的项目素材 id 继续往下做。
+      for (const asset of page.items) if (asset.projectId !== projectId(env)) throw new AgentError('PROJECT_SCOPE', '素材不属于当前项目');
+      return { total: page.total, offset, items: page.items.map(assetSummary) };
     },
   },
   {
@@ -457,8 +471,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       const results = await env.engine.request<{ items: unknown[]; total: number }>('evaluation.results', {
         evaluationId, ...(assetId ? { assetId } : {}), offset, limit: 25,
       });
-      return { evaluation: evaluationSummary(evaluation), total: results.total, offset,
-        items: results.items.map(raw => pick(object(raw), ['assetId', 'schemeId', 'candidateVersion', 'status', 'reason',
+      const page = checkedItems(results, offset, 25, '评测结果');
+      return { evaluation: evaluationSummary(evaluation), total: page.total, offset,
+        items: page.items.map(raw => pick(object(raw), ['assetId', 'schemeId', 'candidateVersion', 'status', 'reason',
           'metrics', 'matchedObjects', 'missedObjects', 'extraObjects', 'missingPredictedKeypoints', 'coverage'])) };
     },
   },
@@ -579,7 +594,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       const result = await env.engine.request<{ items: unknown[]; total: number }>('review.list', {
         projectId: projectId(env), offset, limit: 50, ...(status ? { status } : {}),
       });
-      return { total: result.total, offset, items: result.items.map(raw => pick(scopedRecord(raw, env, '复核项'), [
+      const page = checkedItems(result, offset, 50, '复核项');
+      return { total: page.total, offset, items: page.items.map(raw => pick(scopedRecord(raw, env, '复核项'), [
         'id', 'assetId', 'candidateVersion', 'objectId', 'reason', 'severity', 'source', 'status', 'evaluationId', 'runId', 'sampleId',
       ])) };
     },

@@ -171,10 +171,11 @@ export default function App() {
     finally { endTransition(token); setAssetsLoading(false); }
   }, [notify, beginTransition, endTransition]);
   /**
-   * 打开项目 = 进入该项目的会话上下文，而不是落到某个页面上。
+   * 打开项目 = 进入该项目的会话上下文。
    * 会话必须属于项目：优先接着这个项目最近的会话，没有就开一条新的；带 firstMessage 时新会话会把这条消息自动发出去。
+   * `to` 指定落点页：概览等入口只切上下文、不挑选或新建会话（会话的挑选与新建属于「进入对话」）。
    */
-  const openProject = useCallback(async (selected: Project, firstMessage?: string) => {
+  const openProject = useCallback(async (selected: Project, firstMessage?: string, to: Page = 'chat') => {
     if (transitionOwner.current) throw new Error('素材正在切换，请稍后。');
     const token = beginTransition(); setAssetsLoading(true); ++assetRevision.current;
     try {
@@ -187,20 +188,22 @@ export default function App() {
       // 换项目等同于换上下文：上一个项目的抽帧跟踪不能带进来。
       setMediaJob(null);
       clearTimeout(toastTimer.current); setToast(null); setProject(opened);
-      const recent = firstMessage ? undefined : chatSessions.filter(session => session.projectId === opened.id)
-        .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))[0];
-      if (recent) setActiveSessionId(recent.id);
-      else {
-        const id = crypto.randomUUID();
-        setChats(state => ({ ...state, [id]: { ...blankChatSession(id, 'project'), ...(firstMessage ? { input: firstMessage, sendOnOpen: true } : {}) } }));
-        setActiveSessionId(id);
-        await request('chat.history.ensure', { sessionId: id, projectId: opened.id, projectName: opened.name, title: firstMessage ?? '新对话' });
+      if (to === 'chat') {
+        const recent = firstMessage ? undefined : chatSessions.filter(session => session.projectId === opened.id)
+          .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))[0];
+        if (recent) setActiveSessionId(recent.id);
+        else {
+          const id = crypto.randomUUID();
+          setChats(state => ({ ...state, [id]: { ...blankChatSession(id, 'project'), ...(firstMessage ? { input: firstMessage, sendOnOpen: true } : {}) } }));
+          setActiveSessionId(id);
+          await request('chat.history.ensure', { sessionId: id, projectId: opened.id, projectName: opened.name, title: firstMessage ?? '新对话' });
+        }
       }
       // 侧栏列表跟着项目一起刷新：导入是「先进项目再刷新列表」之外的路径，
       // 素材数不在这一刻同步的话，侧栏会在刚导入完的当口显示 0 张。
       await refreshProjects();
       await refreshChatSessions();
-      setPage('chat'); history.replaceState(null, '', '#chat');
+      setPage(to); history.replaceState(null, '', `#${to}`);
     } finally { endTransition(token); setAssetsLoading(false); }
   }, [project?.id, chatSessions, refreshChatSessions, refreshProjects, beginTransition, endTransition]);
   /**
@@ -212,6 +215,19 @@ export default function App() {
     await navigate('chat');
   }, [navigate]);
   const requestDeleteProject = useCallback((target: Project) => setDeletion(target), []);
+  /**
+   * 打开一条已有会话。会话的上下文属于项目：从「置顶」「其它项目分组」或搜索里点开会话时，
+   * 当前项目可能还是上一个项目的，这时必须先把项目切过去，否则这条会话里的助手会读到
+   * 另一个项目的素材、类别与设置（`agent.chat` 的项目标识取自当前项目）。
+   */
+  const openChatSession = useCallback(async (sessionId: string) => {
+    const owner = projects.find(item => item.id === chatSessions.find(session => session.id === sessionId)?.projectId);
+    // 归属项目已被删除（会话已移入回收站）时没有可切换的项目，交给会话页显示只读历史。
+    if (!owner || owner.id === project?.id) { setActiveSessionId(sessionId); await navigate('chat'); return; }
+    // `openProject` 结束时已经落在会话页，这里只需把会话覆盖成用户点的那条。
+    await openProject(owner);
+    setActiveSessionId(sessionId);
+  }, [projects, chatSessions, project?.id, openProject, navigate]);
   /** 删除完成后清理状态：被删除的项目不再保持打开，工作台回到对话主页；对话历史仍保留。 */
   const projectDeleted = useCallback(async (projectId: string) => {
     await refreshProjects().catch(() => undefined);
@@ -296,7 +312,7 @@ export default function App() {
     catch (e) { notify(errorMessage(e), true); }
     finally { setReconnecting(false); }
   }
-  return <Context.Provider value={{ page, navigate, settingsSection, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, mediaJob, setMediaJob, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, pendingVideoImports, setPendingVideoImports, homeDraft, setHomeDraft, homeAttachments, setHomeAttachments, openJumper, openHelp, requestDeleteProject }}>
+  return <Context.Provider value={{ page, navigate, settingsSection, mediaTaskId, setMediaTaskId, projects, project, assets, assetOffset, assetTotal, assetPageSize, assetsLoading, loadAssetPage, selectedAssetIds, setSelectedAssetIds, setAssets, setProject, openProject, refreshProjects, refreshAssets, mediaJob, setMediaJob, prefs, setPrefs, savePrefs, providers, refreshProviders, syncWindowDirtySource, events, engine, loading, notify, guard, chats, setChats, chatSessions, refreshChatSessions, activeSessionId, setActiveSessionId, startProjectChat, openChatSession, pendingVideoImports, setPendingVideoImports, homeDraft, setHomeDraft, homeAttachments, setHomeAttachments, openJumper, openHelp, requestDeleteProject }}>
     <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`} onClickCapture={event => {
       const target = event.target;
       if (mobileLayout && !collapsed && target instanceof Element && target.closest('.sidebar .nav-item, .sidebar .sidebar-row')) setSidebarOpen(false);

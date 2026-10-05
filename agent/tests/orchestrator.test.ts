@@ -255,6 +255,31 @@ test('评测摘要保留不可计算分母和覆盖信息，不回传逐图真�
   assert.ok(!output.includes('secret-class-ground-truth'));
 });
 
+test('工具执行到一半被取消时，历史里每个工具调用都有回复', async () => {
+  let entered: (() => void) | undefined;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  let release: ((value: unknown) => void) | undefined;
+  const calls = [call('call-1'), { id: 'call-2', name: 'list_assets', arguments: { offset: 0, limit: 10 } }];
+  const agent = new AgentController(client(command => {
+    if (command === 'provider.capabilities') return { tools: 'verified' };
+    if (command === 'chat.send') return { content: '', toolCalls: calls };
+    if (command === 'project.open') return project;
+    if (command === 'asset.get') { entered!(); return new Promise(resolve => { release = resolve; }); }
+    if (command === 'chat.cancel') return { cancelled: true };
+    return {};
+  }));
+  const running = agent.run(request); await reading;
+  // 取消发生在第一个工具执行期间：此时 assistant 消息已经声明了两个调用，第二个还没轮到。
+  agent.cancel(request.sessionId);
+  release!({ id: 'asset-1', projectId: 'project-1' });
+  const result = await running;
+  assert.equal(result.status, 'cancelled');
+  const announced = result.messages.flatMap(message => message.role === 'assistant' ? (message.tool_calls ?? []).map(item => item.id) : []);
+  const answered = new Set(result.messages.filter(message => message.role === 'tool').map(message => message.tool_call_id));
+  assert.ok(announced.length >= 2, `assistant 应声明两个调用：${JSON.stringify(result.messages)}`);
+  assert.deepEqual(announced.filter(id => !answered.has(id)), [], `每个工具调用都必须有回复：${JSON.stringify(result.messages)}`);
+});
+
 test('准备素材期间取消助手，不会在读取结束后新建标注任务', async () => {
   let releaseAsset: ((value: unknown) => void) | undefined;
   let entered: (() => void) | undefined;

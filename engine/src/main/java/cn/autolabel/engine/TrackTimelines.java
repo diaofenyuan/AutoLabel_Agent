@@ -13,7 +13,11 @@ final class TrackTimelines {
     static long version(JsonObject p,String key){return Costs.integer(p,key,key.equals("baseAnnotationVersion")?0:1,9_007_199_254_740_991L);}
     static String id(JsonObject p,String key){return FlowPlans.string(p,key,128);}
     static String name(JsonObject p,String key,String fallback){return p.has(key)?FlowPlans.string(p,key,200):fallback==null?null:fallback.substring(0,Math.min(fallback.length(),200));}
-    static int pageInt(JsonObject p,String key,int fallback,int min,int max){return p.has(key)?(int)Costs.integer(p,key,min,max):fallback;}
+    /** 分页参数与费用无关：越界要报分页错误码，不能让界面显示「费用数值」类文案。 */
+    static int pageInt(JsonObject p,String key,int fallback,int min,int max){
+        if(!p.has(key))return fallback;
+        try{return (int)Costs.integer(p,key,min,max);}catch(ApiError e){throw error(400,"pagination_invalid",key+" 必须为 "+min+"～"+max+" 范围内的整数。");}
+    }
     static void expect(long expected,long actual){if(expected!=actual)throw error(409,"track_version_conflict","轨迹或时间轴版本已变化，请重新载入后操作。");}
     static ApiError error(int status,String code,String message){return new ApiError(status,code,message);}
     static String hash(JsonElement value){try{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(value.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));}catch(Exception e){throw new IllegalStateException(e);}}

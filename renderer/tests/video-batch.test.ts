@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { VideoInspection } from '../../shared/media';
 import { VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_DOWNSAMPLE_THRESHOLD, VIDEO_MAX_FRAMES, VIDEO_SCENE_MIN_INTERVAL_SECONDS, VIDEO_SCENE_THRESHOLD } from '../../shared/media';
-import { batchExtractionPlan } from '../src/videoBatchPlan';
+import { batchExtractionPlan, remainingBatchItems } from '../src/videoBatchPlan';
 
 function inspection(overrides: Partial<VideoInspection> = {}): VideoInspection {
   return {
@@ -57,4 +57,15 @@ test('超长视频退到按间隔采样并留出帧数余量', () => {
 test('时长正好在上限内时仍用场景模式', () => {
   const plan = batchExtractionPlan(inspection({ durationSeconds: VIDEO_MAX_FRAMES * VIDEO_SCENE_MIN_INTERVAL_SECONDS }));
   assert.ok(!('error' in plan) && plan.parameters.mode === 'scene');
+});
+
+test('再次开始时跳过已排队的视频，失败与待处理的仍会重试', () => {
+  const items = [
+    { path: 'C:/clips/a.mp4', state: { kind: 'queued' } },
+    { path: 'C:/clips/b.mp4', state: { kind: 'failed' } },
+    { path: 'C:/clips/c.mp4', state: { kind: 'pending' } },
+  ];
+  assert.deepEqual(remainingBatchItems(items).map(item => item.path), ['C:/clips/b.mp4', 'C:/clips/c.mp4']);
+  // 全部排完队后没有可发起的条目：面板只剩「关闭」，不会再建第二个任务。
+  assert.deepEqual(remainingBatchItems(items.map(item => ({ ...item, state: { kind: 'queued' } }))), []);
 });

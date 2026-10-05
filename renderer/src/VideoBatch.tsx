@@ -3,7 +3,7 @@ import { VIDEO_DOWNSAMPLE_LONG_EDGE, type MediaJob, type VideoInspection } from 
 import { request, errorMessage, isDemo } from './bridge';
 import { Button, Modal } from './ui';
 import { baseName } from './projectNaming';
-import { batchExtractionPlan } from './videoBatchPlan';
+import { batchExtractionPlan, remainingBatchItems } from './videoBatchPlan';
 
 type BatchItemState = { kind: 'pending' } | { kind: 'working'; label: string } | { kind: 'queued'; note?: string } | { kind: 'failed'; error: string };
 interface BatchItem { path: string; name: string; state: BatchItemState }
@@ -27,7 +27,7 @@ export default function VideoBatchImport({ projectId, files, onClose, onCreated 
     cancelled.current = false;
     setRunning(true); setStopped(false);
     const jobs: MediaJob[] = []; let failed = 0;
-    for (const item of items) {
+    for (const item of remainingBatchItems(items)) {
       if (cancelled.current) break;
       try {
         patch(item.path, { kind: 'working', label: '正在检查…' });
@@ -52,6 +52,8 @@ export default function VideoBatchImport({ projectId, files, onClose, onCreated 
   }
   const queued = items.filter(item => item.state.kind === 'queued').length;
   const failed = items.filter(item => item.state.kind === 'failed').length;
+  // 已经建过任务的视频不再重复发起：全部排完队后只剩「关闭」。
+  const remaining = remainingBatchItems(items);
   const summary = !running && (queued || failed)
     ? `本次已创建 ${queued} 个抽帧任务${failed ? `，${failed} 个未能创建（原因见各条目）` : ''}。${stopped ? '未处理的部分已按要求停止，已创建的任务继续在后台执行。' : ''}`
     : '';
@@ -74,7 +76,7 @@ export default function VideoBatchImport({ projectId, files, onClose, onCreated 
           ? <Button onClick={() => { cancelled.current = true; }}>停止</Button>
           : <>
             <Button onClick={onClose}>{queued ? '关闭' : '取消'}</Button>
-            <Button className="primary" disabled={isDemo} onClick={() => void start()}>开始抽帧（{items.length} 个）</Button>
+            {remaining.length > 0 && <Button className="primary" disabled={isDemo} onClick={() => void start()}>开始抽帧（{remaining.length} 个）</Button>}
           </>}
       </div>
     </div>

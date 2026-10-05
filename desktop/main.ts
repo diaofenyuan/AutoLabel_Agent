@@ -285,8 +285,17 @@ async function refreshStoragePaths(): Promise<StoragePathsState> {
   catch { engine.log('默认数据集目录未能预授权，导出时将要求手动选择目录'); }
   return storagePathsState(storagePaths);
 }
-function storagePathsReport(): StoragePathsState | undefined {
-  return storagePaths ? storagePathsState(storagePaths) : undefined;
+/**
+ * 诊断导出只保留判断依据，不落具体绝对路径：安装目录与数据目录通常带 Windows 用户名，
+ * 而导出面板明确承诺排除「个人绝对路径」。要定位问题有 rootSource / writable / 各类目录的来源与回退原因就够，
+ * 路径本身用户自己能在 设置 → 存储位置 看到。
+ */
+function storagePathsSummary(): Record<string, unknown> {
+  const state = storagePaths ? storagePathsState(storagePaths) : undefined;
+  if (!state) return { available: false };
+  return { available: true, rootSource: state.rootSource, writable: state.writable, usesFallback: state.root === state.fallbackRoot,
+    ...(state.rootReason ? { rootReason: state.rootReason } : {}),
+    entries: state.entries.map(entry => ({ kind: entry.kind, source: entry.source, custom: entry.custom, ...(entry.reason ? { reason: entry.reason } : {}) })) };
 }
 /** Windows 路径大小写不敏感；用它判断受管原图目录是否真的换到了别处。 */
 function sameStoragePath(left: string, right: string): boolean {
@@ -341,10 +350,12 @@ async function diskDiagnostics(): Promise<Record<string, unknown>> {
 }
 async function diagnostics(): Promise<Record<string, unknown>> {
   const usage = await storage?.usage();
+  // 引擎日志在写入时已过 redact（凭据、接口地址与绝对路径都换成占位符），这里只需摘掉真正的原始路径来源：
+  // 存储位置列表带的是安装目录/数据目录的绝对路径，与导出声明里的「已排除个人绝对路径」冲突。
   return { appVersion: app.getVersion(), electronVersion: process.versions.electron, nodeVersion: process.versions.node,
     platform: process.platform, arch: process.arch, packaged: app.isPackaged, credentialProtection: safeStorage.isEncryptionAvailable(),
     ...engine.diagnostics(), storage: { ...await diskDiagnostics(), ...(usage ? { usage } : {}) },
-    storagePaths: storagePathsReport() ?? { available: false },
+    storagePaths: storagePathsSummary(),
     exportScope: ['应用和引擎版本', '连接状态与错误代码', '有限脱敏启动日志'],
     excluded: ['API Key 和认证头', '图片', '完整提示词与响应', '接口 URL', '个人绝对路径'] };
 }
@@ -609,7 +620,8 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
   if (['flow.resume', 'flow.retry', 'flow.rerun'].includes(validated.command) && !payload.definition) {
     const run = await requestEngine.request('flow.get', { flowRunId: payload.flowRunId }) as { definition: unknown; steps?: Array<Record<string, unknown>> };
     const inherited = { ...payload, definition: run.definition };
-    if (fromAgent) assertAgentCommand(validated.command, inherited);
+    // 这里不再对 Agent 复核 inherited：definition 来自引擎里已存的流程（用户创建的流程可以带导入路径），
+    // 真正的 Agent 载荷已在上面按命令校验过；拿存下来的定义复查会把用户自己的流程判成越权。
     for (const step of run.steps ?? []) {
       const fixed = step.local && typeof step.local === 'object' ? step.local as Record<string, unknown> : step.kind === 'local' ? step : undefined;
       if (fixed?.modelId) await authorizeLocal({ modelId: fixed.modelId, modelVersion: fixed.modelVersion });
@@ -1207,7 +1219,8 @@ app.on('child-process-gone', async (_event, details) => {
     const engineStarted = engine.start();
     await createWindow();
     windowCreated = true;
-    void engineStarted.then(async started => { if (started.state === 'ready') preferences = await preferenceStore.update({ dataEstablished: true }); });
+    void engineStarted.then(async started => { if (started.state === 'ready') preferences = await preferenceStore.update({ dataEstablished: true }); })
+      .catch(error => appendStartupLog(`记录数据目录状态失败：${redact(error)}`));
     // 休眠/唤醒不得因为存储忙而丢事件：suspend 期间跳过可以，resume 必须送达，
     // 否则引擎会一直停在「已休眠」状态、事件流永久空转，界面只能靠手动重连恢复。
     powerMonitor.on('suspend', () => { if (!storage?.busy) void engine.suspend(); });

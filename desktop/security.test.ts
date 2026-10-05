@@ -94,6 +94,9 @@ test('素材协议拒绝路径、查询参数与外部来源', () => {
   assert.equal(isTrustedUrl('http://127.0.0.1:5173.evil.test', 'http://127.0.0.1:5173'), false);
   assert.equal(isTrustedUrl('autolabel-app://app/index.html'), true);
   assert.deepEqual(normalizeMedia({ id: 'asset-1', mediaUrl: 'http://127.0.0.1:1/media/asset-1' }), { id: 'asset-1', mediaUrl: 'autolabel-media://asset/asset-1' });
+  assert.deepEqual(normalizeMedia({ id: 'asset-1', mediaUrl: 'autolabel-media://asset/asset-1', thumbnailUrl: 'autolabel-media://thumb/asset-1' }),
+    { id: 'asset-1', mediaUrl: 'autolabel-media://asset/asset-1', thumbnailUrl: 'autolabel-media://thumb/asset-1' });
+  assert.deepEqual(normalizeMedia({ id: 'asset-1', thumbnailUrl: 'autolabel-media://thumb/asset-1?path=other' }), { id: 'asset-1' });
 });
 test('资源图片绑定具体版本，拒绝路径注入和内部图片命令', () => {
   const url = 'autolabel-media://resource/ref-1/2147483647';
@@ -116,6 +119,10 @@ test('流程严格限定执行范围、节点参数与人工确认权限', () =>
   assert.doesNotThrow(() => validateCommand('flow.preflight', incomplete));
   assert.throws(() => validateCommand('flow.create', incomplete));
   assert.throws(() => validateCommand('flow.preflight', { ...incomplete, definition: { ...request.definition, steps: [{ ...step, parameters: { prompt: 123 } }] } }));
+  // 流程导出可引用已保存/内置的导出格式；格式标识仍受内置前缀规则约束，不能塞任意字符串。
+  const exportStep = (parameters: Record<string, unknown>) => ({ id: 'export', kind: 'export', enabled: true, parameters });
+  assert.doesNotThrow(() => validateCommand('flow.preflight', { ...request, definition: { ...request.definition, steps: [step, exportStep({ formatId: 'builtin:yolo', formatVersion: 2 })] } }));
+  assert.throws(() => validateCommand('flow.preflight', { ...request, definition: { ...request.definition, steps: [step, exportStep({ formatId: 'builtin:bad id!' })] } }), /格式不正确/);
   assert.doesNotThrow(() => validateCommand('flow.preflight', { ...request, input: { source: 'artifact', artifactId: 'artifact-1' }, execution: { mode: 'single', stepId: 'api.v1' } }));
   for (const change of [{ maxRequests: undefined }, { input: { source: 'project', selection: 'explicit', assetIds: [] } },
     { input: { source: 'project', selection: 'all', assetIds: ['a'] } }, { execution: { mode: 'all', stepId: 'api.v1' } },

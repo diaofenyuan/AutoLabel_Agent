@@ -149,6 +149,11 @@ test('步骤 schema 封闭路径、参考和任意参数，导出仅使用 conte
   await tool('preflight_flow').execute(start([step('export', { onlyConfirmed: true, annotationSelection: 'protected', trainRatio: 0.8 })]), f.environment);
   const sent = f.calls.at(-1)?.payload.definition as { steps: Array<{ parameters: RecordValue }> };
   assert.equal(sent.steps[0].parameters.outputDir, 'D:/chosen/export');
+  // 导出格式标识与版本随步骤下发（由引擎在预检解析）；模型不给标识时不得凭空注入该键。
+  await tool('preflight_flow').execute(start([step('export', { onlyConfirmed: true, annotationSelection: 'protected', trainRatio: 0.8, formatId: 'builtin:coco', formatVersion: 3 })]), f.environment);
+  const formatted = ((f.calls.at(-1)!.payload.definition as RecordValue).steps as Array<{ parameters: RecordValue }>)[0].parameters;
+  assert.deepEqual([formatted.formatId, formatted.formatVersion], ['builtin:coco', 3]);
+  assert.equal('formatId' in sent.steps[0].parameters, false);
   assert.equal(f.mutations().length, 0);
   const encoded = JSON.stringify(tool('start_flow').parameters);
   assert.equal(encoded.includes('outputDir'), false); assert.equal(encoded.includes('referenceResources'), false);
