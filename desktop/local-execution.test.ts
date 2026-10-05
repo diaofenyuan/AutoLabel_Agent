@@ -137,6 +137,49 @@ test('模型执行授权按作用域和摘要持久化，外部恢复与改写�
   } finally { await f.close(); }
 });
 
+test('同一模型重复授权只登记一条，引擎拒绝时不落下桌面授权', async () => {
+  const f = await fixture();
+  try {
+    const model = path.join(f.root, 'Model.pt'); await writeFile(model, 'model-original');
+    await f.grants.add(model, 'model');
+    const modelHash = createHash('sha256').update('model-original').digest('hex');
+    await f.local.authorizeSelectedModel('current', model, () => undefined, f.engine);
+    await f.local.authorizeSelectedModel('current', model, () => undefined, f.engine);
+    const grants = (f.preferences.value.localModelGrants as Record<string, Record<string, string>>).current;
+    assert.deepEqual(grants, { [model]: modelHash });
+    assert.deepEqual(await f.local.modelAuthorizations('current'), [{ path: model, modelHash }]);
+
+    // 引擎授权失败（文件在两次哈希之间被改写、引擎不可用）时不能留下「桌面已授权、引擎不认」的半状态。
+    const rejected = path.join(f.root, 'rejected.pt'); await writeFile(rejected, 'model-rejected');
+    await f.grants.add(rejected, 'model');
+    const failing = { request: async (): Promise<unknown> => { throw new Error('引擎不可用'); }, log: () => undefined };
+    await assert.rejects(f.local.authorizeSelectedModel('current', rejected, () => undefined, failing), /引擎不可用/);
+    assert.deepEqual(await f.local.modelAuthorizations('current'), [{ path: model, modelHash }]);
+    await assert.rejects(f.local.requireModel('current', rejected, createHash('sha256').update('model-rejected').digest('hex')), /重新选择/);
+  } finally { await f.close(); }
+});
+
+test('模型库内文件免选择授权但越界拒绝，重启后失效路径不能取得执行授权', async () => {
+  const f = await fixture();
+  try {
+    const library = path.join(f.root, 'library'); await mkdir(library);
+    const inside = path.join(library, 'yolo11n.pt'); await writeFile(inside, 'library-model');
+    const outside = path.join(f.root, 'outside.pt'); await writeFile(outside, 'outside-model');
+    const modelHash = createHash('sha256').update('library-model').digest('hex');
+    await assert.rejects(f.local.trustModel('current', outside, [library], () => undefined, f.engine), /模型库目录/);
+
+    assert.deepEqual(await f.local.trustModel('current', inside, [library], () => undefined, f.engine), { path: inside, modelHash });
+    const reloaded = new DesktopPreferences(f.preferences.filename); await reloaded.load();
+    const restarted = new LocalExecutionSettings(reloaded, new PathGrants());
+    assert.deepEqual(await restarted.modelAuthorizations('current'), [{ path: inside, modelHash }]);
+    assert.equal(await restarted.requireModel('current', inside, modelHash), inside);
+
+    await rm(inside);
+    assert.deepEqual(await restarted.modelAuthorizations('current'), []);
+    await assert.rejects(restarted.requireModel('current', inside, modelHash), /重新选择/);
+  } finally { await f.close(); }
+});
+
 test('固定输入媒体只读取受管 PNG，拒绝错绑、查询、外部文件和目录连接', async () => {
   const f = await fixture();
   try {
