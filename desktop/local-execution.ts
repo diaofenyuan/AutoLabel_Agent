@@ -8,6 +8,16 @@ import { DesktopError } from './validation';
 
 interface LocalEngine { request(command: string, payload?: Record<string, unknown>): Promise<unknown>; log(message: string): void }
 const samePath = (left: string, right: string) => path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+/**
+ * 授权存储键与引擎 LocalRuntime.pathKey 同口径：只有大小写不敏感的文件系统（Windows）才折叠大小写。
+ *
+ * 无条件小写会把已授权模型的路径存成当前机器上不存在的路径：区分大小写的系统上 regularFile 连
+ * realpath 都失败，重启后模型授权既列不出来、也传不给引擎，用户被迫重新选一次模型。
+ */
+const pathKey = (value: string) => {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+};
 
 async function regularFile(value: unknown, extensions: string[]): Promise<string> {
   if (typeof value !== 'string' || !path.isAbsolute(value) || value.includes('\0')) throw new DesktopError('LOCAL_PATH_DENIED', '请通过文件选择器指定本地文件');
@@ -65,7 +75,7 @@ export class LocalExecutionSettings {
       const selected = await regularFile(await this.grants.require(filename, ['model']), ['.pt', '.onnx']);
       const modelHash = await hashFile(selected);
       const scopes = this.preferences.value.localModelGrants as Record<string, Record<string, string>> | undefined;
-      await this.preferences.update({ localModelGrants: { ...scopes, [scope]: { ...scopes?.[scope], [selected.toLowerCase()]: modelHash } } });
+      await this.preferences.update({ localModelGrants: { ...scopes, [scope]: { ...scopes?.[scope], [pathKey(selected)]: modelHash } } });
       if (engine) await engine.request('local.model.authorize', { path: selected, modelHash });
       return selected;
     });
@@ -80,8 +90,8 @@ export class LocalExecutionSettings {
     return this.serial(async () => {
       guard();
       const selected = await regularFile(filename, ['.pt', '.onnx']);
-      const key = path.resolve(selected).toLowerCase();
-      if (!roots.some(root => key === path.resolve(root).toLowerCase() || key.startsWith(path.resolve(root).toLowerCase() + path.sep))) {
+      const key = pathKey(selected);
+      if (!roots.some(root => key === pathKey(root) || key.startsWith(pathKey(root) + path.sep))) {
         throw new DesktopError('LOCAL_MODEL_NOT_IN_LIBRARY', '只能授权模型库目录内的文件');
       }
       const modelHash = await hashFile(selected);
@@ -106,7 +116,7 @@ export class LocalExecutionSettings {
   async requireModel(scope: string, filename: unknown, expectedHash: unknown): Promise<string> {
     const selected = await regularFile(filename, ['.pt', '.onnx']);
     const scopes = this.preferences.value.localModelGrants as Record<string, Record<string, string>> | undefined;
-    if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/i.test(expectedHash) || scopes?.[scope]?.[selected.toLowerCase()] !== expectedHash.toLowerCase()) {
+    if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/i.test(expectedHash) || scopes?.[scope]?.[pathKey(selected)] !== expectedHash.toLowerCase()) {
       throw new DesktopError('LOCAL_MODEL_NOT_AUTHORIZED', '请为当前数据目录重新选择此模型文件，历史记录或恢复备份不能授权模型执行');
     }
     // Java 在加载和推理时核对实际文件摘要；此处只核对用户曾明确授权的文件身份。
