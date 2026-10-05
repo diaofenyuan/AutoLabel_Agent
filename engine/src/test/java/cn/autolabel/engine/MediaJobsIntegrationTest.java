@@ -21,7 +21,7 @@ public final class MediaJobsIntegrationTest {
     private static JsonObject step(String id,String kind,JsonObject p){return Json.obj("id",id,"kind",kind,"enabled",true,"parameters",p);}
     public static void main(String[] args)throws Exception{
         if(args.length!=3)throw new IllegalArgumentException("ffmpeg ffprobe video");ffmpeg=Path.of(args[0]).toAbsolutePath();ffprobe=Path.of(args[1]).toAbsolutePath();video=Path.of(args[2]).toAbsolutePath();root=Path.of("engine/build/verification/media-jobs-"+System.currentTimeMillis()).toAbsolutePath();Files.createDirectories(root);
-        realVideo();sameContent();bulkImport();recoveryAndCancellation();artifactRecovery();System.out.println("PASS "+checks+" media integration checks; VERIFICATION_DIR="+root);
+        realVideo();sameContent();bulkImport();recoveryAndCancellation();artifactRecovery();importRecovery();System.out.println("PASS "+checks+" media integration checks; VERIFICATION_DIR="+root);
     }
     private static void realVideo()throws Exception{
         try(Engine e=new Engine(root.resolve("real"),startup())){
@@ -88,6 +88,26 @@ public final class MediaJobsIntegrationTest {
         try(Engine e=new Engine(data,startup())){JsonObject recovered=cmd(e,"media.job.get",Json.obj("jobId",id));check(Json.required(recovered,"status").equals("interrupted")&&Json.bool(recovered,"canImport",false),"reconcile complete file before DB bookkeeping crash gap");cmd(e,"media.video.import",Json.obj("jobId",id));check(Json.bool(await(e,id),"assetsCommitted",false),"recovered artifact imports without re-extraction");
             String damaged=Json.required(cmd(e,"media.video.create",Json.obj("projectId",pid,"sourcePath",video.toString(),"parameters",parameters())),"id");check(Json.bool(await(e,damaged),"artifactCommitted",false),"tamper fixture completed");Path frame=data.resolve("media-jobs/"+damaged+"/generation/frames/frame-00000000.png");Files.write(frame,new byte[]{1},StandardOpenOption.APPEND);cmd(e,"media.video.import",Json.obj("jobId",damaged));JsonObject failed=await(e,damaged);check(Json.required(failed,"status").equals("failed")&&!Json.bool(failed,"assetsCommitted",true),"changed frame prevents complete import transaction");check(Json.integer(e.projects.get(pid),"assetCount",0)==6,"tampered artifact adds zero assets");
             cmd(e,"system.suspend",new JsonObject());String queued=Json.required(cmd(e,"media.video.create",Json.obj("projectId",pid,"sourcePath",video.toString(),"parameters",parameters())),"id");check(!Json.bool(cmd(e,"system.prepareUpdate",new JsonObject()),"ready",true),"queued media blocks installer update");JsonObject lock=cmd(e,"system.prepareDataMaintenance",Json.obj("operationId","media-backup-check"));check(Json.bool(lock,"ready",false),"queued media can be backed up without dispatch");check(Json.required(cmd(e,"media.job.get",Json.obj("jobId",queued)),"status").equals("queued"),"data maintenance preserves queued media");cmd(e,"system.cancelDataMaintenance",Json.obj("operationId","media-backup-check"));
+        }
+    }
+    /** 导入途中随引擎重启被打断的任务：产物已封存、素材未提交，恢复后必须仍能继续导入。
+     *  覆盖两件事：stage 从 importing 归一到 ready（否则界面显示「正在导入素材 · 执行中断」自相矛盾），
+     *  以及 canImport 与 stage 表达一致，用户点导入即可补完，不必重新抽帧。 */
+    private static void importRecovery()throws Exception{
+        Path data=root.resolve("import-recovery");String id,pid;
+        try(Engine e=new Engine(data,startup())){
+            pid=Json.required(project(e),"id");id=Json.required(cmd(e,"media.video.create",Json.obj("projectId",pid,"sourcePath",video.toString(),"parameters",parameters())),"id");
+            JsonObject ready=await(e,id);check(Json.bool(ready,"artifactCommitted",false)&&Json.required(ready,"stage").equals("ready"),"artifact fixture ready before simulated in-flight import");
+            // 模拟「素材导入在途时引擎被杀」：DB 侧中间态正是 status=running / stage=importing，产物与素材提交标记原样保留。
+            String jobId=id;e.store.tx(c->{JsonObject job=Store.document(c,"media_jobs",jobId);job.addProperty("status","running");job.addProperty("stage","importing");job.addProperty("operation","import");Store.update(c,"UPDATE media_jobs SET status='running',data=? WHERE id=?",job,jobId);return null;});
+        }
+        try(Engine e=new Engine(data,startup())){
+            JsonObject recovered=cmd(e,"media.job.get",Json.obj("jobId",id));
+            check(Json.required(recovered,"status").equals("interrupted"),"in-flight import restart marks job interrupted");
+            check(Json.required(recovered,"stage").equals("ready"),"resumable import stage normalized back to ready, got "+Json.required(recovered,"stage"));
+            check(Json.bool(recovered,"canImport",false),"interrupted in-flight import stays importable");
+            cmd(e,"media.video.import",Json.obj("jobId",id));check(Json.bool(await(e,id),"assetsCommitted",false),"resumed import commits without re-extraction");
+            check(Json.integer(e.projects.get(pid),"assetCount",0)==6,"resumed import commits all six frames");
         }
     }
 }

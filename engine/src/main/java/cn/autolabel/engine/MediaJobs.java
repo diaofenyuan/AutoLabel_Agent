@@ -26,8 +26,12 @@ final class MediaJobs implements AutoCloseable {
     MediaJobs(Engine engine,JsonObject startup){
         this.engine=engine;store=engine.store;
         ffmpeg=startupPath(startup,"mediaFfmpegPath");ffprobe=startupPath(startup,"mediaFfprobePath");
-        JsonArray interrupted=store.read(c->Store.docs(c,"SELECT data FROM media_jobs WHERE status IN ('queued','running','cancelling')"));for(JsonElement value:interrupted){JsonObject job=value.getAsJsonObject();recoverCompletedArtifact(job);store.tx(c->{job.addProperty("status","interrupted");job.add("error",Json.obj("code","media_restart_interrupted","message","引擎重启中断了媒体操作；已完成产物可校验后导入，其余可重新运行。"));save(c,job,"interrupted");return null;});}
+        JsonArray interrupted=store.read(c->Store.docs(c,"SELECT data FROM media_jobs WHERE status IN ('queued','running','cancelling')"));for(JsonElement value:interrupted){JsonObject job=value.getAsJsonObject();recoverCompletedArtifact(job);normalizeResumeStage(job);store.tx(c->{job.addProperty("status","interrupted");job.add("error",Json.obj("code","media_restart_interrupted","message","引擎重启中断了媒体操作；已完成产物可校验后导入，其余可重新运行。"));save(c,job,"interrupted");return null;});}
     }
+    /** 恢复导入途中被打断的任务：产物已封存、素材未提交时把 stage 归一到 ready。
+     *  否则 stage 会停在 importing，界面出现「正在导入素材 · 执行中断」这种自相矛盾的文案，
+     *  与 canImport（只要求已封存、未入库、非在途）对「可导入」的表述也不一致。仅对抽帧任务生效。 */
+    private static void normalizeResumeStage(JsonObject job){if(Json.required(job,"kind").equals("video_extract")&&Json.bool(job,"artifactCommitted",false)&&!Json.bool(job,"assetsCommitted",false))job.addProperty("stage","ready");}
     private static Path startupPath(JsonObject p,String key){if(!p.has(key)||p.get(key).isJsonNull())return null;return executable(Json.required(p,key));}
     private static Path executable(String value){try{Path path=Path.of(value);if(!path.isAbsolute()||!Files.isRegularFile(path))throw new IOException();return path.toRealPath();}catch(Exception e){throw error(400,"media_tool_invalid","媒体工具必须是已存在的绝对文件路径。");}}
     JsonObject runtime(){synchronized(gate){return Json.obj("configured",ffmpeg!=null&&ffprobe!=null,"ffmpegConfigured",ffmpeg!=null,"ffprobeConfigured",ffprobe!=null,"busy",currentId!=null);}}
