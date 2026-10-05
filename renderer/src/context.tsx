@@ -77,9 +77,11 @@ export interface AppState {
    * 正在跟踪的抽帧任务。放在应用层：抽帧常常要等几十秒，用户切页再回来时进度与自动导入都不该丢。
    * 消费者是对话区的抽帧进度条（FrameJobStrip）：产物就绪即自动导入，并把 timelineId 记回来，
    * 用户点「去视频轨迹」直接落到这一条，而不是在一串历史时间轴里重新找。
+   * 一键抽帧会一次建多个任务：`following` 是排在当前任务后面的任务 id，引擎本就逐个执行，
+   * 进度条走完一条自动接上下一条，自动导入链路对整批任务都成立。
    */
-  mediaJob: { id: string; temporarySource?: string; timelineId?: string } | null;
-  setMediaJob: React.Dispatch<React.SetStateAction<{ id: string; temporarySource?: string; timelineId?: string } | null>>;
+  mediaJob: { id: string; temporarySource?: string; timelineId?: string; following?: string[] } | null;
+  setMediaJob: React.Dispatch<React.SetStateAction<{ id: string; temporarySource?: string; timelineId?: string; following?: string[] } | null>>;
   setAssets: React.Dispatch<React.SetStateAction<Asset[]>>;
   setProject: React.Dispatch<React.SetStateAction<Project | null>>;
   /** 第二个参数是随项目一起发出的首条消息：用于「描述即建项目」后立刻开始第一条对话。 */

@@ -34,6 +34,17 @@ export const VIDEO_DENSITY_LABELS: Record<VideoDensity, string> = { scene: '场�
 export const VIDEO_SCENE_THRESHOLD = 0.15;
 export const VIDEO_SCENE_MIN_INTERVAL_SECONDS = 1;
 
+/** 引擎单次抽帧上限，与 VideoFrames.java 的 maxFrames 默认值一致；超过就整单失败，所以在 UI 侧提前拦截。 */
+export const VIDEO_MAX_FRAMES = 10000;
+
+/**
+ * 默认降采样阈值与目标长边（单个抽帧面板与一键抽帧共用同一组默认值）。
+ * 走查的对照测试证明体积不是超时的主因（4 MiB 与 100 KB 的失败率都约 70%），
+ * 但它确实是放大项：先按住最容易放大问题的那个因素，同时不把「降采样」当成重试出口的替代品。
+ */
+export const VIDEO_DOWNSAMPLE_THRESHOLD = 1600;
+export const VIDEO_DOWNSAMPLE_LONG_EDGE = 1024;
+
 /**
  * 抽帧配方：固化「同一类素材往往会重复选择」的那部分选项。
  *

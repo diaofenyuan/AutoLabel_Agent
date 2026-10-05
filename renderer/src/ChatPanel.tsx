@@ -4,6 +4,7 @@ import ConfigurationView from './ConfigurationView';
 import ReferencePicker from './ReferencePicker';
 import ResultCard from './ResultCard';
 import VideoImport from './VideoImport';
+import VideoBatchImport from './VideoBatch';
 import { AgentSteps, PlanCard, useAgentSteps, type AgentStep } from './AgentActivity';
 import { TaskCards } from './TaskCards';
 import ModelPicker from './ModelPicker';
@@ -288,8 +289,21 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
         </div>
       </Composer>
     </footer>
-    {/* 拖入多个视频时先给候选清单：原先只打开第一个，其余文件名连提都不提。 */}
-    <VideoPickList picks={drop.picks} onChoose={drop.chooseVideo} onClose={drop.closePicks} />
+    {/* 拖入多个视频时先给候选清单：逐个调参数或一键整批排队都在这里选。 */}
+    <VideoPickList picks={drop.picks} onChoose={drop.chooseVideo} onChooseAll={drop.chooseAll} onClose={drop.closePicks} />
+    {/* 一键抽帧：整批按默认参数建任务，首个任务交给进度条跟踪，其余排在其后逐个推进。 */}
+    {drop.batch && (() => {
+      const batch = drop.batch;
+      return <VideoBatchImport key={batch.projectId} projectId={batch.projectId} files={batch.files}
+        onClose={drop.closeBatch}
+        onCreated={({ jobs, failed, stopped }) => {
+          setMediaTaskId(jobs[0].id); setMediaJob({ id: jobs[0].id, following: jobs.slice(1).map(job => job.id) });
+          drop.closeBatch();
+          const pending = stopped ? batch.files.length - jobs.length - failed : 0;
+          notify(`已为 ${jobs.length} 个视频创建抽帧任务，正在排队逐个处理${failed ? `，另有 ${failed} 个未能创建` : ''}${pending ? `，停止时还有 ${pending} 个未处理` : ''}；素材就绪后自动导入，进度见侧栏「任务」。`);
+          void navigate('overview');
+        }} />;
+    })()}
     {drop.video && <VideoImport key={drop.video.path} projectId={drop.video.projectId} initialSourcePath={drop.video.path} onClose={drop.closeVideo}
       onCreated={(job, temporarySource) => {
         setMediaTaskId(job.id); setMediaJob({ id: job.id, temporarySource }); drop.closeVideo();

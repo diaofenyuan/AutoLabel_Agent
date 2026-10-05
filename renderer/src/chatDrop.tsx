@@ -12,10 +12,10 @@ export interface VideoPicks { projectId: string; files: string[] }
 
 /**
  * 多视频候选清单：拖入多个视频、或选中一个视频文件夹时都用它。
- * 一次只起一个抽帧任务——同时跑几个既慢又难查，做成队列调度又超出本轮范围，
- * 所以只做「先列出来、逐个点」这一步，并在清单上把这件事写明白。
+ * 逐个点「抽帧」进入单个面板调参数；`onChooseAll` 走一键抽帧——按默认参数整批排队，
+ * 由 VideoBatchImport 承接。引擎本就逐个执行媒体任务，批量建任务不会并发抢 FFmpeg。
  */
-export function VideoPickList({ picks, onChoose, onClose }: { picks: VideoPicks | null; onChoose: (path: string) => void; onClose: () => void }) {
+export function VideoPickList({ picks, onChoose, onChooseAll, onClose }: { picks: VideoPicks | null; onChoose: (path: string) => void; onChooseAll?: (files: string[]) => void; onClose: () => void }) {
   const [query, setQuery] = useState(''), [showAll, setShowAll] = useState(false);
   if (!picks) return null;
   const matched = picks.files.filter(file => !query.trim() || file.toLowerCase().includes(query.trim().toLowerCase()));
@@ -23,7 +23,8 @@ export function VideoPickList({ picks, onChoose, onClose }: { picks: VideoPicks 
   const visible = showAll ? matched : matched.slice(0, 20);
   return <Modal title="选择要抽帧的视频" onClose={onClose}>
     <div className="form-stack">
-      <p className="muted tiny">共 {picks.files.length} 个候选{matched.length !== picks.files.length ? `（筛选出 ${matched.length} 个）` : ''}，一次处理一个：抽完一个再点下一个，避免多个抽帧任务同时跑。</p>
+      <p className="muted tiny">共 {picks.files.length} 个候选{matched.length !== picks.files.length ? `（筛选出 ${matched.length} 个）` : ''}。可以逐个点「抽帧」调好参数再抽，也可以一键抽帧：整批按默认参数排队处理。</p>
+      {matched.length > 1 && onChooseAll && <div className="actions"><Button className="primary" onClick={() => onChooseAll(matched)}>一键抽帧（{matched.length} 个）</Button></div>}
       {picks.files.length > 8 && <SearchField value={query} onChange={setQuery} placeholder="按文件名搜索" />}
       <div className="board-list video-pick-list">{visible.map(file => <article className="board-row" key={file}>
         <div className="board-main"><strong>{baseName(file)}</strong><span className="muted tiny break-word">{file}</span></div>
@@ -120,6 +121,7 @@ export function useChatFileDrop(onAttach: (attachments: ChatAttachment[]) => voi
   const { notify } = useApp();
   const [video, setVideo] = useState<DropVideo | null>(null);
   const [picks, setPicks] = useState<VideoPicks | null>(null);
+  const [batch, setBatch] = useState<VideoPicks | null>(null);
   async function handle(files: DroppedFiles) {
     const rejection = dropRejectionNotice(files);
     if (rejection) notify(rejection, true);
@@ -146,7 +148,10 @@ export function useChatFileDrop(onAttach: (attachments: ChatAttachment[]) => voi
     active: drop.active, handlers: drop.handlers, video, closeVideo: () => setVideo(null),
     openVideo: (value: DropVideo) => setVideo(value),
     picks, openPicks: (value: VideoPicks) => setPicks(value), closePicks: () => setPicks(null),
-    chooseVideo: (path: string) => { const current = picks; setPicks(null); if (current) setVideo({ projectId: current.projectId, path }); }
+    chooseVideo: (path: string) => { const current = picks; setPicks(null); if (current) setVideo({ projectId: current.projectId, path }); },
+    batch, closeBatch: () => setBatch(null),
+    // 一键抽帧整批接手当前清单：清单关闭，批量弹窗按同一批文件（含搜索筛选后的结果）打开。
+    chooseAll: (files: string[]) => { const current = picks; setPicks(null); if (current) setBatch({ projectId: current.projectId, files }); }
   };
 }
 

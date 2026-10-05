@@ -5,6 +5,7 @@ import { Composer } from './ui';
 import OnboardingLanes from './OnboardingLanes';
 import { DropOverlay } from './fileDrop';
 import VideoImport from './VideoImport';
+import VideoBatchImport from './VideoBatch';
 import ModelPicker from './ModelPicker';
 import FlowPicker from './FlowPicker';
 import LocalModelPicker from './LocalModelPicker';
@@ -115,7 +116,7 @@ export default function ChatHome() {
       setProjectPrompt({
         title: '选择视频抽帧', confirmLabel: '继续', suggest: folderName(paths[0]),
         run: async target => {
-          // 多个视频先给清单：同时起多个抽帧任务既慢又难查，交给用户一个个来。
+          // 多个视频先给清单：逐个调参数，或一键按默认参数整批排队，都在清单里选。
           if (paths.length === 1) setVideoStart({ projectId: target.id, path: paths[0] });
           else drop.openPicks({ projectId: target.id, files: paths });
         }
@@ -238,7 +239,21 @@ export default function ChatHome() {
       </section>}
     </div>
     {/* 多选视频或视频文件夹选出来的候选清单：与拖入多个视频共用同一个组件。 */}
-    <VideoPickList picks={drop.picks} onChoose={path => { const target = drop.picks?.projectId; drop.closePicks(); if (target) setVideoStart({ projectId: target, path }); }} onClose={drop.closePicks} />
+    <VideoPickList picks={drop.picks} onChoose={path => { const target = drop.picks?.projectId; drop.closePicks(); if (target) setVideoStart({ projectId: target, path }); }}
+      onChooseAll={drop.chooseAll} onClose={drop.closePicks} />
+    {/* 一键抽帧：整批按默认参数建任务，首个任务交给进度条跟踪，其余排在其后逐个推进。 */}
+    {drop.batch && (() => {
+      const batch = drop.batch;
+      return <VideoBatchImport key={batch.projectId} projectId={batch.projectId} files={batch.files}
+        onClose={drop.closeBatch}
+        onCreated={({ jobs, failed, stopped }) => {
+          setMediaTaskId(jobs[0].id); setMediaJob({ id: jobs[0].id, following: jobs.slice(1).map(job => job.id) });
+          drop.closeBatch();
+          const pending = stopped ? batch.files.length - jobs.length - failed : 0;
+          notify(`已为 ${jobs.length} 个视频创建抽帧任务，正在排队逐个处理${failed ? `，另有 ${failed} 个未能创建` : ''}${pending ? `，停止时还有 ${pending} 个未处理` : ''}；素材就绪后自动导入，进度见侧栏「任务」。`);
+          void navigate('overview');
+        }} />;
+    })()}
     {/* 发送 / 导入共用的项目归属确认框：用户在这里命名或选已有项目，确认后才执行真正的动作。 */}
     {projectPrompt && <ProjectResolveDialog title={projectPrompt.title} confirmLabel={projectPrompt.confirmLabel} projects={projects} suggestName={projectPrompt.suggest}
       defaultProjectId={prefs.defaultProjectId ?? ''}

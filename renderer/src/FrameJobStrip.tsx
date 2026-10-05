@@ -74,6 +74,19 @@ export function FrameJobStrip() {
     })();
   }, [job, jobId, autoImport, project, refreshAssets, refreshProjects, notify, setMediaJob]);
 
+  // 一键抽帧建出的任务队列：当前这条走到终态（素材已入库、失败、取消等）就接上下一条，
+  // 让整批任务都享有同一条进度与自动导入链路；单个任务没有 following，行为与原先完全一致。
+  const following = mediaJob?.following;
+  useEffect(() => {
+    if (!job || !jobId || !following?.length) return;
+    if (!['completed', 'failed', 'cancelled', 'interrupted'].includes(job.status)) return;
+    // completed 且还能导入时，要给自动导入留出兑现时间：导入在跑（importing 里还有它）或还没轮到它都不推进。
+    const settled = job.assetsCommitted || job.status !== 'completed' || !job.canImport || !autoImport
+      || (advanced.current === jobId && !importing.has(jobId));
+    if (!settled) return;
+    setMediaJob(current => current?.id === jobId ? { id: following[0], following: following.slice(1) } : current);
+  }, [job, jobId, following, autoImport, setMediaJob]);
+
   if (!jobId || !job) return null;
   const ready = job.status === 'completed' && job.artifactCommitted;
   const imported = job.assetsCommitted;

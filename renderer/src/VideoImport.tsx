@@ -1,24 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Plus, Trash2 } from 'lucide-react';
-import { VIDEO_DENSITY_LABELS, VIDEO_DENSITY_SECONDS, VIDEO_SCENE_MIN_INTERVAL_SECONDS, VIDEO_SCENE_THRESHOLD, type MediaJob, type VideoCreateRequest, type VideoDensity, type VideoExtractionParameters, type VideoExtractionRecipe, type VideoInspection, type VideoRecipeDraft, type VideoTimeRange } from '../../shared/media';
+import { VIDEO_DENSITY_LABELS, VIDEO_DENSITY_SECONDS, VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_DOWNSAMPLE_THRESHOLD, VIDEO_MAX_FRAMES, VIDEO_SCENE_MIN_INTERVAL_SECONDS, VIDEO_SCENE_THRESHOLD, type MediaJob, type VideoCreateRequest, type VideoDensity, type VideoExtractionParameters, type VideoExtractionRecipe, type VideoInspection, type VideoRecipeDraft, type VideoTimeRange } from '../../shared/media';
 import { getBridge, request, errorMessage, isDemo } from './bridge';
 import { useApp } from './context';
 import { Button, Field, IconButton, Modal, Notice } from './ui';
 import { MediaError } from './mediaUi';
-import { FrameAutoImportOption } from './FrameJobStrip';
-
-/**
- * 默认降采样阈值与目标长边。
- * 走查的对照测试证明体积不是超时的主因（4 MiB 与 100 KB 的失败率都约 70%），
- * 但它确实是放大项：先按住最容易放大问题的那个因素，同时不把「降采样」当成重试出口的替代品。
- */
-const DOWNSAMPLE_THRESHOLD = 1600;
-const DOWNSAMPLE_LONG_EDGE = 1024;
 import type { MediaErrorActionHandlers } from './mediaErrorMap';
+import { FrameAutoImportOption } from './FrameJobStrip';
 import { listRecipes, recipeScopeNote, recipeSummary, removeRecipe, saveRecipe } from './videoRecipes';
-
-/** 引擎单次抽帧上限，与 VideoFrames.java 的 maxFrames 默认值一致；超过就整单失败，所以在 UI 侧提前拦截。 */
-const MAX_FRAMES = 10000;
 
 /** 源帧率可能是 "30000/1001" 这样的分数；估帧数时才需要，解析不出来就如实返回未知。 */
 function parseRate(reported: string | null | undefined): number | null {
@@ -125,8 +114,8 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
       // 4K 原帧送模型会显著抬高超时概率（走查里 23 帧有 16 帧超时）。这里默认把长边压到 1024，
       // 保持宽高比所以不会留黑边；用户改过尺寸或套过配方时不覆盖他的选择。
       const longEdge = Math.max(info.width, info.height);
-      if (!sizeTouched.current && longEdge > DOWNSAMPLE_THRESHOLD && info.width > 0 && info.height > 0) {
-        const scale = DOWNSAMPLE_LONG_EDGE / longEdge;
+      if (!sizeTouched.current && longEdge > VIDEO_DOWNSAMPLE_THRESHOLD && info.width > 0 && info.height > 0) {
+        const scale = VIDEO_DOWNSAMPLE_LONG_EDGE / longEdge;
         setResize(true); setFit('contain');
         setWidth(String(Math.max(1, Math.round(info.width * scale))));
         setHeight(String(Math.max(1, Math.round(info.height * scale))));
@@ -178,9 +167,9 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
     const lengths = selectedDurations();
     if (!lengths) return null;
     const estimatedFrames = mode === 'scene' ? estimateSceneCandidates() : estimateFrames();
-    if (estimatedFrames === null || estimatedFrames <= MAX_FRAMES) return null;
+    if (estimatedFrames === null || estimatedFrames <= VIDEO_MAX_FRAMES) return null;
     const total = lengths.reduce((sum, length) => sum + length, 0);
-    return Math.max(1, Math.ceil(total / Math.max(1, MAX_FRAMES - lengths.length)));
+    return Math.max(1, Math.ceil(total / Math.max(1, VIDEO_MAX_FRAMES - lengths.length)));
   }
   /** 仅用于规划磁盘空间的范围估算；图像压缩率受内容影响，完成任务后以实际字节数为准。 */
   function estimateOutputBytes(frameCount: number | null): [number, number] | null {
@@ -315,7 +304,7 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
       : <>
         <div className="video-inspection"><div className="video-inspection-head"><strong title={sourcePath}>{inspection.sourceName}</strong><button className="text-button" onClick={() => void choose()} disabled={blocked}>重新选择</button></div><p>{inspection.width} × {inspection.height} · {durationLabel(duration)}</p><p className="muted tiny">报告帧率：{inspection.reportedFrameRate ?? '未知'} · 报告帧数：{inspection.reportedFrameCount ?? '未知'}</p>{transcodePath && <p className="muted tiny">来源为本机转码副本（临时文件，导入素材后自动删除）。</p>}</div>
         {inspection.geometryNotice && <Notice>{inspection.geometryNotice}</Notice>}
-        {downsampled && <Notice>源视频长边 {Math.max(inspection.width, inspection.height)} 像素，已默认把输出缩到长边 {DOWNSAMPLE_LONG_EDGE} 像素（保持宽高比）：原尺寸送模型会明显更容易超时。需要全分辨率时在下面取消「指定输出尺寸」。</Notice>}
+        {downsampled && <Notice>源视频长边 {Math.max(inspection.width, inspection.height)} 像素，已默认把输出缩到长边 {VIDEO_DOWNSAMPLE_LONG_EDGE} 像素（保持宽高比）：原尺寸送模型会明显更容易超时。需要全分辨率时在下面取消「指定输出尺寸」。</Notice>}
         <div className="video-recipe"><Field label="抽帧配方"><select aria-label="抽帧配方" disabled={blocked} value={recipeId} onChange={e => { const picked = available.find(item => item.id === e.target.value); if (picked) applyRecipe(picked); else { setRecipeId(''); setRecipeNotice(''); } }}><option value="">自定义（不使用配方）</option><optgroup label="推荐配方">{available.filter(item => item.builtin).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup>{available.some(item => !item.builtin) && <optgroup label="我的配方">{available.filter(item => !item.builtin).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup>}</select></Field><div className="video-recipe-actions"><Button disabled={blocked} onClick={() => { setSavingRecipe(true); setRecipeName(''); }}>保存当前为配方</Button>{available.some(item => item.id === recipeId && !item.builtin) && <Button disabled={blocked} onClick={() => void dropRecipe(recipeId)}>删除配方</Button>}</div></div>
         {savingRecipe && <div className="video-recipe-save"><input aria-label="配方名称" maxLength={40} placeholder="例如：园区监控夜间" disabled={blocked} value={recipeName} onChange={e => setRecipeName(e.target.value)} /><Button className="primary" busy={recipeBusy} disabled={blocked} onClick={() => void commitRecipe()}>保存</Button><Button disabled={blocked} onClick={() => { setSavingRecipe(false); setRecipeName(''); }}>取消</Button></div>}
         {recipeNotice && <p className="muted tiny">{recipeNotice}</p>}
@@ -325,10 +314,10 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
         </div>
         {density === 'custom' && <Field label={customMode === 'interval' ? '间隔（秒）' : customMode === 'every_n' ? '源帧间隔 N' : '目标帧率（帧/秒）'}><input aria-label="视频采样值" type="number" min={customMode === 'every_n' ? 1 : 0.001} step={customMode === 'every_n' ? 1 : 'any'} disabled={busy} value={customValue} onChange={e => setCustomValue(e.target.value)} /></Field>}
         {mode === 'scene'
-          ? <p className="muted tiny video-scene-estimate">「场景变化」每 {VIDEO_SCENE_MIN_INTERVAL_SECONDS} 秒取一个候选帧，与上一张保留帧相比灰度差异达到 {VIDEO_SCENE_THRESHOLD} 才留下（首帧必留）；相近的帧自动跳过，实际帧数取决于画面变化（上限 {MAX_FRAMES} 帧）。{sceneCandidates !== null && ` 当前所选时间段最多约 ${sceneCandidates} 个候选帧。`}</p>
+          ? <p className="muted tiny video-scene-estimate">「场景变化」每 {VIDEO_SCENE_MIN_INTERVAL_SECONDS} 秒取一个候选帧，与上一张保留帧相比灰度差异达到 {VIDEO_SCENE_THRESHOLD} 才留下（首帧必留）；相近的帧自动跳过，实际帧数取决于画面变化（上限 {VIDEO_MAX_FRAMES} 帧）。{sceneCandidates !== null && ` 当前所选时间段最多约 ${sceneCandidates} 个候选帧。`}</p>
           : estimated !== null && <p className="muted tiny">按当前时间段预计抽出约 {estimated} 帧{selectedDuration !== null && `，选中时长 ${selectedDuration.toFixed(2)} 秒`}。</p>}
         {outputBytesEstimate && estimateCount !== null && <p className="muted tiny video-output-estimate" aria-live="polite">产物空间粗估：约 {storageLabel(outputBytesEstimate[0])}–{storageLabel(outputBytesEstimate[1])}（{estimateCount} 帧 × {resize ? `${Number(width)} × ${Number(height)}` : `${inspection.width} × ${inspection.height}`}，{format === 'jpg' ? 'JPEG' : 'PNG'}）。实际大小受画面内容和压缩影响{mode === 'scene' ? '，场景过滤后通常会更小' : ''}；完成后以任务记录的实际大小为准。</p>}
-        {suggested !== null && <Notice>{mode === 'scene' ? `当前区间最多约 ${sceneCandidates} 个候选帧，可能超过` : `按当前时间段预计 ${estimated} 帧，超过`}引擎单次上限 {MAX_FRAMES} 帧，整单会失败。建议改为每 {suggested} 秒一帧，或缩小时间范围。<div className="notice-actions"><Button onClick={applySuggestion}>改为每 {suggested} 秒一帧</Button></div></Notice>}
+        {suggested !== null && <Notice>{mode === 'scene' ? `当前区间最多约 ${sceneCandidates} 个候选帧，可能超过` : `按当前时间段预计 ${estimated} 帧，超过`}引擎单次上限 {VIDEO_MAX_FRAMES} 帧，整单会失败。建议改为每 {suggested} 秒一帧，或缩小时间范围。<div className="notice-actions"><Button onClick={applySuggestion}>改为每 {suggested} 秒一帧</Button></div></Notice>}
         <details className="video-advanced" open={advanced || durationUnknown} onToggle={e => setAdvanced((e.target as HTMLDetailsElement).open)}><summary>高级设置 · 时间范围与输出尺寸</summary>
           <label className="checkbox-row"><input type="checkbox" disabled={busy || duration === null} checked={whole} onChange={e => setWhole(e.target.checked)} />使用整段已知时长</label>
           {durationUnknown && <Notice>视频时长未知，请明确填写抽帧时间范围。</Notice>}
