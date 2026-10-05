@@ -37,7 +37,9 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 /** 拖进聊天框、等待随消息一起入库的文件：发送时才导入并确定项目归属。 */
 export interface ChatAttachment { id: string; path: string; kind: 'image' | 'video' | 'directory'; name: string;
   /** 文件夹附件在拖入时数出的可导入数量；粘贴/点选拿不到，展示时省略数量。 */
-  imageCount?: number; videoCount?: number }
+  imageCount?: number; videoCount?: number;
+  /** 文件夹附件里的视频清单（扫描时已逐一登记授权）：发送时送进抽帧链路、写进素材括注，路径缺失时按空处理。 */
+  videoPaths?: string[] }
 
 export interface ChatSession {
   id: string; messages: Array<{ role: 'user'|'assistant'; content: string; failed?: boolean }>;

@@ -148,15 +148,21 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     const configIssue = chatConfig.issues.find(issue => issue.field !== 'model');
     if (configIssue) { notify(configIssue.message, { error: true, action: { label: '去配置', run: () => void navigate('settings', 'ai') } }); return; }
     if (effectiveScope === 'current' && !assetId) { notify('请先在项目里打开要处理的图片。', { error: true, action: { label: '去打开', run: () => void navigate('overview') } }); return; }
-    // 附件随消息一起落库：图片与目录进项目，视频转交抽帧流程（一个面板只跑一个视频）。
+    // 附件随消息一起落库：图片与目录进项目，视频（含文件夹里的）转交抽帧流程（一个面板只跑一个视频）。
     if (attachments.length) {
       if (!project) { notify('请先选择项目。', { error: true, action: { label: '回到欢迎页', run: () => void startProjectChat() } }); return; }
-      const result = await importAttachments(project.id, attachments);
-      update({ attachments: [] });
-      if (result.queued) { await refreshAssets(); notify(`这批有 ${result.total ?? 0} 张，导入量较大已转入后台任务：进度见「任务 · 素材任务」，可随时取消。`); }
-      else if (result.imported || result.skipped) { await refreshAssets(); notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`); }
-      if (result.videos.length === 1) drop.openVideo({ projectId: project.id, path: result.videos[0] });
-      else if (result.videos.length > 1) drop.openPicks({ projectId: project.id, files: result.videos });
+      try {
+        const result = await importAttachments(project.id, attachments);
+        update({ attachments: [] });
+        if (result.queued) { await refreshAssets(); notify(`这批有 ${result.total ?? 0} 张，导入量较大已转入后台任务：进度见「任务 · 素材任务」，可随时取消。`); }
+        else if (result.imported || result.skipped) { await refreshAssets(); notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`); }
+        if (result.videos.length === 1) drop.openVideo({ projectId: project.id, path: result.videos[0] });
+        else if (result.videos.length > 1) drop.openPicks({ projectId: project.id, files: result.videos });
+      } catch (e) {
+        // 素材没入库就不能把这条消息发出去：助手会照着「已添加 N 个文件」去处理一个空项目。附件留在输入框，解决后重发即可。
+        notify(`素材没有随消息入库：${errorMessage(e)}`, true);
+        return;
+      }
     }
     const assetIds = effectiveScope === 'current' ? [assetId!] : effectiveScope === 'page' ? assets.map(a => a.id) : effectiveScope === 'selected' ? [...selectedAssetIds] : undefined;
     if (assetIds && !assetIds.length) { notify('当前处理范围没有素材，请先选择图片。', { error: true, action: { label: '去勾选', run: () => void navigate('overview') } }); return; }

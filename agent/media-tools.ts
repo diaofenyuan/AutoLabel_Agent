@@ -214,7 +214,7 @@ export const MEDIA_TOOL_DEFINITIONS: ToolDefinition[] = [
       if (new Set(records.map(value => value.id)).size !== records.length || args.kind != null && records.some(value => value.kind !== args.kind)) invalid('媒体任务分页重复或类型不匹配');
       return { ...pagination(result.total, offset, limit, records.length), items: records.map(jobSummary) };
     } },
-  { name: 'create_video_job', description: '为一个已授权的视频提交抽帧任务，返回真实 job，需后续查询帧结果。sourcePath 必须是用户已通过「选择视频抽帧」或拖拽授权过的本地视频路径：助手不能自行指定任意本地文件，也不能凭已读到的任务信息反推路径；若用户尚未选择文件，应提示其先选择，不要把路径猜测出来提交。',
+  { name: 'create_video_job', description: '为一个已授权的视频提交抽帧任务，返回真实 job，需后续查询帧结果。sourcePath 必须是用户授权过的本地视频路径：可以是用户通过「选择视频抽帧」或拖拽选择的，也可以是用户消息「随消息添加素材」括注里列出的视频路径（那是用户随消息显式添加的素材）。助手不能自行指定任意本地文件，也不能凭已读到的任务信息反推路径；用户既没拖视频、括注里也没有视频路径时应提示其先选择，不要把路径猜测出来提交。',
     parameters: schema({ sourcePath: { type: 'string', minLength: 1, maxLength: 32767 }, mode: { type: 'string', enum: ['interval', 'every_n', 'fps'] },
       intervalSeconds: { type: ['number', 'null'], minimum: 0.001, maximum: 604800 }, everyNFrames: int(1, 1000000),
       targetFps: { type: ['number', 'null'], minimum: 0.001, maximum: 240 },

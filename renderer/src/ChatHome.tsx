@@ -79,7 +79,9 @@ export default function ChatHome() {
       else target = await applyProjectDraft(target.id, action.classes, action.rules) ?? target;
     }
     await refreshProjects();
-    await projectPrompt.run(target);
+    try { await projectPrompt.run(target); }
+    // run 里失败（例如附件导入被拒）不能变成未处理拒绝：如实通知，弹框关掉，输入与附件留在原地可重试。
+    catch (e) { notify(errorMessage(e), true); }
     setProjectPrompt(null);
   }
   /** 「导入图片开始标注」：先选图，弹框确认项目归属后导入，最后开一条会话说明这批图。 */
@@ -188,9 +190,10 @@ export default function ChatHome() {
             title: '发送第一条消息', confirmLabel: '发送',
             suggest: pendingName || folderName(attachments[0]?.path ?? ''),
             run: async target => {
-              // 附件随首条消息一起落库：图片与目录进项目，视频交给会话页的抽帧面板。
+              // 附件随首条消息一起落库：图片与目录进项目，视频（含文件夹里的）交给会话页的抽帧面板。
               // 素材名单写进消息文本：会话历史里才能看出开局发的是什么。
               if (attachments.length) {
+                // 导入失败就不开张这条会话：助手会照着「已添加 N 个文件」处理空项目。输入与附件原样保留，重试即可。
                 const result = await importAttachments(target.id, attachments);
                 if (result.videos.length) setPendingVideoImports({ projectId: target.id, files: result.videos });
                 if (result.queued) notify(`这批有 ${result.total ?? 0} 张，导入量较大已转入后台任务：进度见「任务 · 素材任务」，可随时取消。`); else if (result.imported || result.skipped) notify(`已导入 ${result.imported} 张${result.skipped ? `，已在项目里 ${result.skipped} 张` : ''}。`);
