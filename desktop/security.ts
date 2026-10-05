@@ -14,7 +14,12 @@ export function redact(value: unknown, secrets: string[] = []): string {
     .replace(/\\\\[^\s"<>]+/g, '[网络路径已隐藏]');
 }
 
-function normalize(value: string): string { return path.resolve(value).toLowerCase(); }
+// 授权键只在 Windows 上折叠大小写：类 Unix 文件系统里仅大小写不同的路径是两个文件，
+// 折叠会让一次授权顺带放行另一个文件。所有入口都先经 realpath 规范化，故无需再改写。
+function normalize(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
 
 export class PathGrants {
   private grants = new Map<string, { kind: string; directory: boolean }>();
