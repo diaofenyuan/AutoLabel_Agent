@@ -16,6 +16,7 @@
     "check:desktop": "tsc --noEmit -p desktop/tsconfig.json",
     "check:renderer": "tsc --noEmit -p renderer/tsconfig.json",
     "check:all": "node scripts/check-all.mjs",
+    "check:contract": "node scripts/contract-check.mjs",
     "test:desktop": "node scripts/desktop-test.mjs",
     "test:updates": "node scripts/desktop-update-test.mjs",
     "smoke:desktop": "node scripts/desktop-smoke.mjs",
