@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useApp } from './context';
 import { errorMessage, request } from './bridge';
 import { Button } from './ui';
-import { mediaJobName, mediaStatuses } from './mediaUi';
+import { mediaJobName, mediaStatuses } from './mediaJobPresentation';
 import type { MediaJob, MediaJobList } from '../../shared/media';
 import { AUTO_IMPORT_MAX_ATTEMPTS, autoImportExhausted, importableVideoJobs, isImportableVideoJob, registerAutoImportFailure } from './frameAutoImport';
 
