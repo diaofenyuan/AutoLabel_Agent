@@ -137,6 +137,62 @@ test('模型执行授权按作用域和摘要持久化，外部恢复与改写�
   } finally { await f.close(); }
 });
 
+test('模型库信任只放行库目录内的文件，同前缀兄弟目录与库外文件一律拒绝', async () => {
+  const f = await fixture();
+  try {
+    // 同前缀兄弟目录（model-library-extra）是最容易误放行的一类越界：目录边界必须带分隔符再比较。
+    const libraryRoot = path.join(f.root, 'model-library'); await mkdir(libraryRoot, { recursive: true });
+    const library = await realpath(libraryRoot);
+    const sibling = path.join(f.root, 'model-library-extra'); await mkdir(sibling);
+    const inside = path.join(library, 'yolo11n.pt'); const outside = path.join(sibling, 'yolo11n.pt'); const far = path.join(f.root, 'yolo11n.pt');
+    await writeFile(inside, 'inside'); await writeFile(outside, 'outside'); await writeFile(far, 'far');
+    const digest = (text: string) => createHash('sha256').update(text).digest('hex');
+    await assert.rejects(f.local.trustModel('current', far, [library], () => undefined), /模型库/);
+    await assert.rejects(f.local.trustModel('current', outside, [library], () => undefined), /模型库/);
+    const trusted = await f.local.trustModel('current', inside, [library], () => undefined, f.engine);
+    assert.deepEqual(trusted, { path: inside, modelHash: digest('inside') });
+    assert.deepEqual(f.calls, [{ command: 'local.model.authorize', payload: { path: inside, modelHash: digest('inside') } }]);
+    assert.equal(await f.local.requireModel('current', inside, digest('inside')), inside);
+    assert.deepEqual(await f.local.modelAuthorizations('current'), [{ path: inside, modelHash: digest('inside') }]);
+  } finally { await f.close(); }
+});
+
+test('授权表按真实路径落盘、摘要非法或文件移走都不取得执行权限', async () => {
+  const f = await fixture();
+  try {
+    const model = path.join(f.root, 'YOLO11n.PT'); await writeFile(model, 'weights');
+    await f.grants.add(model, 'model'); await f.local.authorizeSelectedModel('current', model, () => undefined);
+    const hash = createHash('sha256').update('weights').digest('hex');
+    const scopes = f.preferences.value.localModelGrants as Record<string, Record<string, string>>;
+    // 键必须是文件真实路径：折叠成小写后，在大小写敏感的文件系统上会被当成另一个不存在的文件。
+    assert.deepEqual(Object.keys(scopes.current), [model]);
+    // 大小写变体：Windows 文件系统同一文件可命中；其他平台是另一个（不存在的）路径，必须重新选择。
+    const variant = path.join(f.root, 'yolo11n.PT');
+    if (process.platform === 'win32') assert.equal(await f.local.requireModel('current', variant, hash), model);
+    else await assert.rejects(f.local.requireModel('current', variant, hash), /重新选择/);
+    for (const bad of ['deadbeef', 'Z'.repeat(64), hash.slice(0, 63)]) await assert.rejects(f.local.requireModel('current', model, bad), /重新选择/);
+    await f.preferences.update({ localModelGrants: { current: { [model]: 'not-a-hash' } } });
+    assert.deepEqual(await f.local.modelAuthorizations('current'), []);
+    await f.preferences.update({ localModelGrants: { current: { [model]: hash } } });
+    await rm(model);
+    assert.deepEqual(await f.local.modelAuthorizations('current'), []);
+  } finally { await f.close(); }
+});
+
+test('并发授权经串行化后不丢条目，也不残留忙碌状态', async () => {
+  const f = await fixture();
+  try {
+    const models = await Promise.all([1, 2, 3, 4, 5].map(async index => {
+      const file = path.join(f.root, `model-${index}.pt`); await writeFile(file, `weights-${index}`); await f.grants.add(file, 'model'); return file;
+    }));
+    await Promise.all(models.map(file => f.local.authorizeSelectedModel('current', file, () => undefined, f.engine)));
+    const scopes = f.preferences.value.localModelGrants as Record<string, Record<string, string>>;
+    assert.deepEqual(Object.keys(scopes.current).sort(), [...models].sort());
+    assert.equal(f.calls.length, models.length);
+    assert.equal(f.local.busy, false);
+  } finally { await f.close(); }
+});
+
 test('固定输入媒体只读取受管 PNG，拒绝错绑、查询、外部文件和目录连接', async () => {
   const f = await fixture();
   try {
