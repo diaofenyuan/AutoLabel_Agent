@@ -60,6 +60,22 @@ export async function checkDesktopQuality(window:BrowserWindow,output:string):Pr
     await button('进入问题复核');await button('从所选记录建立复核问题');await wait(`!!document.querySelector('.review-list button')`);const beforeReview=await api('asset.get',{assetId});await js(`document.querySelector('.review-list button').click()`);await wait(`document.querySelectorAll('.review-detail .comparison-canvases img').length===2&&[...document.querySelectorAll('.review-detail .comparison-canvases img')].every(i=>i.complete)`);await js(`document.querySelector('.review-detail').scrollIntoView({block:'center',behavior:'instant'});new Promise(r=>requestAnimationFrame(r))`);await writeFile(output.replace(/\.json$/,'-quality-review.png'),(await window.webContents.capturePage()).toPNG());await button('标记已核对');await wait(`document.querySelector('.review-detail h3')?.innerText.includes('已核对')`);assert.deepEqual(await api('asset.get',{assetId}),beforeReview);assert.deepEqual(await api('evaluationSet.getTruth',{setId:set.id,assetId}),truth);assert.equal(calls,beforeEvaluation);
     await select('.review-panel>.field-grid>.field:first-child select','random');await button('新建随机抽查');await wait(`!!document.querySelector('.random-sample-form .quality-asset-picks input')`);await js(`document.querySelector('.random-sample-form .quality-asset-picks input').click()`);await fill('.random-sample-form .field-grid>.field:first-child input','quality-ui-fixed-seed');await fill('.random-sample-form input[type="number"]','1');await button('固定随机名单');await wait(`!!document.querySelector('.review-list button')&&document.querySelector('.review-panel>.quality-summary')?.innerText.includes('随机抽查 1 / 1')`);await js(`document.querySelector('.review-list button').click()`);await button('标为待重标');await wait(`document.querySelector('.review-detail h3')?.innerText.includes('待重标')`);assert.equal(calls,beforeEvaluation);assert.deepEqual(await api('asset.get',{assetId}),beforeReview);
     checks.push({check:'review-separation',annotationWrites:0,truthWrites:0,relabelRequests:0,randomPopulation:1,randomCount:1});
+    // 难例优先队列：低置信/几何问题/漏检素材必须能从界面建立，并按优先级降序排队；建立与查看都不改标注、不发起模型调用。
+    await select('.review-panel>.field-grid>.field:first-child select','hard');
+    await wait(`!!document.querySelector('.review-panel>.field-grid>.field:nth-child(2) select option[value="evaluation:${evaluation.id}"]')`);
+    await select('.review-panel>.field-grid>.field:nth-child(2) select',`evaluation:${evaluation.id}`);
+    await wait(`!document.querySelector('.review-rules')`);
+    await button('按优先级建立难例队列');
+    await wait(`document.querySelectorAll('.review-list button').length>=2&&document.querySelector('.review-list').innerText.includes('优先级')`);
+    const hardItems=await api<{items:Array<{priority:number}>}>('review.list',{projectId,source:'hard',evaluationId:evaluation.id,limit:50,status:'pending'});
+    assert.equal(hardItems.items.length,2,'只有可评分的方案进入难例队列');
+    assert.ok(hardItems.items[0].priority>hardItems.items[1].priority,'漏检更多的素材必须排在前面');
+    const shownPriorities=await js<number[]>(`[...document.querySelectorAll('.review-list button')].map(b=>Number((b.innerText.match(/优先级 ([0-9.]+)/)??[])[1]))`);
+    assert.deepEqual(shownPriorities,hardItems.items.map(item=>item.priority),'界面顺序必须与引擎的优先级降序一致');
+    await js(`document.querySelector('.review-list button').click()`);
+    await wait(`document.querySelector('.review-detail')?.innerText.includes('最低置信')`);
+    assert.equal(calls,beforeEvaluation);assert.deepEqual(await api('asset.get',{assetId}),beforeReview);assert.deepEqual(await api('evaluationSet.getTruth',{setId:set.id,assetId}),truth);
+    checks.push({check:'hard-example-queue',items:hardItems.items.length,priorityDescending:true,annotationWrites:0,modelCalls:0});
     // 「工作台画布里的关键点定位」那一段随工作台一起移除：旧画布（.annotation-canvas、[aria-label="关键点 · P"]、[aria-label="定位左上"]）已不存在。
     // 真值编辑器里的「补点」仍可达，但这条失去的覆盖不再假装还在；要恢复得用现画布的 [data-quality-*] 标记重写。
     await writeFile(output,json({passed:true,mode:'quality-ui',checks,protocolFixtureCalls:calls}));

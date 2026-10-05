@@ -73,10 +73,17 @@ export interface EvaluationResult {
   unmatchedTruthIds?: string[]; unmatchedPredictionIds?: string[];
   classResult?: { truthClassId: string; predictionClassId: string | null; correct: boolean; missingPrediction: boolean };
 }
+/** 难例优先队列的排序信号（source='hard' 才有）：最低标注置信度与几何/评测问题计数，用于向用户解释排序依据。 */
+export interface ReviewSignals {
+  minConfidence?: number | null; geometryIssues?: number; requiresGeometryReview?: boolean;
+  missedObjects?: number; extraObjects?: number;
+}
 export interface ReviewItem {
   id: string; projectId: string; assetId: string; candidateVersion: number | null;
   objectId?: string | null; reason: string; severity: 'error' | 'warning' | 'info';
-  source: 'execution' | 'truth_comparison' | 'random';
+  source: 'execution' | 'truth_comparison' | 'random' | 'hard';
   status: 'pending' | 'checked' | 'dismissed' | 'request_relabel';
   evaluationId?: string; runId?: string; sampleId?: string; createdAt: string; note?: string;
+  /** 难例优先队列（source='hard'）的优先级与信号明细；其它来源没有这两个字段。 */
+  priority?: number; signals?: ReviewSignals;
 }
