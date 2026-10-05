@@ -309,11 +309,21 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
       const batch = drop.batch;
       return <VideoBatchImport key={batch.projectId} projectId={batch.projectId} files={batch.files}
         onClose={drop.closeBatch}
-        onCreated={({ jobs, failed, stopped }) => {
+        onCreated={({ jobs, failedItems, unfinished }) => {
           setMediaTaskId(jobs[0].id); setMediaJob({ id: jobs[0].id, following: jobs.slice(1).map(job => job.id) });
           drop.closeBatch();
-          const pending = stopped ? batch.files.length - jobs.length - failed : 0;
-          notify(`已为 ${jobs.length} 个视频创建抽帧任务，正在排队逐个处理${failed ? `，另有 ${failed} 个未能创建` : ''}${pending ? `，停止时还有 ${pending} 个未处理` : ''}；素材就绪后自动导入，进度见侧栏「任务」。`);
+          // 有没建成任务的视频时不切页：对话页一切走，存放批量面板的局部状态就没了，
+          // 提示里的「重试失败项」便无从重开。留在原地直接续跑；整批都建成才照旧去概览看素材。
+          if (unfinished.length) {
+            const unprocessed = unfinished.length - failedItems.length;
+            notify(`已为 ${jobs.length} 个视频创建抽帧任务，正在排队逐个处理${failedItems.length ? `；${failedItems.length} 个未能创建` : ''}${unprocessed ? `，另有 ${unprocessed} 个未处理` : ''}。`, {
+              error: true,
+              action: { label: unprocessed ? `继续处理未完成的 ${unfinished.length} 个` : `重试这 ${failedItems.length} 个失败视频`,
+                run: () => drop.openBatch({ projectId: batch.projectId, files: unfinished }) },
+            });
+            return;
+          }
+          notify(`已为 ${jobs.length} 个视频创建抽帧任务，正在排队逐个处理；素材就绪后自动导入，进度见侧栏「任务」。`);
           void navigate('overview');
         }} />;
     })()}
