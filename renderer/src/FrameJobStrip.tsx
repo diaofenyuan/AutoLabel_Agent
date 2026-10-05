@@ -4,7 +4,7 @@ import { errorMessage, request } from './bridge';
 import { Button } from './ui';
 import { mediaJobName, mediaStatuses } from './mediaUi';
 import type { MediaJob, MediaJobList } from '../../shared/media';
-import { AUTO_IMPORT_MAX_ATTEMPTS, autoImportExhausted, importableVideoJobs, registerAutoImportFailure } from './frameAutoImport';
+import { AUTO_IMPORT_MAX_ATTEMPTS, autoImportExhausted, importableVideoJobs, isImportableVideoJob, registerAutoImportFailure } from './frameAutoImport';
 
 /**
  * 抽帧进度条（对话区常驻）。
@@ -13,7 +13,7 @@ import { AUTO_IMPORT_MAX_ATTEMPTS, autoImportExhausted, importableVideoJobs, reg
  * 而这条自动导入链路其实早就设计好了——`mediaJob` 一直挂在应用层，却没有任何组件读它，
  * 留下的是死状态和过时的注释。这里把它接回来：
  * 1. 对话区直接显示抽帧进度与状态，不必切页；
- * 2. 产物就绪（completed + stage=ready + artifactCommitted）时自动调用 media.video.import；
+ * 2. 产物已封存且可导入（引擎 canImport，覆盖 completed 与导入被中断的 interrupted）时自动调用 media.video.import；
  * 3. 导入后再自动建立视频时间轴，用户点「去视频轨迹」就能直接落到这一条上。
  *
  * 同一任务只由一处推进：模块级 Set 记录正在导入的任务，避免同时挂载的两个入口重复提交。
@@ -115,10 +115,11 @@ export function FrameJobStrip() {
   }, [jobId]);
 
   // 产物就绪就自动导入：这一步原先要用户自己记着去任务页点，忘了就会以为素材没进来。
+  // 判定只认引擎 canImport（见 isImportableVideoJob）：引擎重启把在途导入打断成 interrupted 时，
+  // 产物其实已封存，这条链路必须继续补导入，否则用户只能重新抽帧白跑一遍解码。
   useEffect(() => {
     if (!job || !jobId || !autoImport) return;
-    const ready = job.status === 'completed' && job.stage === 'ready' && job.artifactCommitted && job.canImport && !job.assetsCommitted;
-    if (!ready || importing.has(jobId) || advanced.current === jobId) return;
+    if (!isImportableVideoJob(job) || importing.has(jobId) || advanced.current === jobId) return;
     advanced.current = jobId;
     importing.add(jobId);
     void (async () => {
@@ -147,26 +148,31 @@ export function FrameJobStrip() {
   useEffect(() => {
     if (!job || !jobId || !following?.length) return;
     if (!['completed', 'failed', 'cancelled', 'interrupted'].includes(job.status)) return;
-    // completed 且还能导入时，要给自动导入留出兑现时间：导入在跑（importing 里还有它）或还没轮到它都不推进。
-    const settled = job.assetsCommitted || job.status !== 'completed' || !job.canImport || !autoImport
+    // 还能导入（含导入被中断的 interrupted）时，要给自动导入留出兑现时间：导入在跑（importing 里还有它）
+    // 或还没轮到它都不推进。原先按 status==='completed' 判断会把 interrupted 任务当成已结算而跳过，
+    // 队列会越过它直接跑下一条，这条的产物就再也补不进来了。
+    const settled = !isImportableVideoJob(job) || !autoImport
       || (advanced.current === jobId && !importing.has(jobId));
     if (!settled) return;
     setMediaJob(current => current?.id === jobId ? { id: following[0], following: following.slice(1) } : current);
   }, [job, jobId, following, autoImport, setMediaJob]);
 
   if (!jobId || !job) return null;
-  const ready = job.status === 'completed' && job.artifactCommitted;
+  const importable = isImportableVideoJob(job);
+  const importInterrupted = importable && job.status === 'interrupted';
   const imported = job.assetsCommitted;
   return <div className="frame-job-strip" role="status" data-status={job.status}>
     <span className="frame-job-name truncate">{mediaJobName(job)}</span>
     <span className="frame-job-state">{imported
       ? '素材已入库，可以直接标注'
-      : ready ? (autoImport ? '抽帧就绪，正在导入素材…' : '抽帧就绪，待导入')
+      : importable ? (autoImport
+        ? (importInterrupted ? '上次导入被中断，正在自动补导入…' : '抽帧就绪，正在导入素材…')
+        : (importInterrupted ? '导入被中断，产物已封存，可手动导入' : '抽帧就绪，待导入'))
         : `${mediaStatuses[job.status]} · 已生成 ${job.progress.completedFrames ?? 0} 帧`}</span>
     <span className="frame-job-actions">
       {(imported && (mediaJob?.timelineId ?? createdTimelineId)) && <Button onClick={() => void navigate('tasks')}>查看这条视频轨迹</Button>}
       {imported && <Button onClick={() => { setMediaJob(null); void navigate('overview'); }}>查看素材</Button>}
-      {!imported && ready && !autoImport && <Button className="primary" onClick={async () => {
+      {!imported && importable && !autoImport && <Button className="primary" onClick={async () => {
         try { setJob(await request<MediaJob>('media.video.import', { jobId })); await Promise.all([refreshAssets(), refreshProjects()]); }
         catch (e) { setError(errorMessage(e)); }
       }}>立即导入素材</Button>}

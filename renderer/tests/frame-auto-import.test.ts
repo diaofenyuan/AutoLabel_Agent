@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { MediaJob } from '../../shared/media';
-import { AUTO_IMPORT_MAX_ATTEMPTS, autoImportExhausted, importableVideoJobs, registerAutoImportFailure } from '../src/frameAutoImport';
+import { AUTO_IMPORT_MAX_ATTEMPTS, autoImportExhausted, importableVideoJobs, isImportableVideoJob, registerAutoImportFailure } from '../src/frameAutoImport';
 
 function videoJob(overrides: Partial<MediaJob> = {}): MediaJob {
   return {
@@ -33,6 +33,24 @@ test('已入库、未完成、产物未封存、不可导入或筛选任务都�
 test('失败后重试完成的任务重新变为可导入', () => {
   const jobs = importableVideoJobs([videoJob({ id: 'retry', originalJobId: 'job-1' })]);
   assert.deepEqual(jobs.map(job => job.id), ['retry']);
+});
+
+test('引擎重启中断在途导入的任务，只要产物已封存仍算可导入', () => {
+  // 引擎在导入途中退出：状态变 interrupted、stage 停在 importing，但 canImport=true、产物完好。
+  const interrupted = videoJob({ id: 'interrupted', status: 'interrupted', stage: 'importing' });
+  assert.equal(isImportableVideoJob(interrupted), true, '中断但 canImport 的抽帧任务必须能继续入库');
+  assert.deepEqual(importableVideoJobs([interrupted]).map(job => job.id), ['interrupted']);
+});
+
+test('用户主动取消的任务不自动补导入', () => {
+  // 取消后产物可能恰好完整，canImport 仍为 true，但自动导入不能覆盖用户的主动停止。
+  const cancelled = videoJob({ id: 'cancelled', status: 'cancelled' });
+  assert.equal(isImportableVideoJob(cancelled), false);
+  assert.deepEqual(importableVideoJobs([cancelled]).map(job => job.id), []);
+});
+
+test('判据以引擎 canImport 为准：完成但 canImport 为假时仍不导入', () => {
+  assert.equal(isImportableVideoJob(videoJob({ status: 'completed', canImport: false })), false);
 });
 
 test('瞬时导入失败在达到上限前仍会重试，不拉黑也不静默', () => {
