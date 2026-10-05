@@ -3,7 +3,8 @@ import { useApp } from './context';
 import { errorMessage, request } from './bridge';
 import { Button } from './ui';
 import { mediaJobName, mediaStatuses } from './mediaUi';
-import type { MediaJob } from '../../shared/media';
+import type { MediaJob, MediaJobList } from '../../shared/media';
+import { importableVideoJobs } from './frameAutoImport';
 
 /**
  * 抽帧进度条（对话区常驻）。
@@ -18,6 +19,53 @@ import type { MediaJob } from '../../shared/media';
  * 同一任务只由一处推进：模块级 Set 记录正在导入的任务，避免同时挂载的两个入口重复提交。
  */
 const importing = new Set<string>();
+
+const autoImportFailed = new Set<string>();
+
+/**
+ * 全局自动导入哨兵（无界面）。进度条只跟踪界面发起的任务，助手或重试等途径创建的抽帧
+ * 完成后会一直停在「待导入」，必须有人记得去任务页点一下——这正是「明明抽完了、项目里
+ * 却没素材」的来由。这里定期扫描素材任务，把所有就绪未入库的抽帧产物自动导入各自项目。
+ * 导入失败的（如源视频损坏）本会话内不再重试，任务页仍可手动导入；引擎对重复导入幂等。
+ */
+export function AutoImportWatcher() {
+  const { prefs, notify, refreshAssets, refreshProjects, project } = useApp();
+  const autoImport = prefs.frameAutoImport !== false;
+  useEffect(() => {
+    if (!autoImport) return;
+    let live = true, timer: ReturnType<typeof setTimeout>, imported = 0;
+    async function sweep() {
+      try {
+        const list = await request<MediaJobList>('media.job.list', { kind: 'video_extract', limit: 100 });
+        if (!live) return;
+        for (const job of importableVideoJobs(list.items)) {
+          if (importing.has(job.id) || autoImportFailed.has(job.id)) continue;
+          importing.add(job.id);
+          try {
+            await request<MediaJob>('media.video.import', { jobId: job.id });
+            imported++;
+            await Promise.all([refreshAssets(), refreshProjects()]);
+            // 与进度条同一条「导入即建轴」约定；只给当前打开的项目建，其他项目打开时由轨迹页补。
+            if (project && project.id === job.projectId && ['detect', 'pose'].includes(project.taskType)) {
+              try { await request<{ id: string }>('track.timeline.create', { projectId: project.id, mediaJobId: job.id }); }
+              catch { /* 建轴失败不影响素材已经入库这件事 */ }
+            }
+          } catch { autoImportFailed.add(job.id); }
+          finally { importing.delete(job.id); }
+          if (!live) return;
+        }
+      } catch { /* 引擎未就绪或请求失败：静默等下一轮，不打扰用户 */ }
+      if (live) {
+        if (imported) notify(`已自动导入 ${imported} 个抽帧任务的素材，可以直接标注。`);
+        imported = 0;
+        timer = setTimeout(() => void sweep(), 5000);
+      }
+    }
+    void sweep();
+    return () => { live = false; clearTimeout(timer); };
+  }, [autoImport, project, refreshAssets, refreshProjects, notify]);
+  return null;
+}
 
 export function FrameJobStrip() {
   const { mediaJob, setMediaJob, prefs, notify, refreshAssets, refreshProjects, project, navigate } = useApp();
