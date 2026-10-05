@@ -11,7 +11,9 @@
 export type ReviewScope = 'evaluation' | 'run' | 'random' | 'hard';
 export type ReviewRecordScope = Exclude<ReviewScope, 'random'>;
 
-export function pickReviewTarget(next: ReviewRecordScope, currentRecordId: string, options: { evaluations: string[]; runs: string[] }): string {
+export interface ReviewTargetOptions { evaluations: string[]; runs: string[] }
+
+export function pickReviewTarget(next: ReviewRecordScope, currentRecordId: string, options: ReviewTargetOptions): string {
   const { evaluations, runs } = options;
   if (next === 'evaluation') return evaluations.includes(currentRecordId) ? currentRecordId : evaluations[0] ?? '';
   if (next === 'run') return runs.includes(currentRecordId) ? currentRecordId : runs[0] ?? '';
@@ -19,4 +21,19 @@ export function pickReviewTarget(next: ReviewRecordScope, currentRecordId: strin
   if (evaluations.includes(currentRecordId)) return `evaluation:${currentRecordId}`;
   if (runs.includes(currentRecordId)) return `run:${currentRecordId}`;
   return evaluations[0] ? `evaluation:${evaluations[0]}` : runs[0] ? `run:${runs[0]}` : '';
+}
+
+/**
+ * 首次打开复核面板时的来源与记录。
+ *
+ * 评测详情里「按难例优先级排队」要直接落到这份评测的难例队列（而不是像以前那样先落定向问题、
+ * 再让用户切来源选记录），所以初始来源不再写死为 `evaluation`；`initialEvaluationId` 只会是评测标识。
+ */
+export function initialReviewSelection(initialSource: ReviewScope | undefined, initialEvaluationId: string, options: ReviewTargetOptions): { scope: ReviewScope; scopeId: string } {
+  const { evaluations, runs } = options;
+  const scope = initialSource ?? 'evaluation';
+  if (scope === 'random') return { scope, scopeId: '' };
+  if (scope === 'run') return { scope, scopeId: runs[0] ?? '' };
+  if (scope === 'hard') return { scope, scopeId: initialEvaluationId ? `evaluation:${initialEvaluationId}` : pickReviewTarget('hard', '', options) };
+  return { scope, scopeId: initialEvaluationId || evaluations[0] || '' };
 }

@@ -6,14 +6,17 @@ import type { Asset, Project, Run } from './types';
 import { useApp } from './context';
 import QualityCanvas from './QualityCanvas';
 import { ResultComparison } from './QualityCenter';
-import { pickReviewTarget } from './reviewTarget';
+import { initialReviewSelection, pickReviewTarget, type ReviewScope } from './reviewTarget';
 
 const reasonNames:Record<string,string>={classification_wrong:'分类错误',classification_missing:'成功响应但缺少分类',prediction_failed:'模型执行失败',prediction_unknown:'调用结果未知',prediction_pending:'运行尚未完成',prediction_missing:'缺少候选',prediction_invalid:'候选结构或几何无效',missed_object:'标准对象未匹配',extra_object:'候选对象未匹配',localization_iou:'框匹配低于设置阈值',missing_keypoint:'缺少可定位关键点',keypoint_location:'关键点误差超过设置阈值',random_sample:'独立随机抽查',hard_case:'难例（低置信 / 几何问题 / 漏检多检）'};
 const stateNames:Record<string,string>={pending:'待处理',checked:'已核对',dismissed:'已忽略',request_relabel:'待重标'};
 const sourceNames:Record<string,string>={execution:'执行记录问题',truth_comparison:'独立标准答案对照',random:'随机抽查',hard:'难例优先队列'};
 interface Suggestions{confidenceThreshold:{suggested:number|null;basis:string;matchedCount:number;extraCount:number}|null;trainingSuggestion:{assetIds:string[];count:number;reason:string}};
-export default function ReviewPanel({project,runs,evaluations,initialEvaluationId,busy,setBusy}:{project:Project;runs:Run[];evaluations:Evaluation[];initialEvaluationId:string;busy:boolean;setBusy:(busy:boolean)=>void}){
-  const {notify}=useApp();const [scope,setScope]=useState<'evaluation'|'run'|'random'|'hard'>('evaluation');const [scopeId,setScopeId]=useState(initialEvaluationId||evaluations[0]?.id||'');const [filter,setFilter]=useState('pending');const [offset,setOffset]=useState(0);
+export default function ReviewPanel({project,runs,evaluations,initialEvaluationId,initialSource,busy,setBusy}:{project:Project;runs:Run[];evaluations:Evaluation[];initialEvaluationId:string;initialSource?:ReviewScope;busy:boolean;setBusy:(busy:boolean)=>void}){
+  const {notify}=useApp();
+  // 首次挂载的来源与记录：评测详情「按难例优先级排队」直接落到该评测的难例队列，不再先落定向问题再让用户切来源。
+  const initial=initialReviewSelection(initialSource,initialEvaluationId,{evaluations:evaluations.map(item=>item.id),runs:runs.map(item=>item.id)});
+  const [scope,setScope]=useState<ReviewScope>(initial.scope);const [scopeId,setScopeId]=useState(initial.scopeId);const [filter,setFilter]=useState('pending');const [offset,setOffset]=useState(0);
   const [items,setItems]=useState<ReviewItem[]>([]);const [total,setTotal]=useState(0);const [loading,setLoading]=useState(false);const [error,setError]=useState('');const [selected,setSelected]=useState<ReviewItem|null>(null);const [note,setNote]=useState('');
   const [minIoU,setMinIoU]=useState('');const [pointError,setPointError]=useState('');const [sampling,setSampling]=useState(false);const [assets,setAssets]=useState<Asset[]>([]);const [picked,setPicked]=useState<string[]>([]);const [seed,setSeed]=useState('');const [count,setCount]=useState(10);const [batchInfo,setBatchInfo]=useState<{id:string;count:number;populationCount:number;seed:string}|null>(null);
   const [batches,setBatches]=useState<string[]>([]);const [inventoryOffset,setInventoryOffset]=useState(0);const [hasMoreBatches,setHasMoreBatches]=useState(false);
