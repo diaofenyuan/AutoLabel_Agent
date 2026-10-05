@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { realpath, stat, lstat } from 'node:fs/promises';
 import { DesktopError } from './validation';
+import { pathIdentity } from './paths';
 
 export function redact(value: unknown, secrets: string[] = []): string {
   let output = String(value).slice(0, 8000);
@@ -14,7 +15,9 @@ export function redact(value: unknown, secrets: string[] = []): string {
     .replace(/\\\\[^\s"<>]+/g, '[网络路径已隐藏]');
 }
 
-function normalize(value: string): string { return path.resolve(value).toLowerCase(); }
+// 授权键必须与本地执行、引擎一致：Windows 大小写不敏感，其他平台大小写敏感。
+// 无条件小写会让「对 a.pt 的授权」在大小写敏感卷上放行另一个真实文件 A.pt，擅自扩大文件访问范围。
+function normalize(value: string): string { return pathIdentity(value); }
 
 export class PathGrants {
   private grants = new Map<string, { kind: string; directory: boolean }>();

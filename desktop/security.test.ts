@@ -232,6 +232,20 @@ test('流程嵌套路径逐项授权，历史定义与禁用步骤不扩大权�
     await rm(root, { recursive: true, force: true });
   }
 });
+test('路径授权在大小写敏感卷上不把两个真实文件当成同一授权', { skip: process.platform === 'win32' }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'autolabel-grants-case-'));
+  try {
+    const lower = path.join(root, 'a.pt'), upper = path.join(root, 'A.pt');
+    await writeFile(lower, 'lower'); await writeFile(upper, 'upper');
+    const grants = new PathGrants(); await grants.add(lower, 'model');
+    assert.equal(await grants.require(lower, ['model']), lower);
+    // 无条件小写会让对 lower 的授权放行另一个真实文件 upper，等于擅自扩大文件访问范围。
+    await assert.rejects(grants.require(upper, ['model']), /尚未通过/);
+  } finally {
+    assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep + 'autolabel-grants-case-'));
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test('资源写入与显式应用字段严格校验，Agent 资源命令保持关闭', () => {
   assert.doesNotThrow(() => validateCommand('resource.save', { kind: 'prompt', name: '提示词', content: '标注目标', baseVersion: 0, category: '检测', note: '人工整理' }));
   assert.doesNotThrow(() => validateCommand('resource.list', { kind: 'evaluation_comparison', query: '检测', category: '', offset: 0, limit: 500 }));
