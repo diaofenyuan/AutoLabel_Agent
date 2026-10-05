@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFile, mkdtemp, mkdir, readFile, realpath, writeFile, rm, symlink } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, readFile, realpath, stat, writeFile, rm, symlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -121,7 +121,10 @@ test('真实 Java 正常退出和强制终止均清理阻塞 Python，新作用�
 test('模型执行授权按作用域和摘要持久化，外部恢复与改写文件不能继承授权', async () => {
   const f = await fixture();
   try {
-    const model = path.join(f.root, '模型.pt'); await writeFile(model, 'model-original');
+    // 目录名明确带大写：区分大小写的文件系统上，授权键必须保留真实大小写，
+    // 否则小写化后的路径 realpath 找不到文件，已授权模型会在下次启动时静默消失。
+    const library = path.join(f.root, 'ModelLibrary'); await mkdir(library);
+    const model = path.join(library, 'Model.pt'); await writeFile(model, 'model-original');
     await assert.rejects(f.local.authorizeSelectedModel('current', model, () => undefined));
     await f.grants.add(model, 'model'); await f.local.authorizeSelectedModel('current', model, () => undefined, f.engine);
     const modelHash = createHash('sha256').update('model-original').digest('hex');
@@ -134,6 +137,18 @@ test('模型执行授权按作用域和摘要持久化，外部恢复与改写�
     await assert.rejects(restarted.requireModel('external-restore', model, modelHash), /重新选择/);
     await writeFile(model, 'changed');
     await assert.rejects(restarted.requireModel('current', model, createHash('sha256').update('changed').digest('hex')), /重新选择/);
+    // 区分大小写的文件系统上，同目录里仅大小写不同的另一个文件是另一个身份，
+    // 即使拿着已授权的摘要也不能复用它；大小写不敏感的文件系统上两者本是同一个文件，不做区分。
+    // 用探针实测文件系统而不是按平台名判断，避免在默认大小写不敏感的 macOS 上误判。
+    const probe = path.join(library, 'CaseProbe'); await writeFile(probe, 'probe');
+    const caseSensitive = await stat(path.join(library, 'caseprobe')).then(() => false, () => true);
+    if (caseSensitive) {
+      const sibling = path.join(library, 'model.pt'); await writeFile(sibling, 'model-sibling');
+      const siblingHash = createHash('sha256').update('model-sibling').digest('hex');
+      await assert.rejects(restarted.requireModel('current', sibling, siblingHash), /重新选择/);
+      await assert.rejects(restarted.requireModel('current', sibling, modelHash), /重新选择/);
+      assert.deepEqual(await restarted.modelAuthorizations('current'), [{ path: model, modelHash }]);
+    }
   } finally { await f.close(); }
 });
 
