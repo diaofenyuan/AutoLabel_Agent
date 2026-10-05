@@ -12,7 +12,7 @@ final class ManualChainTest {
     static JsonObject cmd(Engine e,String command,JsonObject p)throws Exception{return (JsonObject)e.command(command,p);}
     interface Action{void run()throws Exception;}
     static void rejects(String code,Action action)throws Exception{try{action.run();throw new AssertionError("Expected "+code);}catch(ApiError e){check(e.code.equals(code),"Expected "+code+" got "+e.code);}}
-    static void run(Path target)throws Exception{root=target;maintenance();labels();relocationAndOverlay();exportFormats();System.out.println("Manual 4A additions verified at "+root);}
+    static void run(Path target)throws Exception{root=target;maintenance();labels();classifyFolders();relocationAndOverlay();exportFormats();System.out.println("Manual 4A additions verified at "+root);}
     static void maintenance()throws Exception{
         try(Engine e=new Engine(root.resolve("maintenance"))){JsonObject p=EngineTest.project(e,"detect");String pid=Json.required(p,"id");
             e.store.tx(c->{for(int i=0;i<110;i++){String id="old-run-"+i,status=i==0?"paused":"completed";Store.update(c,"INSERT INTO runs(id,project_id,status,data) VALUES(?,?,?,?)",id,pid,status,Json.obj("id",id,"projectId",pid,"status",status,"total",0));}return null;});
@@ -42,6 +42,34 @@ final class ManualChainTest {
             rejects("invalid_argument",()->cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",root.toString(),"classMap",Json.obj("0","item"))));
         }
     }
+    /** 分类数据集按类别文件夹导入：内容哈希对应素材，按文件夹映射写入候选，绝不覆盖已有标注。 */
+    static void classifyFolders()throws Exception{
+        try(Engine e=new Engine(root.resolve("classify-data"))){
+            JsonObject p=cmd(e,"project.create",Json.obj("name","分类","taskType","classify","classes",Json.arr(
+                Json.obj("id","cat","name","猫","color","#3b82f6"),Json.obj("id","dog","name","狗","color","#ef4444"))));
+            String pid=Json.required(p,"id");Path dataset=root.resolve("classify-dataset");
+            Files.createDirectories(dataset.resolve("猫"));Files.createDirectories(dataset.resolve("狗"));
+            Path catPic=dataset.resolve("猫").resolve("cat-1.png"),dogPic=dataset.resolve("狗").resolve("dog-1.png");Media.sample(catPic,0);Media.sample(dogPic,1);
+            String catId=oneAsset(e,pid,catPic,"reference"),dogId=oneAsset(e,pid,dogPic,"copy");
+            JsonObject scan=cmd(e,"annotation.importClassify.preflight",Json.obj("projectId",pid,"rootDir",dataset.toString()));
+            check(Json.array(scan,"folders").size()==2&&Json.integer(scan,"images",0)==2,"分类预检列出两个类别文件夹");
+            check(suggested(scan,"猫").equals("cat")&&suggested(scan,"狗").equals("dog"),"预检按类别名称给出映射建议");
+            JsonObject imported=cmd(e,"annotation.importClassify",Json.obj("projectId",pid,"rootDir",dataset.toString(),"classMap",Json.obj("猫","cat","狗","dog")));
+            check(Json.integer(imported,"imported",0)==2,"分类导入两张候选");
+            JsonObject catAsset=e.projects.asset(catId),annotation=Json.array(catAsset,"annotations").get(0).getAsJsonObject();
+            check(Json.required(catAsset,"status").equals("candidate")&&Json.required(catAsset,"source").equals("imported_yolo"),"分类导入为候选并保留来源");
+            check(Json.required(annotation,"type").equals("classify")&&Json.required(annotation,"classId").equals("cat"),"类别来自文件夹映射而非顺序");
+            check(Json.required(Json.array(e.projects.asset(dogId),"annotations").get(0).getAsJsonObject(),"classId").equals("dog"),"第二个类别按各自文件夹映射");
+            JsonObject again=cmd(e,"annotation.importClassify",Json.obj("projectId",pid,"rootDir",dataset.toString(),"classMap",Json.obj("猫","cat","狗","dog")));
+            check(Json.integer(again,"imported",0)==0&&Json.array(again,"errors").size()==2,"已有标注不被分类导入覆盖");
+            rejects("label_class_unmapped",()->cmd(e,"annotation.importClassify",Json.obj("projectId",pid,"rootDir",dataset.toString(),"classMap",Json.obj("猫","cat"))));
+            Media.sample(dataset.resolve("loose.png"),2);
+            check(Json.array(cmd(e,"annotation.importClassify.preflight",Json.obj("projectId",pid,"rootDir",dataset.toString())),"issues").size()==1,"根目录散图在预检里如实报告");
+            JsonObject detect=EngineTest.project(e,"detect");
+            rejects("task_type_mismatch",()->cmd(e,"annotation.importClassify.preflight",Json.obj("projectId",Json.required(detect,"id"),"rootDir",dataset.toString())));
+        }
+    }
+    static String suggested(JsonObject scan,String name){for(JsonElement f:Json.array(scan,"folders"))if(Json.required(f.getAsJsonObject(),"name").equals(name))return Json.str(f.getAsJsonObject(),"classId","");return "";}
     static boolean close(JsonObject o,String key,double value){return Math.abs(Json.decimal(o,key,0)-value)<1e-8;}
     static void relocationAndOverlay()throws Exception{
         try(Engine e=new Engine(root.resolve("files-data"))){JsonObject project=EngineTest.project(e,"detect");String pid=Json.required(project,"id");Path original=root.resolve("original-source.png");Media.sample(original,0);String aid=oneAsset(e,pid,original,"reference");e.projects.save(Json.obj("assetId",aid,"baseVersion",0,"annotations",Json.arr(EngineTest.label("detect")),"confirm",true));

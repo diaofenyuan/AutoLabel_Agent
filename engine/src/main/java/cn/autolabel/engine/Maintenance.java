@@ -5,7 +5,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 final class Maintenance {
-    private static final Set<String> READ_ONLY=Set.of("project.list","project.open","asset.list","asset.get","annotation.history","export.preflight","export.list","export.compare","provider.list","provider.capabilities","run.list","run.get","run.attempts","budget.get","event.list","event.snapshot","resource.list","settings.get","diagnostics.get","asset.checkLocations","evaluationSet.list","evaluationSet.get","evaluationSet.getTruth","evaluation.preflight","evaluation.list","evaluation.get","evaluation.results","review.list","budget.estimate","evaluation.rerun.preflight","evaluation.rerun.get","resource.get","resource.image","backup.inspect");
+    private static final Set<String> READ_ONLY=Set.of("project.list","project.open","asset.list","asset.get","annotation.history","export.preflight","export.list","export.compare","provider.list","provider.capabilities","run.list","run.get","run.attempts","budget.get","event.list","event.snapshot","resource.list","settings.get","diagnostics.get","asset.checkLocations","evaluationSet.list","evaluationSet.get","evaluationSet.getTruth","evaluation.preflight","evaluation.list","evaluation.get","evaluation.results","review.list","budget.estimate","evaluation.rerun.preflight","evaluation.rerun.get","resource.get","resource.image","backup.inspect","annotation.importClassify.preflight");
     // 数据维护期间允许执行、但必须声明当前锁归属的破坏性动作：备份、恢复与项目级联删除。
     private static final Set<String> DATA_ACTIONS=Set.of("backup.create","restore.prepare","project.delete");
     private final Engine engine;
