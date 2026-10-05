@@ -4,7 +4,7 @@ import { errorMessage, request } from './bridge';
 import { Button } from './ui';
 import { mediaJobName, mediaStatuses } from './mediaUi';
 import type { MediaJob, MediaJobList } from '../../shared/media';
-import { importableVideoJobs } from './frameAutoImport';
+import { AUTO_IMPORT_MAX_ATTEMPTS, autoImportExhausted, importableVideoJobs, registerAutoImportFailure } from './frameAutoImport';
 
 /**
  * 抽帧进度条（对话区常驻）。
@@ -20,7 +20,11 @@ import { importableVideoJobs } from './frameAutoImport';
  */
 const importing = new Set<string>();
 
-const autoImportFailed = new Set<string>();
+/**
+ * 自动导入的失败计数。瞬时故障（引擎重启、请求抖动）下一轮会自愈，连续失败到上限才判定为需人工处理：
+ * 既不让永久失败（如源视频损坏）无限重试，也不把瞬时故障当成永久失败而静默丢掉。
+ */
+const autoImportAttempts = new Map<string, number>();
 
 /** 哨兵每轮翻页大小与最多处理的任务数：上限兜住超大历史，避免稳态下退化成整表翻页。 */
 const SWEEP_PAGE = 100;
@@ -30,15 +34,18 @@ const SWEEP_MAX_JOBS = 1000;
  * 全局自动导入哨兵（无界面）。进度条只跟踪界面发起的任务，助手或重试等途径创建的抽帧
  * 完成后会一直停在「待导入」，必须有人记得去任务页点一下——这正是「明明抽完了、项目里
  * 却没素材」的来由。这里定期扫描素材任务，把所有就绪未入库的抽帧产物自动导入各自项目。
- * 导入失败的（如源视频损坏）本会话内不再重试，任务页仍可手动导入；引擎对重复导入幂等。
+ * 导入失败按有界重试处理（瞬时故障自愈，连续失败到上限才判定为需人工处理），
+ * 判定后必须提示用户并给出「任务 → 素材任务」出口；引擎对重复导入幂等。
  */
 export function AutoImportWatcher() {
-  const { prefs, notify, refreshAssets, refreshProjects, project } = useApp();
+  const { prefs, notify, refreshAssets, refreshProjects, project, navigate, setMediaTaskId } = useApp();
   const autoImport = prefs.frameAutoImport !== false;
   useEffect(() => {
     if (!autoImport) return;
     let live = true, timer: ReturnType<typeof setTimeout>, imported = 0;
     async function sweep() {
+      // 本轮刚达失败上限、需要人工处理的条目：只在这一刻提示一次，瞬时故障不打扰用户。
+      const exhausted: string[] = [];
       try {
         // media.job.list 按 rowid 倒序、单页最多 100：只看第一页会让积压（例如关掉自动导入一段时间后
         // 再打开）里排在 100 条之外的就绪产物永远没人导入。这里按页扫到末尾，并保留一个任务数上限。
@@ -46,18 +53,19 @@ export function AutoImportWatcher() {
           const list = await request<MediaJobList>('media.job.list', { kind: 'video_extract', limit: SWEEP_PAGE, offset });
           if (!live) return;
           for (const job of importableVideoJobs(list.items)) {
-            if (importing.has(job.id) || autoImportFailed.has(job.id)) continue;
+            if (importing.has(job.id) || autoImportExhausted(autoImportAttempts, job.id)) continue;
             importing.add(job.id);
             try {
               await request<MediaJob>('media.video.import', { jobId: job.id });
               imported++;
+              autoImportAttempts.delete(job.id);
               await Promise.all([refreshAssets(), refreshProjects()]);
               // 与进度条同一条「导入即建轴」约定；只给当前打开的项目建，其他项目打开时由轨迹页补。
               if (project && project.id === job.projectId && ['detect', 'pose'].includes(project.taskType)) {
                 try { await request<{ id: string }>('track.timeline.create', { projectId: project.id, mediaJobId: job.id }); }
                 catch { /* 建轴失败不影响素材已经入库这件事 */ }
               }
-            } catch { autoImportFailed.add(job.id); }
+            } catch { if (registerAutoImportFailure(autoImportAttempts, job.id)) exhausted.push(job.id); }
             finally { importing.delete(job.id); }
             if (!live) return;
           }
@@ -66,13 +74,15 @@ export function AutoImportWatcher() {
       } catch { /* 引擎未就绪或请求失败：静默等下一轮，不打扰用户 */ }
       if (live) {
         if (imported) notify(`已自动导入 ${imported} 个抽帧任务的素材，可以直接标注。`);
+        // 失败必须可观测、可回退：说清连续失败次数与去处，一键落到出问题的那条素材任务。
+        if (exhausted.length) notify(`自动导入连续 ${AUTO_IMPORT_MAX_ATTEMPTS} 次失败：${exhausted.length} 个抽帧任务已转为手动处理，请在「任务 → 素材任务」查看原因并导入。`, { error: true, action: { label: '查看素材任务', run: () => { setMediaTaskId(exhausted[0]); void navigate('tasks'); } } });
         imported = 0;
         timer = setTimeout(() => void sweep(), 5000);
       }
     }
     void sweep();
     return () => { live = false; clearTimeout(timer); };
-  }, [autoImport, project, refreshAssets, refreshProjects, notify]);
+  }, [autoImport, project, refreshAssets, refreshProjects, notify, navigate, setMediaTaskId]);
   return null;
 }
 
