@@ -25,8 +25,6 @@ export interface ModelDownloadProgress {
 
 interface Verified { size: number; mtimeMs: number; ok: boolean }
 
-const sameFile = (left: string, right: string) => path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
-
 async function hashFile(file: string): Promise<string> {
   const digest = createHash('sha256');
   for await (const chunk of createReadStream(file)) digest.update(chunk);
