@@ -46,13 +46,13 @@ final class Reviews {
         JsonObject sample=Json.obj("id",id,"projectId",pid,"mode","random","populationCount",assets.size(),"count",count,"seed",seed,"algorithm","sha256-java-shuffle-v1","population",population,"assetVersions",versions,"createdAt",Json.now());return saveItems(items,sample);
     }
 
-    /** 难例优先队列（source='hard'）：按「置信度低 + 几何问题 + 评测漏检/多检」排出优先级，只排队复核，不改任何标注。 */
+    /** 难例优先队列（source='hard'）：按「置信度低 + 几何问题 + 评测漏检/多检（分类按错误/缺预测）」排出优先级，只排队复核，不改任何标注。 */
     JsonObject buildHard(JsonObject p){if(p.has("evaluationId")==p.has("runId"))throw new ApiError(400,"review_source_invalid","请指定 evaluationId 或 runId，不能同时提供。");
         List<JsonObject> items=store.read(c->{List<JsonObject> result=new ArrayList<>();
             if(p.has("evaluationId")){String eid=Json.required(p,"evaluationId");JsonObject evaluation=Store.document(c,"evaluations",eid);String pid=Json.required(evaluation,"projectId");
                 for(JsonElement entry:Store.docs(c,"SELECT data FROM evaluation_results WHERE evaluation_id=? ORDER BY rowid",eid)){
                     JsonObject row=entry.getAsJsonObject();String aid=Json.required(row,"assetId"),rid=Json.required(row,"runId"),context="hard:"+eid+":"+rid;JsonElement version=row.get("candidateVersion");
-                    if(!Json.required(row,"status").equals("scorable")||row.has("classResult"))continue;
+                    if(!Json.required(row,"status").equals("scorable"))continue;
                     JsonObject signals=hardSignals(c,aid,version,row);double priority=hardPriority(signals);if(priority<=0)continue;
                     JsonObject links=Json.obj("evaluationId",eid,"runId",rid,"schemeId",rid,"signals",signals,"priority",priority);
                     result.add(item(pid,aid,version,"hard_case",priority>=1.5?"error":priority>=0.8?"warning":"info","hard",null,context,links));
@@ -75,12 +75,15 @@ final class Reviews {
                 if(any)minimum=Json.element(min);
                 JsonObject metadata=Json.object(data,"metadata");geometry=Json.array(metadata,"geometryIssues").size();review=Json.bool(metadata,"requiresGeometryReview",false);}}
         JsonObject signals=Json.obj("minConfidence",minimum,"geometryIssues",geometry,"requiresGeometryReview",review,"missedObjects",Json.array(row,"unmatchedTruthIds").size(),"extraObjects",Json.array(row,"unmatchedPredictionIds").size());
+        // 分类行没有框/点几何与漏多标，信号取 classResult：错误或缺预测都记 1 条（单标签每图只有一个判定），
+        // 让难例优先队列对五类任务都可建立；几何/漏多标信号保持缺省，不能给分类伪造框指标。
+        if(row.has("classResult"))signals.addProperty("classificationWrong",Json.bool(Json.object(row,"classResult"),"correct",false)?0:1);
         return signals;
     }
-    /** 难例优先级：低置信为主（1-置信度），每个几何问题 +0.5、复核标记 +0.5，漏检 +0.4、多检 +0.2。 */
+    /** 难例优先级：低置信为主（1-置信度），每个几何问题 +0.5、复核标记 +0.5，漏检 +0.4、多检 +0.2，分类错误或缺预测 +0.4。 */
     static double hardPriority(JsonObject signals){
         double confidence=signals.get("minConfidence")==null||signals.get("minConfidence").isJsonNull()?0.5:Math.max(0,Math.min(1,Json.decimal(signals,"minConfidence",1)));
-        double priority=(1-confidence)+0.5*Json.integer(signals,"geometryIssues",0)+(Json.bool(signals,"requiresGeometryReview",false)?0.5:0)+0.4*Json.integer(signals,"missedObjects",0)+0.2*Json.integer(signals,"extraObjects",0);
+        double priority=(1-confidence)+0.5*Json.integer(signals,"geometryIssues",0)+(Json.bool(signals,"requiresGeometryReview",false)?0.5:0)+0.4*Json.integer(signals,"missedObjects",0)+0.2*Json.integer(signals,"extraObjects",0)+0.4*Json.integer(signals,"classificationWrong",0);
         return Math.round(priority*1000)/1000.0;
     }
     /** 复核结果回流的两张建议卡（只建议不自动改）：建议置信度阈值 / 建议送训练的素材清单。 */

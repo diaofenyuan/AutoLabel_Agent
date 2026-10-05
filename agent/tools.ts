@@ -132,7 +132,7 @@ function reviewItemSummary(value: unknown, environment: ToolEnvironment) {
   return { ...pick(item, ['id', 'assetId', 'candidateVersion', 'objectId', 'reason', 'severity', 'source', 'status',
     'evaluationId', 'runId', 'sampleId', 'priority']),
     ...(item.signals == null ? {} : { signals: pick(object(item.signals, '难例信号'),
-      ['minConfidence', 'geometryIssues', 'requiresGeometryReview', 'missedObjects', 'extraObjects']) }) };
+      ['minConfidence', 'geometryIssues', 'requiresGeometryReview', 'missedObjects', 'extraObjects', 'classificationWrong']) }) };
 }
 function preflightSummary(value: Record<string, unknown>) {
   return { ...pick(value, ['canEvaluate', 'canStart', 'sampleCount', 'schemeCount', 'plannedRequests', 'estimatedMaxRequests',

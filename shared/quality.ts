@@ -77,6 +77,8 @@ export interface EvaluationResult {
 export interface ReviewSignals {
   minConfidence?: number | null; geometryIssues?: number; requiresGeometryReview?: boolean;
   missedObjects?: number; extraObjects?: number;
+  /** 分类任务没有框/点几何与漏多标：错误或缺预测记 1 条（每图只有一个判定）；其它任务不出现该字段。 */
+  classificationWrong?: number;
 }
 export interface ReviewItem {
   id: string; projectId: string; assetId: string; candidateVersion: number | null;

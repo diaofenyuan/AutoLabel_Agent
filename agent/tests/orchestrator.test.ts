@@ -235,7 +235,7 @@ test('复核列表可按来源筛选，难例排序依据随条目回传', async
     calls.push({ command, payload });
     return { total: 1, items: [{ id: 'item-1', projectId: 'project-1', assetId: 'asset-1', reason: 'hard_case', severity: 'error',
       source: 'hard', status: 'pending', priority: 0.9, identityKey: '内部身份', note: '用户备注',
-      signals: { minConfidence: 0.1, geometryIssues: 0, requiresGeometryReview: false, missedObjects: 0, extraObjects: 0, raw: '内部原文' } }] };
+      signals: { minConfidence: 0.1, geometryIssues: 0, requiresGeometryReview: false, missedObjects: 0, extraObjects: 0, classificationWrong: 1, raw: '内部原文' } }] };
   }) };
 
   const page = await findTool('list_review_items').execute({ offset: null, status: null, source: 'hard' }, environment) as Record<string, unknown>;
@@ -243,6 +243,7 @@ test('复核列表可按来源筛选，难例排序依据随条目回传', async
   const item = (page.items as Array<Record<string, unknown>>)[0];
   assert.equal(item.priority, 0.9);
   assert.equal((item.signals as Record<string, unknown>).minConfidence, 0.1);
+  assert.equal((item.signals as Record<string, unknown>).classificationWrong, 1, '分类难例信号要回传，助手才能解释分类排序');
   assert.ok(!JSON.stringify(page).includes('内部身份') && !JSON.stringify(page).includes('用户备注'), '内部标识与用户备注不回流给模型');
   await assert.rejects(findTool('list_review_items').execute({ offset: null, status: null, source: 'model_confidence' }, environment), /复核来源/);
 });

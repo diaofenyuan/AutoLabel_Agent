@@ -18,18 +18,20 @@ final class ReviewHardTest {
         formula();
         queue(root);
     }
-    /** 优先级公式单测：低置信在前、geometryIssues/复核标记加权、漏检重于多检。 */
+    /** 优先级公式单测：低置信在前、geometryIssues/复核标记加权、漏检重于多检、分类错误或缺预测与漏检同级。 */
     static void formula(){
         double lowOnly=Reviews.hardPriority(Json.obj("minConfidence",0.1,"geometryIssues",0,"requiresGeometryReview",false,"missedObjects",0,"extraObjects",0));
         double geometry=Reviews.hardPriority(Json.obj("minConfidence",1,"geometryIssues",2,"requiresGeometryReview",false,"missedObjects",0,"extraObjects",0));
         double reviewFlag=Reviews.hardPriority(Json.obj("minConfidence",1,"geometryIssues",0,"requiresGeometryReview",true,"missedObjects",0,"extraObjects",0));
         double missed=Reviews.hardPriority(Json.obj("minConfidence",1,"geometryIssues",0,"requiresGeometryReview",false,"missedObjects",1,"extraObjects",0));
         double extra=Reviews.hardPriority(Json.obj("minConfidence",1,"geometryIssues",0,"requiresGeometryReview",false,"missedObjects",0,"extraObjects",1));
+        double classified=Reviews.hardPriority(Json.obj("minConfidence",1,"classificationWrong",1));
         double clean=Reviews.hardPriority(Json.obj("minConfidence",1,"geometryIssues",0,"requiresGeometryReview",false,"missedObjects",0,"extraObjects",0));
         check(Math.abs(lowOnly-0.9)<1e-9&&Math.abs(clean)<1e-9,"低置信按 1-置信度进入优先级");
         check(Math.abs(geometry-1.0)<1e-9&&geometry>lowOnly,"每个 geometryIssues 加权 0.5，两项几何问题高于仅低置信");
         check(Math.abs(reviewFlag-0.5)<1e-9,"requiresGeometryReview 同样加权 0.5");
         check(Math.abs(missed-0.4)<1e-9&&Math.abs(extra-0.2)<1e-9&&missed>extra,"评测漏检重于多检");
+        check(Math.abs(classified-0.4)<1e-9,"分类错误或缺预测按漏检同级 0.4 加权");
     }
     /** 集成：真实评测链路产出的 hard 队列按优先级降序，且建议卡只建议不自动改。 */
     static void queue(Path root)throws Exception{
