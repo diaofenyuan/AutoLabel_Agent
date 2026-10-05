@@ -80,8 +80,13 @@ final class MaterialsRootTest {
             JsonObject preflight = EngineTest.command(e, "project.delete.preflight", Json.obj("projectId", Json.required(remove, "id")));
             check(Json.number(preflight, "managedBytes", 0) > 0, "删除预检统计自定义根内的受管占用");
 
+            // project.delete 与备份/恢复同属维护锁内的破坏性动作：必须先取得数据维护锁并回传同一 operationId，
+            // 否则引擎以「未声明归属」拒绝。这里沿用桌面 deleteProject 的顺序：预检在锁外，删除在锁内。
+            JsonObject owner = Json.obj("operationId", "materials-delete-owner");
+            check(Json.bool(EngineTest.command(e, "system.prepareDataMaintenance", owner), "ready", false), "删除前可进入数据维护");
             EngineTest.command(e, "project.delete", Json.obj("projectId", Json.required(remove, "id"), "confirmName", Json.required(remove, "name"),
-                "removeManagedFiles", true, "createBackup", false));
+                "removeManagedFiles", true, "createBackup", false, "operationId", "materials-delete-owner"));
+            EngineTest.command(e, "system.cancelDataMaintenance", owner);
             check(!Files.exists(removeFile), "删除项目清理自定义根内的受管原图");
             check(Files.isRegularFile(keepFile), "其他项目的受管原图不受影响");
         }
