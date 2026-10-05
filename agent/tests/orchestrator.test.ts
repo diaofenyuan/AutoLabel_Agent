@@ -185,6 +185,68 @@ test('评测集查询不把固定真值答案交给模型，也不开放真值�
   assert.throws(() => findTool('resolve_review'), /未开放/);
 });
 
+test('助手可以按评测或运行建立复核队列，但不代替用户下复核结论', async () => {
+  const calls: Array<{ command: string; payload: Record<string, unknown> }> = [];
+  const environment = { projectId: 'project-1', context: {}, openAsset() {}, engine: client((command, payload) => {
+    calls.push({ command, payload });
+    if (command === 'evaluation.get') return { id: 'evaluation-1', projectId: 'project-1' };
+    if (command === 'run.get') return { id: 'run-1', projectId: 'project-1' };
+    if (command === 'review.build') return { created: 2, existing: 1, itemsTruncated: false, items: [{
+      id: 'item-1', projectId: 'project-1', assetId: 'asset-1', candidateVersion: 3, reason: 'hard_case', severity: 'error',
+      source: 'hard', status: 'pending', priority: 1.4, identityKey: '内部身份', note: '用户备注',
+      signals: { minConfidence: 0.2, geometryIssues: 1, requiresGeometryReview: false, missedObjects: 1, extraObjects: 0, raw: '内部原文' },
+    }] };
+    throw new Error(command);
+  }) };
+
+  const built = await findTool('build_review_queue').execute(
+    { evaluationId: 'evaluation-1', runId: null, source: 'hard', minMatchedIoU: null, maxNormalizedPointError: null }, environment) as Record<string, unknown>;
+  assert.equal(findTool('build_review_queue').mutation, true, '建队列会写记录，先看方案时不能被执行');
+  assert.deepEqual(calls.at(-1), { command: 'review.build', payload: { evaluationId: 'evaluation-1', source: 'hard' } });
+  assert.equal(built.created, 2);
+  assert.equal((built.items as Array<Record<string, unknown>>)[0].priority, 1.4, '难例优先级要回传，助手才能解释排序');
+  assert.ok(!JSON.stringify(built).includes('内部身份') && !JSON.stringify(built).includes('内部原文') && !JSON.stringify(built).includes('用户备注'),
+    '内部标识、用户备注与信号原文不能回流给模型');
+
+  // 来源记录必须属于当前项目：review.build 只按来源归属建队列，越界会把队列建到别的项目。
+  let builtForeign = false;
+  const foreign = { ...environment, engine: client(command => {
+    if (command === 'evaluation.get') return { id: 'evaluation-1', projectId: 'other-project' };
+    if (command === 'review.build') builtForeign = true;
+    throw new Error(command);
+  }) };
+  await assert.rejects(findTool('build_review_queue').execute({ evaluationId: 'evaluation-1', source: 'issues' }, foreign), /不属于当前项目/);
+  assert.equal(builtForeign, false);
+
+  // 与界面同一边界：难例队列与已有运行都不用定位阈值，来源也必须二选一。
+  await assert.rejects(findTool('build_review_queue').execute({ runId: 'run-1', source: 'issues', minMatchedIoU: 0.4 }, environment), /不使用定位阈值/);
+  await assert.rejects(findTool('build_review_queue').execute({ source: 'issues' }, environment), /一个来源/);
+  await assert.rejects(findTool('build_review_queue').execute({ evaluationId: 'evaluation-1', runId: 'run-1' }, environment), /一个来源/);
+  await assert.rejects(findTool('build_review_queue').execute({ evaluationId: 'evaluation-1', source: 'model_confidence' }, environment), /issues 或 hard/);
+
+  // 定向问题的阈值要传给引擎，而不是被默默忽略。
+  await findTool('build_review_queue').execute({ evaluationId: 'evaluation-1', source: 'issues', minMatchedIoU: 0.4 }, environment);
+  assert.deepEqual(calls.at(-1), { command: 'review.build', payload: { evaluationId: 'evaluation-1', source: 'issues', rules: { minMatchedIoU: 0.4 } } });
+});
+
+test('复核列表可按来源筛选，难例排序依据随条目回传', async () => {
+  const calls: Array<{ command: string; payload: Record<string, unknown> }> = [];
+  const environment = { projectId: 'project-1', context: {}, openAsset() {}, engine: client((command, payload) => {
+    calls.push({ command, payload });
+    return { total: 1, items: [{ id: 'item-1', projectId: 'project-1', assetId: 'asset-1', reason: 'hard_case', severity: 'error',
+      source: 'hard', status: 'pending', priority: 0.9, identityKey: '内部身份', note: '用户备注',
+      signals: { minConfidence: 0.1, geometryIssues: 0, requiresGeometryReview: false, missedObjects: 0, extraObjects: 0, raw: '内部原文' } }] };
+  }) };
+
+  const page = await findTool('list_review_items').execute({ offset: null, status: null, source: 'hard' }, environment) as Record<string, unknown>;
+  assert.deepEqual(calls.at(-1)!.payload, { projectId: 'project-1', offset: 0, limit: 50, source: 'hard' });
+  const item = (page.items as Array<Record<string, unknown>>)[0];
+  assert.equal(item.priority, 0.9);
+  assert.equal((item.signals as Record<string, unknown>).minConfidence, 0.1);
+  assert.ok(!JSON.stringify(page).includes('内部身份') && !JSON.stringify(page).includes('用户备注'), '内部标识与用户备注不回流给模型');
+  await assert.rejects(findTool('list_review_items').execute({ offset: null, status: null, source: 'model_confidence' }, environment), /复核来源/);
+});
+
 test('固定评测集和已有运行必须属于当前项目且不超出所选素材范围', async () => {
   let submitted = false;
   let snapshot = { ...published, projectId: 'other-project' };

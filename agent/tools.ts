@@ -123,6 +123,17 @@ function evaluationSummary(value: Record<string, unknown>) {
   ])) : [];
   return summary;
 }
+/**
+ * 复核项对模型的可见字段：难例队列的 priority/signals 必须回传，助手才能说明「这条为什么排在前面」；
+ * identityKey、note 等内部/用户私有字段不回流。
+ */
+function reviewItemSummary(value: unknown, environment: ToolEnvironment) {
+  const item = scopedRecord(value, environment, '复核项');
+  return { ...pick(item, ['id', 'assetId', 'candidateVersion', 'objectId', 'reason', 'severity', 'source', 'status',
+    'evaluationId', 'runId', 'sampleId', 'priority']),
+    ...(item.signals == null ? {} : { signals: pick(object(item.signals, '难例信号'),
+      ['minConfidence', 'geometryIssues', 'requiresGeometryReview', 'missedObjects', 'extraObjects']) }) };
+}
 function preflightSummary(value: Record<string, unknown>) {
   return { ...pick(value, ['canEvaluate', 'canStart', 'sampleCount', 'schemeCount', 'plannedRequests', 'estimatedMaxRequests',
       'budgetScopeId', 'maxRequests', 'source', 'pairedComparableSamples', 'nearDuplicateCheck']),
@@ -583,21 +594,63 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
-    name: 'list_review_items', description: '分页查询当前项目的待复核问题。可随后用 open_asset 打开素材；查询不会完成人工复核、确认标注或重发请求。',
-    parameters: schema({ offset: { type: ['integer', 'null'], minimum: 0 }, status: nullableString }), mutation: false,
+    // 复核队列此前只能由用户在质量页手工建立：助手能查（list_review_items）却不能按评测/运行排队，
+    // 「评测 → 难例排队」在对话里是断的。这里补上建立入口，但只建待复核清单，不代替用户下结论。
+    name: 'build_review_queue', description: '按一次已保存评测或已有运行建立待复核清单。source="hard" 建难例优先队列（按低置信、几何问题、漏检多检排序），缺省按定向问题建立；只排队，不改标注、不改独立真值、不发起模型调用。逐条复核结论必须由用户在复核面板处理，不能把队列说成已确认问题。最多返回前 20 项，完整清单用 list_review_items 分页查看。',
+    parameters: schema({ evaluationId: nullableString, runId: nullableString,
+      source: { type: ['string', 'null'], enum: ['issues', 'hard', null] },
+      minMatchedIoU: { type: ['number', 'null'], minimum: 0, maximum: 1 },
+      maxNormalizedPointError: { type: ['number', 'null'], minimum: 0, maximum: 1 } }), mutation: true,
     async execute(args, env) {
-      fields(args, ['offset', 'status']);
+      fields(args, ['evaluationId', 'runId', 'source', 'minMatchedIoU', 'maxNormalizedPointError']);
+      const evaluationId = args.evaluationId == null ? undefined : id(args.evaluationId, '评测标识');
+      const runId = args.runId == null ? undefined : id(args.runId, '已有任务');
+      if (!!evaluationId === !!runId) throw new AgentError('INVALID_ARGUMENT', '请选择评测或已有运行中的一个来源');
+      const source = args.source == null ? 'issues' : text(args.source, '复核来源', 20);
+      if (!['issues', 'hard'].includes(source)) throw new AgentError('INVALID_ARGUMENT', '复核来源应为 issues 或 hard');
+      const rules: Record<string, number> = {};
+      for (const [key, label] of [['minMatchedIoU', '框匹配 IoU 阈值'], ['maxNormalizedPointError', '关键点误差阈值']] as const) {
+        const value = args[key];
+        if (value == null) continue;
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1)
+          throw new AgentError('INVALID_ARGUMENT', `${label}应为 0～1 的数值`);
+        rules[key] = value;
+      }
+      // 与界面同一边界：难例队列按优先级排序、已有运行只统计执行问题，都不用定位阈值，
+      // 静默忽略会让模型以为阈值生效，这里直接拒绝。
+      if (Object.keys(rules).length && (source === 'hard' || runId))
+        throw new AgentError('INVALID_ARGUMENT', source === 'hard' ? '难例优先队列不使用定位阈值，请去掉阈值参数' : '已有运行的执行问题不使用定位阈值，请去掉阈值参数');
+      // review.build 不接收 projectId，来源记录的归属就是队列归属：越界来源会把队列建到别的项目。
+      if (evaluationId) scopedRecord(await env.engine.request('evaluation.get', { evaluationId }), env, '质量评测');
+      else scopedRecord(await env.engine.request('run.get', { runId }), env, '已有任务');
+      ensureActive(env);
+      const result = object(await env.engine.request('review.build', {
+        ...(evaluationId ? { evaluationId } : { runId }), source, ...(Object.keys(rules).length ? { rules } : {}),
+      }), '复核队列');
+      const items = Array.isArray(result.items) ? result.items : [];
+      return { created: integer(result.created, '新增复核项', 0, Number.MAX_SAFE_INTEGER),
+        existing: integer(result.existing, '已有复核项', 0, Number.MAX_SAFE_INTEGER), source,
+        itemsTruncated: result.itemsTruncated === true,
+        items: items.slice(0, 20).map(raw => reviewItemSummary(raw, env)) };
+    },
+  },
+  {
+    name: 'list_review_items', description: '分页查询当前项目的待复核问题，可按处理状态或来源（含难例优先队列 hard）筛选。可随后用 open_asset 打开素材；查询不会完成人工复核、确认标注或重发请求。',
+    parameters: schema({ offset: { type: ['integer', 'null'], minimum: 0 }, status: nullableString, source: nullableString }), mutation: false,
+    async execute(args, env) {
+      fields(args, ['offset', 'status', 'source']);
       const offset = args.offset == null ? 0 : integer(args.offset, '起始位置', 0, 10_000_000);
       const status = args.status == null ? undefined : text(args.status, '复核状态', 40);
       if (status && !['pending', 'checked', 'dismissed', 'request_relabel'].includes(status))
         throw new AgentError('INVALID_ARGUMENT', '不支持的复核筛选状态');
+      const source = args.source == null ? undefined : text(args.source, '复核来源', 40);
+      if (source && !['execution', 'truth_comparison', 'random', 'hard'].includes(source))
+        throw new AgentError('INVALID_ARGUMENT', '不支持的复核来源');
       const result = await env.engine.request<{ items: unknown[]; total: number }>('review.list', {
-        projectId: projectId(env), offset, limit: 50, ...(status ? { status } : {}),
+        projectId: projectId(env), offset, limit: 50, ...(status ? { status } : {}), ...(source ? { source } : {}),
       });
       const page = checkedItems(result, offset, 50, '复核项');
-      return { total: page.total, offset, items: page.items.map(raw => pick(scopedRecord(raw, env, '复核项'), [
-        'id', 'assetId', 'candidateVersion', 'objectId', 'reason', 'severity', 'source', 'status', 'evaluationId', 'runId', 'sampleId',
-      ])) };
+      return { total: page.total, offset, items: page.items.map(raw => reviewItemSummary(raw, env)) };
     },
   },
 ];
