@@ -37,13 +37,18 @@ function screened(assetId: string): RecordValue {
 function fixture(context: AgentContext = {}) {
   const calls: Array<{ command: string; payload: RecordValue }> = [], abort = new AbortController();
   const state = { jobs: [video()], frames: [frame(0), frame(1)], rows: [screened('a')], summary: summary(),
-    failure: '', wrongPage: false, pageEmpty: false, assetProject: 'project', abortAfterAsset: false,
+    failure: '', wrongPage: false, pageEmpty: false, assetProject: 'project', abortAfterAsset: false, retryOriginal: 'video-job',
     screening: { ...video('screening-job'), kind: 'image_screening', stage: 'done', canImport: false, parameters: { blurEnabled: true, blurThreshold: 10 } } as RecordValue };
   const engine: EngineClient = { async request<T>(command: string, payload: RecordValue = {}) {
     calls.push({ command, payload: structuredClone(payload) });
     if (state.failure === command) throw Object.assign(new Error('内部命令缺失'), { code: 'unknown_command' });
     if (command === 'media.job.list') return { total: state.jobs.length, items: state.jobs.slice(payload.offset as number, (payload.offset as number) + (payload.limit as number)) } as T;
     if (command === 'media.job.get') return structuredClone(payload.jobId === 'screening-job' ? state.screening : state.jobs[0]) as T;
+    // 重试返回一个全新的排队任务，只带 originalJobId 指回原任务；不带原任务的 error/summary，与真实引擎一致。
+    if (command === 'media.job.retry') return { id: 'retry-job', projectId: 'project', kind: 'video_extract', status: 'queued', stage: 'queued', sequence: 4,
+      createdAt: '2026-09-10T10:00:02Z', updatedAt: '2026-09-10T10:00:02Z', canCancel: true, canRetry: false, artifactCommitted: false,
+      assetsCommitted: false, canImport: false, originalJobId: state.retryOriginal, progress: { phase: 'queued', completed: 0, total: null },
+      parameters: { mode: 'fps', targetFps: 2, ranges: [{ start: 0, end: 1 }] }, sourcePath: 'D:/private/source.mp4' } as T;
     if (command === 'media.video.frames') return { total: state.frames.length, items: state.pageEmpty ? [] : state.frames.slice(payload.offset as number, (payload.offset as number) + (payload.limit as number)) } as T;
     if (command === 'media.screening.result') return { jobId: state.wrongPage ? 'other-job' : payload.jobId, section: payload.section, offset: payload.offset,
       limit: payload.limit, total: state.rows.length, items: state.rows.slice(payload.offset as number, (payload.offset as number) + (payload.limit as number)),
@@ -163,10 +168,49 @@ test('筛选阈值和 native 工具 schema 严格，不开放配置路径或隐�
     for (const child of Object.values(raw)) if (Array.isArray(child)) child.forEach(strict); else strict(child);
   }
   MEDIA_TOOL_DEFINITIONS.forEach(value => strict(value.parameters));
-  // create_video_job 是写操作但只消费用户已授权路径：授权本身仍由桌面文件选择器产生，
-  // 因此它出现在写入工具集合中是预期的，判定依据见 desktop/security.test.ts 的授权用例。
-  assert.deepEqual(MEDIA_TOOL_DEFINITIONS.filter(value => value.mutation).map(value => value.name), ['create_video_job', 'preview_image_screening']);
+  // create_video_job / retry_media_job 是写操作但只消费用户已授权或任务已记录的来源：
+  // 授权本身仍由桌面文件选择器产生，因此它们出现在写入工具集合中是预期的，
+  // 判定依据见 desktop/security.test.ts 的授权用例。
+  assert.deepEqual(MEDIA_TOOL_DEFINITIONS.filter(value => value.mutation).map(value => value.name), ['create_video_job', 'retry_media_job', 'preview_image_screening']);
   assert.equal(f.calls.length, 0);
+});
+
+test('媒体任务重试只接受可重试任务，返回指向原任务的新 job', async () => {
+  const f = fixture();
+  const retryable = { ...f.state.jobs[0], status: 'failed', stage: 'done', canRetry: true, canCancel: false,
+    artifactCommitted: false, assetsCommitted: false, canImport: false, error: { code: 'media_operation_failed', message: 'D:/private/source.mp4: 内部原文' } };
+  f.state.jobs[0] = retryable;
+  const result = await tool('retry_media_job').execute({ jobId: 'video-job' }, f.environment) as RecordValue;
+  // 先读原任务确认可重试，再发重试；重试只带 jobId，不重传来源与参数（那些由引擎从原任务取）。
+  assert.deepEqual(f.calls.map(call => call.command), ['media.job.get', 'media.job.retry']);
+  assert.deepEqual(f.calls[1].payload, { jobId: 'video-job' });
+  assert.equal(result.submitted, true); assert.equal(result.retriedJobId, 'video-job');
+  const created = result.job as RecordValue;
+  assert.equal(created.id, 'retry-job'); assert.equal(created.status, 'queued'); assert.equal(created.originalJobId, 'video-job');
+  assert.equal(created.canRetry, false); assert.equal(created.canImport, false);
+  assert.deepEqual(f.calls.some(call => call.command === 'media.video.create'), false);
+  noPrivate(result);
+
+  // 引擎标记不可重试时必须在本地拦下，不能把一个注定被拒的重试请求发出去。
+  f.state.jobs[0] = { ...retryable, canRetry: false }; f.calls.length = 0;
+  await assert.rejects(tool('retry_media_job').execute({ jobId: 'video-job' }, f.environment), { code: 'MEDIA_RETRY_INVALID' });
+  assert.deepEqual(f.calls.map(call => call.command), ['media.job.get']);
+
+  // 重试结果必须回指原任务，否则不能当成重试成功上报。
+  f.state.jobs[0] = retryable; f.state.retryOriginal = 'other-job'; f.calls.length = 0;
+  await assert.rejects(tool('retry_media_job').execute({ jobId: 'video-job' }, f.environment), /未指向原媒体任务/);
+  f.state.retryOriginal = 'video-job';
+
+  // 旧引擎缺命令、项目不符、取消都要明确失败，不回退为成功。
+  f.state.failure = 'media.job.retry';
+  await assert.rejects(tool('retry_media_job').execute({ jobId: 'video-job' }, f.environment), { code: 'MEDIA_CAPABILITY_REQUIRED' });
+  f.state.failure = '';
+  f.state.jobs[0] = { ...retryable, projectId: 'outside' };
+  await assert.rejects(tool('retry_media_job').execute({ jobId: 'video-job' }, f.environment), /不属于当前项目/);
+  f.state.jobs[0] = retryable;
+  await assert.rejects(tool('retry_media_job').execute({ jobId: 'video-job', sourcePath: 'D:/private/video' }, f.environment), /不支持的参数/);
+  f.abort.abort();
+  await assert.rejects(tool('retry_media_job').execute({ jobId: 'video-job' }, f.environment), { code: 'AGENT_CANCELLED' });
 });
 
 test('抽帧任务只提交已授权路径与单一模式，参数范围在提交前校验', async () => {

@@ -582,7 +582,9 @@ const agentCommands = new Set(['provider.list', 'provider.capabilities', 'chat.s
   'evaluation.preflight', 'evaluation.create', 'review.list', 'review.build', 'review.suggestions',
   'evaluation.rerun.preflight', 'evaluation.rerun.create', 'evaluation.rerun.get', 'evaluation.rerun.finish', 'budget.estimate', 'budget.get',
   'flow.capabilities', 'flow.preflight', 'flow.create', 'flow.get', 'flow.list', 'flow.artifact', 'flow.pause', 'flow.resume', 'flow.cancel', 'flow.retry', 'flow.rerun',
-  'local.runtime.get', 'local.model.get', 'local.model.list', 'model.library.status', 'media.job.get', 'media.job.list', 'media.video.create', 'media.video.frames', 'media.screening.result', 'media.screening.create',
+  // media.job.retry 只复用原任务已记录的来源与参数，不新增路径授权，也不触碰标注/真值；
+  // 引擎按 canRetry 再拦一道，助手无法重跑进行中或已完成的任务。
+  'local.runtime.get', 'local.model.get', 'local.model.list', 'model.library.status', 'media.job.get', 'media.job.list', 'media.job.retry', 'media.video.create', 'media.video.frames', 'media.screening.result', 'media.screening.create',
   'track.timeline.list', 'track.timeline.get', 'track.timeline.frames', 'track.list', 'track.get', 'track.keyframe.list',
   'track.generation.list', 'track.generation.get', 'track.generation.results', 'track.generate.preview', 'track.generate', 'track.generation.cancel',
   // 本地候选的只读查询（get / list）对助手开放：生成与确认/提升仍是用户显式操作。

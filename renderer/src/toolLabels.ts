@@ -16,7 +16,7 @@ export const toolNames: Record<string, string> = {
   get_review_suggestions: '读取复核建议',
   list_model_configurations: '读取接口与模型', preflight_evaluation_rerun: '预检评测重跑', run_evaluation: '提交评测重跑',
   list_local_models: '读取本地模型', get_local_runtime: '读取本地运行环境', list_builtin_models: '读取内置模型库',
-  create_video_job: '提交抽帧任务', get_media_job: '查看媒体任务', get_video_frames: '读取视频帧',
+  create_video_job: '提交抽帧任务', get_media_job: '查看媒体任务', get_video_frames: '读取视频帧', retry_media_job: '重试媒体任务',
   preview_image_screening: '预览筛选', get_screening_result: '查看筛选结果',
   list_media_jobs: '读取媒体任务',
   list_video_timelines: '读取视频时间轴', get_video_timeline: '查看时间轴', list_video_tracks: '读取对象轨迹',
