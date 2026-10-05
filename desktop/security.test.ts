@@ -351,7 +351,7 @@ test('重新评测要求明确请求上限，允许重复实验且参考素材�
     assert.throws(() => validateCommand('evaluation.rerun.create', { ...rerun, schemes: [{ ...scheme, ...change }] }), /格式不正确/);
   }
 });
-test('手工链路只接受已选择的标签、重定位目录和精确输出文件', async () => {
+test('手工链路只接受已选择的标签、分类数据集目录、重定位目录和精确输出文件', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'autolabel-manual-grant-'));
   try {
     const labels = path.join(root, '人工标签'); const outside = path.join(root, '未选择');
@@ -369,6 +369,12 @@ test('手工链路只接受已选择的标签、重定位目录和精确输出�
     await grants.add(labels, 'directory');
     await run('asset.relocate', { projectId: 'p', directory: labels });
     await run('annotation.importYolo', { projectId: 'p', labelSpace: 'source', classMap: { '0': 'car' }, labelsDir: labels });
+    // 分类数据集目录同样必须经选择器授权；映射键是文件夹名，缺 classMap 或类别 ID 非法都应被结构校验拦下。
+    await run('annotation.importClassify.preflight', { projectId: 'p', rootDir: labels });
+    await run('annotation.importClassify', { projectId: 'p', rootDir: labels, classMap: { 猫: 'car' } });
+    await assert.rejects(run('annotation.importClassify', { projectId: 'p', rootDir: outside, classMap: { 猫: 'car' } }), /尚未通过/);
+    await assert.rejects(run('annotation.importClassify', { projectId: 'p', rootDir: labels }), /格式不正确/);
+    await assert.rejects(run('annotation.importClassify', { projectId: 'p', rootDir: labels, classMap: { 猫: '非法 标识' } }), /格式不正确/);
     await run('export.reproduce', { exportId: 'export1', outputDir: labels });
     await assert.rejects(run('export.reproduce', { exportId: 'export1', outputDir: outside }), /尚未通过/);
     const outputPath = path.join(labels, '效果图.png');

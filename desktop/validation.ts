@@ -341,6 +341,11 @@ const schemas: Record<string, z.ZodType> = {
     labelsDir: z.string().min(1).max(32767).optional(), assetIds, confirm: z.literal(false).optional(),
     items: z.array(z.strictObject({ assetId: id, labelPath: z.string().min(1).max(32767), baseVersion: count.optional() })).max(100000).optional(),
   }).refine(value => !!value.labelsDir !== !!value.items, '应选择标签文件夹或文件列表'),
+  // 分类数据集导入：根目录下每个子文件夹是一个类别，故映射键是文件夹名而不是数字编号；
+  // 预检只读，用于把发现到的文件夹交给界面做显式映射，不允许界面凭类别排列自动对应。
+  'annotation.importClassify.preflight': z.strictObject({ projectId: id, rootDir: z.string().min(1).max(32767) }),
+  'annotation.importClassify': z.strictObject({ projectId: id, rootDir: z.string().min(1).max(32767),
+    classMap: z.record(z.string().min(1).max(200), id) }),
   'annotation.render': z.strictObject({ assetId: id, version: count.optional(), outputPath: z.string().min(1).max(32767),
     format: z.enum(['png', 'jpeg']).optional(), showLabels: z.boolean().optional(), showKeypoints: z.boolean().optional(), showGeometry: z.boolean().optional() }),
   'export.preflight': z.strictObject(exportFields),
