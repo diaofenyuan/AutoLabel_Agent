@@ -171,10 +171,12 @@ test('筛选阈值和 native 工具 schema 严格，不开放配置路径或隐�
 
 test('抽帧任务只提交已授权路径与单一模式，参数范围在提交前校验', async () => {
   const f = fixture();
-  // 三种模式各自只带上自己的参数，不把无关字段混进 payload。
+  // 四种模式各自只带上自己的参数，不把无关字段混进 payload。
   for (const [args, expected] of [[{ sourcePath: 'C:\\chosen.mp4', mode: 'interval', intervalSeconds: 1.5 }, { mode: 'interval', intervalSeconds: 1.5 }],
     [{ sourcePath: 'C:\\chosen.mp4', mode: 'every_n', everyNFrames: 30 }, { mode: 'every_n', everyNFrames: 30 }],
-    [{ sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 2 }, { mode: 'fps', targetFps: 2 }]] as const) {
+    [{ sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 2 }, { mode: 'fps', targetFps: 2 }],
+    [{ sourcePath: 'C:\\chosen.mp4', mode: 'scene' }, { mode: 'scene' }],
+    [{ sourcePath: 'C:\\chosen.mp4', mode: 'scene', sceneThreshold: 0.2, minIntervalSeconds: 2 }, { mode: 'scene', sceneThreshold: 0.2, minIntervalSeconds: 2 }]] as const) {
     f.calls.length = 0;
     const created = await tool('create_video_job').execute(args, f.environment) as RecordValue;
     assert.equal(created.submitted, true);
@@ -187,8 +189,15 @@ test('抽帧任务只提交已授权路径与单一模式，参数范围在提�
     ranges: [{ start: 0, end: 2 }, { start: 2, end: 4 }], format: 'jpg', jpegQuality: 3, maxFrames: 50 }, f.environment);
   assert.deepEqual(f.calls[0].payload.parameters, { mode: 'fps', targetFps: 1, ranges: [{ start: 0, end: 2 }, { start: 2, end: 4 }],
     format: 'jpg', jpegQuality: 3, maxFrames: 50 });
+  // 专属参数混用必须拒绝：引擎按「不同抽样方式的专属参数不能混用」硬拒、桌面 strictObject 联合体同样拒绝，
+  // 助手若静默丢掉多给的字段，提交出去的就不是调用方本意的抽样方式。
+  for (const args of [{ mode: 'interval', intervalSeconds: 1, targetFps: 2 }, { mode: 'fps', targetFps: 1, minIntervalSeconds: 2 },
+    { mode: 'scene', sceneThreshold: 0.2, intervalSeconds: 1 }, { mode: 'every_n', everyNFrames: 5, sceneThreshold: 0.2 }])
+    await assert.rejects(tool('create_video_job').execute({ sourcePath: 'C:\\chosen.mp4', ...args }, f.environment), /不能与其他抽帧方式混用/, JSON.stringify(args));
   for (const args of [{ sourcePath: 'C:\\chosen.mp4', mode: 'interval' }, { sourcePath: 'C:\\chosen.mp4', mode: 'mix', intervalSeconds: 1 },
     { sourcePath: 'C:\\chosen.mp4', mode: 'every_n', everyNFrames: 0 }, { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: Number.POSITIVE_INFINITY },
+    { sourcePath: 'C:\\chosen.mp4', mode: 'scene', sceneThreshold: 0.04 }, { sourcePath: 'C:\\chosen.mp4', mode: 'scene', sceneThreshold: 1.5 },
+    { sourcePath: 'C:\\chosen.mp4', mode: 'scene', minIntervalSeconds: 0 }, { sourcePath: 'C:\\chosen.mp4', mode: 'scene', minIntervalSeconds: 601 },
     { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, ranges: [{ start: 2, end: 1 }] },
     { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, ranges: [{ start: 0, end: 3 }, { start: 2, end: 4 }] },
     { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, format: 'webp' },
@@ -198,5 +207,5 @@ test('抽帧任务只提交已授权路径与单一模式，参数范围在提�
     await assert.rejects(tool('create_video_job').execute(args, f.environment), /整数|不支持的参数|INVALID_ARGUMENT|超出允许范围|不能为空|时间段|抽帧模式|输出格式/, JSON.stringify(args));
   // 引擎返回非抽帧任务时必须失败，不能把筛选任务当抽帧成功上报。
   f.state.jobs[0].kind = 'image_screening';
-  await assert.rejects(tool('create_video_job').execute({ sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1 }, f.environment), /没有返回视频抽帧任务/);
+  await assert.rejects(tool('create_video_job').execute({ sourcePath: 'C:\\chosen.mp4', mode: 'scene' }, f.environment), /没有返回视频抽帧任务/);
 });

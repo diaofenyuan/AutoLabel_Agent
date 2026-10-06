@@ -507,6 +507,20 @@ test('媒体抽帧和筛选严格校验范围，不接受私有路径与多种�
   for (const change of [{ intervalSeconds: 0 }, { everyNFrames: 2 }, { sourcePath: 'C:\\hidden.mp4' }, { ranges: [{ start: 1, end: 1 }] },
     { ranges: [{ start: 0, end: 3 }, { start: 2, end: 4 }] }, { ranges: [{ start: 0, end: Infinity }] }, { maxFrames: 10001 }, { maxOutputBytes: Number.MAX_SAFE_INTEGER + 1 },
     { outputSize: { width: 20000, height: 20000 } }, { timeoutMs: 86400001 }]) assert.throws(() => validateCommand('media.video.create', { ...input, parameters: { ...input.parameters, ...change } }));
+  // 场景变化抽帧：两个参数可缺省（引擎补默认 0.15 / 1 秒），给值时必须落在与引擎同源的 shared/media 范围内。
+  for (const parameters of [{ mode: 'scene', ranges: [{ start: 0, end: 3 }] },
+    { mode: 'scene', ranges: [{ start: 0, end: 3 }], sceneThreshold: 0.15, minIntervalSeconds: 1 },
+    { mode: 'scene', ranges: [{ start: 0, end: 3 }], sceneThreshold: 0.05, minIntervalSeconds: 0.001 },
+    { mode: 'scene', ranges: [{ start: 0, end: 3 }], sceneThreshold: 1, minIntervalSeconds: 600 }])
+    assert.doesNotThrow(() => validateCommand('media.video.create', { projectId: 'project', sourcePath: 'C:\\chosen.mp4', parameters }), JSON.stringify(parameters));
+  // 越界与跨模式混用必须拒绝：桌面与助手工具、引擎（video_parameters_invalid）三处口径一致。
+  for (const parameters of [{ mode: 'scene', sceneThreshold: 0.04, ranges: [{ start: 0, end: 3 }] },
+    { mode: 'scene', sceneThreshold: 1.5, ranges: [{ start: 0, end: 3 }] },
+    { mode: 'scene', minIntervalSeconds: 0, ranges: [{ start: 0, end: 3 }] },
+    { mode: 'scene', minIntervalSeconds: 601, ranges: [{ start: 0, end: 3 }] },
+    { mode: 'scene', intervalSeconds: 1, ranges: [{ start: 0, end: 3 }] },
+    { mode: 'scene', targetFps: 2, ranges: [{ start: 0, end: 3 }] }])
+    assert.throws(() => validateCommand('media.video.create', { projectId: 'project', sourcePath: 'C:\\chosen.mp4', parameters }), JSON.stringify(parameters));
   assert.throws(() => validateCommand('media.screening.create', { projectId: 'project', assetIds: ['asset', 'asset'], parameters: {} }));
   assert.throws(() => validateCommand('media.screening.create', { projectId: 'project', parameters: { blurEnabled: true } }));
   assert.doesNotThrow(() => validateCommand('media.screening.create', { projectId: 'project', parameters: { blurEnabled: true, blurThreshold: 0, maxComparisons: 0, maxPairs: 0 } }));
