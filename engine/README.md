@@ -21,6 +21,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/engine-build.ps1 -Te
   来源只作记录，执行授权仍按文件路径与 sha256 核对；`publicModel` 不下发路径。
 - **授权**：`local.model.authorize` 与服务启动参数 `localModelAuthorizations` 都只认「路径 + 摘要」，
   换数据作用域不继承授权；文件在执行前后各核对一次，改动即 `local_model_changed`。
+  路径按 `LocalRuntime.pathKey` 归一——Windows 折叠大小写，其他平台区分大小写；桌面侧持久化与查找必须用同一规则，
+  否则大小写敏感卷上的已授权模型会在引擎启动时被静默丢弃。
 - **开放词汇**：`openVocabulary` 的模型按 YOLO-World 载入；`local.run.create` 的 `textClasses` 决定类别，
   classMap 的键就是 textClasses 的下标（0 起），固定类别表模型带 `textClasses` 会被拒（`vocabulary_unsupported`）。
   worker 只读引擎下发的两个目录：`localVocabularyCacheDir` 与 `localTextEncoderDir`——

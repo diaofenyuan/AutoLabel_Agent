@@ -65,10 +65,8 @@ export class LocalExecutionSettings {
       guard();
       const selected = await regularFile(await this.grants.require(filename, ['model']), ['.pt', '.onnx']);
       const modelHash = await hashFile(selected);
-      const scopes = this.preferences.value.localModelGrants as Record<string, Record<string, string>> | undefined;
-      // 键用路径身份而非小写化字符串：授权记录随后要被当作真实路径回传给引擎与文件系统，
-      // 无条件小写会在大小写敏感卷上变成一条指向不存在文件的记录。
-      await this.preferences.update({ localModelGrants: { ...scopes, [scope]: { ...scopes?.[scope], [pathIdentity(selected)]: modelHash } } });
+      const scopes = this.authorizedScopes();
+      await this.preferences.update({ localModelGrants: { ...scopes, [scope]: { ...scopes[scope], [pathIdentity(selected)]: modelHash } } });
       if (engine) await engine.request('local.model.authorize', { path: selected, modelHash });
       return selected;
     });
@@ -88,32 +86,47 @@ export class LocalExecutionSettings {
         throw new DesktopError('LOCAL_MODEL_NOT_IN_LIBRARY', '只能授权模型库目录内的文件');
       }
       const modelHash = await hashFile(selected);
-      const scopes = this.preferences.value.localModelGrants as Record<string, Record<string, string>> | undefined;
-      await this.preferences.update({ localModelGrants: { ...scopes, [scope]: { ...scopes?.[scope], [key]: modelHash } } });
+      const scopes = this.authorizedScopes();
+      await this.preferences.update({ localModelGrants: { ...scopes, [scope]: { ...scopes[scope], [key]: modelHash } } });
       if (engine) await engine.request('local.model.authorize', { path: selected, modelHash });
       return { path: selected, modelHash };
     });
   }
   async modelAuthorizations(scope: string): Promise<Array<{ path: string; modelHash: string }>> {
-    const scopes = this.preferences.value.localModelGrants as Record<string, Record<string, string>> | undefined;
     const result: Array<{ path: string; modelHash: string }> = [];
-    for (const [key, modelHash] of Object.entries(scopes?.[scope] ?? {})) {
-      if (typeof modelHash !== 'string' || !/^[a-f0-9]{64}$/.test(modelHash)) continue;
+    for (const [filename, modelHash] of Object.entries(this.authorizedScopes()[scope] ?? {})) {
       try {
-        // 键是路径身份而非小写字符串：Windows 上小写键仍能被 realpath 解析，其他平台就是真实路径本身。
-        const selected = await regularFile(key, ['.pt', '.onnx']);
-        if (pathIdentity(selected) === key) result.push({ path: selected, modelHash });
+        const selected = await regularFile(filename, ['.pt', '.onnx']);
+        // 键已是 pathKey 归一形式；解析结果再归一必须回到同一个键，避免符号链接/大小写漂移被当成同一模型。
+        if (pathIdentity(selected) === filename) result.push({ path: selected, modelHash });
       } catch { /* 已移走的模型不会取得本次启动的执行权限。 */ }
     }
     return result;
   }
   async requireModel(scope: string, filename: unknown, expectedHash: unknown): Promise<string> {
     const selected = await regularFile(filename, ['.pt', '.onnx']);
-    const scopes = this.preferences.value.localModelGrants as Record<string, Record<string, string>> | undefined;
-    if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/i.test(expectedHash) || scopes?.[scope]?.[pathIdentity(selected)] !== expectedHash.toLowerCase()) {
+    if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/i.test(expectedHash) || this.authorizedScopes()[scope]?.[pathIdentity(selected)] !== expectedHash.toLowerCase()) {
       throw new DesktopError('LOCAL_MODEL_NOT_AUTHORIZED', '请为当前数据目录重新选择此模型文件，历史记录或恢复备份不能授权模型执行');
     }
     // Java 在加载和推理时核对实际文件摘要；此处只核对用户曾明确授权的文件身份。
     return selected;
+  }
+  /**
+   * 只承认 { 作用域: { 绝对路径: 64 位小写摘要 } } 的历史结构。
+   * 损坏或旧版残留（字符串/数组/相对路径/非法摘要）一律按空处理：读取不抛错，写回时也不再把这些条目扩散出去。
+   */
+  private authorizedScopes(): Record<string, Record<string, string>> {
+    const raw = this.preferences.value.localModelGrants;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    const scopes: Record<string, Record<string, string>> = {};
+    for (const [scope, entries] of Object.entries(raw as Record<string, unknown>)) {
+      if (!entries || typeof entries !== 'object' || Array.isArray(entries)) continue;
+      const clean: Record<string, string> = {};
+      for (const [filename, modelHash] of Object.entries(entries as Record<string, unknown>)) {
+        if (path.isAbsolute(filename) && typeof modelHash === 'string' && /^[a-f0-9]{64}$/.test(modelHash)) clean[pathIdentity(filename)] = modelHash;
+      }
+      if (Object.keys(clean).length) scopes[scope] = clean;
+    }
+    return scopes;
   }
 }

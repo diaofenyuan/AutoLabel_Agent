@@ -194,6 +194,64 @@ test('大小写敏感卷上仅大小写不同的两个模型文件互不授权',
   } finally { await f.close(); }
 });
 
+test('模型库授权只接受库内文件，目录前缀与库外路径都不能放行', async () => {
+  const f = await fixture();
+  try {
+    const library = path.join(f.root, 'library'); await mkdir(library, { recursive: true });
+    const sibling = path.join(f.root, 'library2'); await mkdir(sibling);
+    const inside = path.join(library, 'yolo11n.pt'); await writeFile(inside, 'library-model');
+    const outside = path.join(f.root, 'outside.pt'); await writeFile(outside, 'outside-model');
+    const sneaky = path.join(sibling, 'sneaky.pt'); await writeFile(sneaky, 'sneaky-model');
+    const roots = [await realpath(library)];
+    const modelHash = createHash('sha256').update('library-model').digest('hex');
+    // 库外文件与「同前缀的相邻目录」都不算库内；guard 通过也不能绕过。
+    await assert.rejects(f.local.trustModel('current', outside, roots, () => undefined, f.engine), /模型库/);
+    await assert.rejects(f.local.trustModel('current', sneaky, roots, () => undefined), /模型库/);
+    assert.equal(f.calls.length, 0);
+    assert.deepEqual(await f.local.trustModel('current', inside, roots, () => undefined, f.engine), { path: inside, modelHash });
+    assert.deepEqual(f.calls, [{ command: 'local.model.authorize', payload: { path: inside, modelHash } }]);
+    const reloaded = new DesktopPreferences(f.preferences.filename); await reloaded.load();
+    const restarted = new LocalExecutionSettings(reloaded, new PathGrants());
+    assert.deepEqual(await restarted.modelAuthorizations('current'), [{ path: inside, modelHash }]);
+    assert.equal(await restarted.requireModel('current', inside, modelHash), inside);
+    assert.deepEqual(await restarted.modelAuthorizations('external-restore'), []);
+  } finally { await f.close(); }
+});
+
+test('大小写敏感平台上授权路径区分大小写，与引擎 pathKey 同口径', { skip: process.platform === 'win32' }, async () => {
+  const f = await fixture();
+  try {
+    const upper = path.join(f.root, 'Model.pt'); const lower = path.join(f.root, 'model.pt');
+    await writeFile(upper, 'same-bytes'); await writeFile(lower, 'same-bytes');
+    await f.grants.add(upper, 'model');
+    await f.local.authorizeSelectedModel('current', upper, () => undefined);
+    const modelHash = createHash('sha256').update('same-bytes').digest('hex');
+    const reloaded = new DesktopPreferences(f.preferences.filename); await reloaded.load();
+    const restarted = new LocalExecutionSettings(reloaded, new PathGrants());
+    assert.equal(await restarted.requireModel('current', upper, modelHash), upper);
+    await assert.rejects(restarted.requireModel('current', lower, modelHash), /重新选择/);
+    assert.deepEqual(await restarted.modelAuthorizations('current'), [{ path: upper, modelHash }]);
+  } finally { await f.close(); }
+});
+
+test('损坏或旧版的模型授权配置按空处理，重新授权后写回干净结构', async () => {
+  const f = await fixture();
+  try {
+    const model = path.join(f.root, 'damaged.pt'); await writeFile(model, 'model-bytes');
+    // 手工构造损坏与旧结构：作用域值不是对象、条目摘要非法、键不是绝对路径。
+    await f.preferences.update({ localModelGrants: { current: 'junk', legacy: ['x'], other: { [model]: 'not-a-hash', 'relative.pt': 'a'.repeat(64) } } });
+    const preferences = new DesktopPreferences(f.preferences.filename); await preferences.load();
+    const local = new LocalExecutionSettings(preferences, f.grants);
+    for (const scope of ['current', 'legacy', 'other']) assert.deepEqual(await local.modelAuthorizations(scope), []);
+    await assert.rejects(local.requireModel('current', model, 'a'.repeat(64)), /重新选择/);
+    await f.grants.add(model, 'model');
+    const modelHash = createHash('sha256').update('model-bytes').digest('hex');
+    assert.equal(await local.authorizeSelectedModel('current', model, () => undefined), model);
+    assert.deepEqual(Object.keys(preferences.value.localModelGrants as Record<string, unknown>).sort(), ['current']);
+    assert.deepEqual(await local.modelAuthorizations('current'), [{ path: model, modelHash }]);
+  } finally { await f.close(); }
+});
+
 test('固定输入媒体只读取受管 PNG，拒绝错绑、查询、外部文件和目录连接', async () => {
   const f = await fixture();
   try {
