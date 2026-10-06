@@ -1,4 +1,4 @@
-import { CheckCircle2, Cpu, Film, FolderPlus, Image as ImageIcon, Play, Settings2, Sparkles } from 'lucide-react';
+import { CheckCircle2, Cpu, Film, FolderPlus, Image as ImageIcon, LoaderCircle, Play, Settings2, Sparkles } from 'lucide-react';
 import { useAiConfigured } from './aiState';
 import { useApp } from './context';
 import { useExampleProject } from './exampleProject';
@@ -23,7 +23,10 @@ export default function OnboardingLanes({ busy, onImportImages, onImportImageFol
       <header><span className="onboarding-step">1</span><h2>先试一下</h2></header>
       <p>内置合成图片与预置标注，不用配置任何接口，就能走完导入、标注、复核、导出。</p>
       <div className="onboarding-actions">
-        <button className="onboarding-primary" disabled={busy || example.busy} onClick={() => void example.load()}><Play size={14} />载入示例项目</button>
+        <button className="onboarding-primary" disabled={busy || example.busy} aria-busy={example.busy || undefined} onClick={() => void example.load()}>
+          {example.busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
+          {example.busy ? '正在载入…' : '载入示例项目'}
+        </button>
       </div>
     </section>
     <section className="onboarding-lane">
