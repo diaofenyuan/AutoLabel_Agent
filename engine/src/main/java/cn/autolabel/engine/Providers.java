@@ -80,7 +80,7 @@ final class Providers {
         value.addProperty("baseUrl",base);value.addProperty("protocol",protocol);
         // 接口地址、协议或请求头变了，先前登记的模型清单就属于另一个端点：留着会让选择器列出无效模型名。
         if(!base.equals(Json.str(old,"baseUrl",""))||!protocol.equals(Json.str(old,"protocol",""))
-            ||!String.valueOf(value.get("headers")).equals(String.valueOf(old.get("headers")))){value.remove("models");value.remove("modelsFetchedAt");}value.addProperty("concurrency",Json.bounded(value,"concurrency",4,1,32));value.addProperty("requestsPerMinute",Json.bounded(value,"requestsPerMinute",60,1,60000));
+            ||!String.valueOf(value.get("headers")).equals(String.valueOf(old.get("headers")))){value.remove("models");value.remove("modelsFetchedAt");}value.addProperty("concurrency",Json.bounded(value,"concurrency",32,1,32));value.addProperty("requestsPerMinute",Json.bounded(value,"requestsPerMinute",60,1,60000));
         value.addProperty("timeoutMs",Json.bounded(value,"timeoutMs",120000,1000,600000));value.addProperty("maxRetries",Json.bounded(value,"maxRetries",2,0,6));value.addProperty("maxImages",Json.bounded(value,"maxImages",12,1,64));
         // 能力结论的缓存键是「接口地址+模型+协议」：改名字、调限额等普通配置修改保留既有结论；换接口地址或协议后结论属于另一个端点，才整体清空。
         value.add("capabilities",base.equals(Json.str(old,"baseUrl",""))&&protocol.equals(Json.str(old,"protocol",""))?Json.object(old,"capabilities"):new JsonObject());
@@ -107,7 +107,8 @@ final class Providers {
     private List<QuotaId> quotas(JsonObject p){return quotas(p,keys.get(Json.required(p,"id")));}
     private List<QuotaId> quotas(JsonObject p,Credential captured){QuotaId credential=credentialQuota(p,captured);String explicit=Json.str(p,"quotaGroupId","");
         return explicit.isBlank()?List.of(credential):List.of(credential,new QuotaId(QuotaKind.MANUAL,explicit));}
-    private static Quota quota(JsonObject p){return new Quota(Json.bounded(p,"concurrency",4,1,32),Json.bounded(p,"requestsPerMinute",60,1,60000));}
+    // 接口级并发默认 32，与全局上限同宽：机器扛得住时不该被接口默认门槛挡在 4，真正限流交给 rpm 与按需下调。
+    private static Quota quota(JsonObject p){return new Quota(Json.bounded(p,"concurrency",32,1,32),Json.bounded(p,"requestsPerMinute",60,1,60000));}
     private static long spacingNanos(int rpm){return (TimeUnit.MINUTES.toNanos(1)+rpm-1)/rpm;}
     String group(JsonObject p){String explicit=Json.str(p,"quotaGroupId","");return explicit.isBlank()?credentialQuota(p).value:explicit;}
     synchronized Permit acquire(JsonObject p){return acquire(p,keys.get(Json.required(p,"id")));}

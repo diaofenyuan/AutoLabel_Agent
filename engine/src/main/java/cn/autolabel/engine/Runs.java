@@ -7,8 +7,10 @@ import java.util.*;
 import java.util.concurrent.*;
 
 final class Runs implements AutoCloseable {
+    /** 并发上限的合法区间上界；线程池按此宽度分配，实际放行数量由 globalLimit 实时决定。 */
+    static final int CONCURRENCY_CEILING=32;
     final Store store;final Projects projects;final Providers providers;final CandidateReuse reuse;RunResults inputResults;InputResultReuse inputReuse;
-    private final int globalLimit;
+    private volatile int globalLimit;
     private final ThreadPoolExecutor requests;
     private final ScheduledExecutorService dispatcher=Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("queue-dispatcher").factory());
     private final Object dispatchGate=new Object();
@@ -19,10 +21,17 @@ final class Runs implements AutoCloseable {
     private int roundRobin;
     volatile Runnable flowTick=()->{};
     Runs(Store store,Projects projects,Providers providers){this.store=store;this.projects=projects;this.providers=providers;reuse=new CandidateReuse(store);
-        globalLimit=store.read(c->{JsonObject r=Store.one(c,"SELECT data FROM settings WHERE id='global'");return r==null?8:Json.bounded(Json.parse(r.get("data").getAsString()),"globalConcurrency",8,1,32);});
-        requests=new ThreadPoolExecutor(globalLimit,globalLimit,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(globalLimit),Thread.ofPlatform().name("model-annotation-",0).factory(),new ThreadPoolExecutor.AbortPolicy());
+        globalLimit=readGlobalLimit();
+        // 线程池按区间上界分配，设置里调低并发不必重建引擎；真实放行量由 dispatchTick 按 globalLimit 闸住。
+        requests=new ThreadPoolExecutor(CONCURRENCY_CEILING,CONCURRENCY_CEILING,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(CONCURRENCY_CEILING),Thread.ofPlatform().name("model-annotation-",0).factory(),new ThreadPoolExecutor.AbortPolicy());
         recover();dispatcher.scheduleWithFixedDelay(this::tick,100,80,TimeUnit.MILLISECONDS);
     }
+    private int readGlobalLimit(){return store.read(c->{JsonObject r=Store.one(c,"SELECT data FROM settings WHERE id='global'");return r==null?8:Json.bounded(Json.parse(r.get("data").getAsString()),"globalConcurrency",8,1,CONCURRENCY_CEILING);});}
+    /**
+     * 保存设置后热更新全局上限，不必重启引擎。
+     * 收紧上限只影响后续派发：已在执行的任务跑完自然回落，缩容不会打断在途请求。
+     */
+    void applyGlobalConcurrency(int limit){int bounded=Math.max(1,Math.min(CONCURRENCY_CEILING,limit));if(bounded!=globalLimit){globalLimit=bounded;store.tx(c->{Store.event(c,"settings.globalConcurrencyApplied",null,null,null,Json.obj("globalConcurrency",bounded));return null;});}}
     void recover(){store.tx(c->{
         Store.update(c,"INSERT OR IGNORE INTO budgets(id,max_requests,used) SELECT COALESCE(json_extract(data,'$.budgetScopeId'),id),COALESCE(MIN(json_extract(data,'$.maxRequests')),9223372036854775807),SUM(COALESCE(json_extract(data,'$.requestsUsed'),0)) FROM runs WHERE COALESCE(json_extract(data,'$.kind'),'api')='api' GROUP BY COALESCE(json_extract(data,'$.budgetScopeId'),id)");
         for(JsonObject row:Store.rows(c,"SELECT id,data FROM runs WHERE status='running'")){JsonObject run=Json.parse(row.get("data").getAsString());run.addProperty("status","paused");run.addProperty("pauseReason","restart_review");Store.update(c,"UPDATE runs SET status='paused',data=? WHERE id=?",run,row.get("id").getAsString());}
@@ -121,6 +130,7 @@ final class Runs implements AutoCloseable {
         dispatchTick();}}
     private void dispatchTick(){if(closed||suspended||storagePaused||dataMaintenancePaused||store.writeFailed)return;
         try{
+            // 上限读实时值：设置里调高后无需重启即可多路派发。队列按区间上界留足容量，避免调高时被AbortPolicy 拒掉。
             if(requests.getActiveCount()+requests.getQueue().size()>=globalLimit)return;store.requireSpace(0);
             List<JsonObject> runs=store.read(c->Store.rows(c,"SELECT id,data FROM runs WHERE status='running' AND COALESCE(json_extract(data,'$.kind'),'api')='api' ORDER BY rowid LIMIT 100"));if(runs.isEmpty())return;
             int start=Math.floorMod(roundRobin++,runs.size());for(int i=0;i<runs.size();i++){
@@ -276,6 +286,6 @@ final class Runs implements AutoCloseable {
     private long inFlightCount(Connection c)throws Exception{return count(c,"samples","status IN ('preparing','sending','waiting','parsing','validating','saving')");}
     private long count(Connection c,String table,String condition)throws Exception{return Json.number(Store.one(c,"SELECT COUNT(*) AS n FROM "+table+" WHERE "+condition),"n",0);}
     void dataMaintenance(boolean value){synchronized(dispatchGate){dataMaintenancePaused=value;}}
-    JsonObject diagnostics(){return Json.obj("globalConcurrency",globalLimit,"activeWorkers",requests.getActiveCount(),"queuedInMemory",requests.getQueue().size(),"queueCapacity",globalLimit,"suspended",suspended,"dataMaintenancePaused",dataMaintenancePaused,"storagePaused",storagePaused||store.writeFailed,"providerGroups",providers.limits());}
+    JsonObject diagnostics(){return Json.obj("globalConcurrency",globalLimit,"activeWorkers",requests.getActiveCount(),"queuedInMemory",requests.getQueue().size(),"queueCapacity",CONCURRENCY_CEILING,"suspended",suspended,"dataMaintenancePaused",dataMaintenancePaused,"storagePaused",storagePaused||store.writeFailed,"providerGroups",providers.limits());}
     @Override public void close(){closed=true;dispatcher.shutdownNow();requests.shutdownNow();try{requests.awaitTermination(5,TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}}
 }

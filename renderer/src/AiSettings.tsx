@@ -12,7 +12,8 @@ import LocalModels from './LocalModels';
 import ModelLibrary from './ModelLibrary';
 
 interface Form {id?:string;name:string;baseUrl:string;protocol:string;model:string;concurrency:number;requestsPerMinute:number;timeoutMs:number;maxRetries:number;maxImages:number}
-const empty:Form={name:'',baseUrl:'',protocol:'chat-completions',model:'',concurrency:4,requestsPerMinute:60,timeoutMs:120000,maxRetries:2,maxImages:8};
+// 并发兜底 32：新建接口时若全局默认缺失，按与引擎侧一致的宽上限预填，机器扛得住就能跑满。
+const empty:Form={name:'',baseUrl:'',protocol:'chat-completions',model:'',concurrency:32,requestsPerMinute:60,timeoutMs:120000,maxRetries:2,maxImages:8};
 function providerForm(prefs:Preferences,provider?:Provider):Form {
   if(!provider)return {...empty,concurrency:prefs.concurrency,timeoutMs:prefs.timeout*1000,maxRetries:prefs.retries};
   // 只发送可编辑字段，避免把服务端返回的凭据状态等元数据写回严格接口。

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Download, Eye, PencilLine } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp, Download, Eye, PencilLine } from 'lucide-react';
 import { useApp } from './context';
 import { request, errorMessage, isDemo } from './bridge';
 import { thumbnailUrlForAsset } from './thumbnailUrl';
@@ -20,6 +20,7 @@ const annotationSourceNames: Record<string, string> = {
  * 对话里的项目素材概况：项目素材不是单次运行快照，文案明确提示不限于本轮。
  * 缩略图按页加载（每页 100 张 + 加载更多），统计只覆盖已加载部分并在文案里注明，
  * 抽查走只读预览，修正仍然回到对话。
+ * 默认只铺两排：项目动辄上千张，卡片被拉长会把对话流和输入框一起顶出视野。
  */
 export default function ResultCard({ project }: { project: Project }) {
   const { notify, events } = useApp();
@@ -30,6 +31,19 @@ export default function ResultCard({ project }: { project: Project }) {
   const [exporting, setExporting] = useState(false);
   const [failedThumbnails, setFailedThumbnails] = useState<Record<string, boolean>>({});
   const [thumbnailRetryKeys, setThumbnailRetryKeys] = useState<Record<string, number>>({});
+  const [expanded, setExpanded] = useState(false);
+  const gridRef = useRef<HTMLDivElement>(null);
+  // 两排封顶需要按当前列数换算张数：网格是 auto-fill，列数随窗口宽度变，写死张数会在窄窗口下多露一排。
+  const [columns, setColumns] = useState(0);
+  useEffect(() => {
+    const node = gridRef.current;
+    if (!node) return;
+    const measure = () => setColumns(getComputedStyle(node).gridTemplateColumns.split(' ').filter(Boolean).length);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [assets.length]);
   async function load(more: boolean) {
     setLoading(true);
     try {
@@ -40,7 +54,7 @@ export default function ResultCard({ project }: { project: Project }) {
     } catch (e) { notify(errorMessage(e), true); }
     finally { setLoading(false); }
   }
-  useEffect(() => { setAssets([]); setTotal(0); void load(false); }, [project.id]);
+  useEffect(() => { setAssets([]); setTotal(0); setExpanded(false); void load(false); }, [project.id]);
   /**
    * 标注结果是异步写入的：助手提交任务时这张卡片已经渲染出来了，只在挂载时读一次，
    * 运行结束后卡片就停在旧状态——走查里「明明有候选框，列表却显示未标注 · 0 个」正是这么来的。
@@ -60,6 +74,9 @@ export default function ResultCard({ project }: { project: Project }) {
     .map(label => ({ id: label.id, name: label.name, color: label.color,
       count: assets.reduce((sum, asset) => sum + asset.annotations.filter(annotation => annotation.classId === label.id).length, 0) }))
     .filter(item => item.count > 0);
+  // 折叠上限按实测列数取两排；列数尚未测出时先按 2 列估一版，避免首屏把 100 张全铺出来。
+  const collapsedLimit = Math.max(columns, 2) * 2;
+  const visible = expanded ? assets : assets.slice(0, collapsedLimit);
   return <section className="result-card" aria-label="项目素材概况">
     <div className="result-card-head">
       <div>
@@ -74,7 +91,7 @@ export default function ResultCard({ project }: { project: Project }) {
     </div>
     {distribution.length > 0 && <div className="result-stats">{distribution.map(item => <span key={item.id}><i style={{ background: item.color }} />{item.name} <strong>{item.count}</strong></span>)}</div>}
     {assets.length
-      ? <div className="result-grid">{assets.map(asset => <div className="result-thumb-wrap" key={asset.id}><button className="result-thumb" title={`${asset.name} · ${statusNames[asset.status] ?? asset.status}`} onClick={() => setPreview(asset)}>
+      ? <div className="result-grid" ref={gridRef}>{visible.map(asset => <div className="result-thumb-wrap" key={asset.id}><button className="result-thumb" title={`${asset.name} · ${statusNames[asset.status] ?? asset.status}`} onClick={() => setPreview(asset)}>
         <AssetThumbnail key={`${asset.id}:${thumbnailRetryKeys[asset.id] ?? 0}`} src={thumbnailUrlForAsset(asset, isDemo)} alt={asset.name}
           retryKey={thumbnailRetryKeys[asset.id] ?? 0} onFailureChange={failed => setFailedThumbnails(current => ({ ...current, [asset.id]: failed }))} />
         <span className="truncate">{asset.name}</span>
@@ -83,6 +100,9 @@ export default function ResultCard({ project }: { project: Project }) {
         onClick={event => { event.stopPropagation(); setFailedThumbnails(current => ({ ...current, [asset.id]: false }));
           setThumbnailRetryKeys(current => ({ ...current, [asset.id]: (current[asset.id] ?? 0) + 1 })); }}>重试缩略图</button>}</div>)}</div>
       : <p className="quiet-empty">{loading ? '正在读取素材…' : '这个项目还没有素材，先在对话里说明要导入什么。'}</p>}
+    {/* 折叠与分页是两层：先展开本轮已加载的全部，再考虑去服务端取下一页。文案写「已加载」避免与分页张数混淆。 */}
+    {assets.length > visible.length && <Button onClick={() => setExpanded(true)}><ChevronDown size={14} />展开已加载的 {assets.length} 张</Button>}
+    {expanded && <Button onClick={() => setExpanded(false)}><ChevronUp size={14} />收起</Button>}
     {assets.length < total && <Button busy={loading} onClick={() => void load(true)}>加载更多（还有 {total - assets.length} 张）</Button>}
     {preview && <Modal wide title={`素材 · ${preview.name}`} onClose={() => setPreview(null)}>
       {/* 结果卡片与项目概览共用同一个标注编辑器：默认只读，点「编辑标注」才进画布。 */}
