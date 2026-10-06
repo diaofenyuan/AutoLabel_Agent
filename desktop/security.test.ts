@@ -441,7 +441,11 @@ test('训练只放开触发与查询，数据快照必须来自已生成的数�
   assert.throws(() => validateCommand('project.classes.add', { projectId: 'p', names: [] }), /格式不正确/);
   // 预检是只读的：助手要能自己回答「素材为什么进不了数据集版本」（含视频帧硬规则），否则只能猜。
   assert.doesNotThrow(() => assertAgentCommand('dataset.version.preflight', { projectId: 'p', annotationScope: 'labeled' }));
-  for (const command of ['dataset.version.create', 'dataset.version.cancel', 'dataset.version.delete', 'dataset.version.items',
+  // 重试会重新落盘副本、改动版本状态，与取消/删除同口径，只由用户显式触发。
+  assert.doesNotThrow(() => validateCommand('dataset.version.retry', { versionId: 'v' }));
+  assert.throws(() => validateCommand('dataset.version.retry', { versionId: 'v', force: true }), /格式不正确/);
+  assert.throws(() => validateCommand('dataset.version.retry', {}), /格式不正确/);
+  for (const command of ['dataset.version.create', 'dataset.version.cancel', 'dataset.version.delete', 'dataset.version.retry', 'dataset.version.items',
     'training.job.retry', 'training.job.delete', 'training.job.registerModel', 'training.job.log', 'training.root.save']) {
     assert.throws(() => assertAgentCommand(command, {}), /Agent 工具范围/, command);
   }

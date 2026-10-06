@@ -395,6 +395,8 @@ const schemas: Record<string, z.ZodType> = {
   'dataset.version.items': z.strictObject({ versionId: id,
     outcome: z.enum(['included', 'filtered_out', 'variant']).optional(), ...trainingPage, limit: z.number().int().min(1).max(500).optional() }),
   'dataset.version.cancel': z.strictObject({ versionId: id }),
+  // 重试生成复用已存配方原地重跑，仅对失败/取消/中断的版本开放；与取消/删除同口径，不进 Agent 工具白名单。
+  'dataset.version.retry': z.strictObject({ versionId: id }),
   'dataset.version.delete': z.strictObject({ versionId: id, confirm: z.literal(true) }),
   'dataset.version.compare': z.strictObject({ versionId: id, otherVersionId: id }),
   'dataset.version.verify': z.strictObject({ versionId: id }),
