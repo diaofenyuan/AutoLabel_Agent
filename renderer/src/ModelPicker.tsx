@@ -83,7 +83,7 @@ export default function ModelPicker({ providers, providerId, model, disabled, on
     {open && <div className="picker-popover" style={style} role="dialog" aria-label="选择模型">
       <label className="picker-search"><Search size={15} /><input autoFocus value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索模型" /></label>
       <div className="picker-list">{visible.map(item => <div key={item.key} className={`picker-row ${current?.key === item.key ? 'selected' : ''}`}>
-        <button type="button" className="picker-choose" disabled={disabled} onClick={() => onChange(item)}>
+        <button type="button" className="picker-choose" disabled={disabled} onClick={() => { setOpen(false); setQuery(''); onChange(item); }}>
           <span className="picker-name truncate">{item.model}</span>
           <small className="truncate">{providerOf(item.providerId)?.name ?? item.providerId}{providerOf(item.providerId)?.hasCredential === false && ' · 未配置密钥'}</small>
           {current?.key === item.key && <Check size={15} />}

@@ -164,8 +164,14 @@ export async function checkDesktopAiPreset(window: BrowserWindow, output: string
     const configuredHome = await js<{ modelText: string; action: string }>(`(()=>{const lane=document.querySelector('.onboarding-lane:nth-child(3)');return {modelText:lane?.innerText??'',action:[...lane.querySelectorAll('button')].map(button=>button.innerText.trim()).join('|')}})()`);
     assert.ok(configuredHome.modelText.includes('当前模型：fixture-setup-model'), `首页应显示刚刚验证的默认模型，实际：${configuredHome.modelText}`);
     assert.ok(configuredHome.action.includes('调整 AI 配置'), `配置完成后入口应变为调整配置，实际：${configuredHome.action}`);
+    await js(`document.querySelector('.chat-home .model-picker-trigger')?.click()`);
+    await waitFor(`!!document.querySelector('.chat-home .model-picker .picker-choose')`);
+    await js(`document.querySelector('.chat-home .model-picker .picker-choose')?.click()`);
+    await waitFor(`!document.querySelector('.chat-home .model-picker .picker-popover')`);
+    const selectedModel = await js<string>(`document.querySelector('.chat-home .model-picker-trigger')?.innerText.trim() ?? ''`);
+    assert.ok(selectedModel.includes('fixture-setup-model'), `选择模型后输入卡应显示当前模型，实际：${selectedModel}`);
     assert.ok(modelRequests >= 2 && chatRequests >= 3, `本地验证请求数不符合预期：models=${modelRequests}, chat=${chatRequests}`);
-    checks.push({ check: 'configured-default-reflected-on-home', ...configuredHome, capabilityResults, modelRequests, chatRequests, endpoint: fixtureBaseUrl });
+    checks.push({ check: 'configured-default-reflected-on-home', ...configuredHome, capabilityResults, selectedModel, modelRequests, chatRequests, endpoint: fixtureBaseUrl });
     await writeFile(output, json({ checks, passed: true }));
     await closeFixture();
   } catch (error) {
