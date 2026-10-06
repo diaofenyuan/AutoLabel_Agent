@@ -58,7 +58,9 @@ if (!skipUi) {
 const started = Date.now();
 for (const [label, command, args] of steps) {
   console.log(`\n=== ${label} ===`);
-  const env = { ...process.env, AUTOLABEL_EXTRA_LAUNCH_ARGS: process.env.AUTOLABEL_EXTRA_LAUNCH_ARGS || '--no-sandbox --in-process-gpu --disable-gpu' };
+  // 默认只关 GPU 沙箱：保住硬件加速，让验收跑在与用户一致的真实渲染路径上。
+  // 早前默认直接 --disable-gpu，验收全程走软件渲染，界面卡顿之类的问题在验收里根本暴露不出来。
+  const env = { ...process.env, AUTOLABEL_EXTRA_LAUNCH_ARGS: process.env.AUTOLABEL_EXTRA_LAUNCH_ARGS || '--disable-gpu-sandbox' };
   // shell:true 下必须自己引号包好再拼一条命令：把参数数组交给 shell 只拼接不转义（DEP0190）。
   const line = [command, ...args].map(part => /\s/.test(part) ? `"${part}"` : part).join(' ');
   const code = (spawnSync(line, [], { stdio: 'inherit', windowsHide: true, shell: true, env }).status ?? 1);

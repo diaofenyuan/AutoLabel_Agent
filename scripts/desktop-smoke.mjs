@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { GPU_FALLBACK_ARGS, explicitLaunchArgs, isGpuLaunchFailure } from './gpu-fallback.mjs';
+import { GPU_FALLBACK_LADDER, explicitLaunchArgs, isGpuLaunchFailure } from './gpu-fallback.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packaged = process.argv.includes('--packaged');
 const windowOnly = process.argv.includes('--window');
@@ -114,7 +114,7 @@ if (manual) {
   args.push('--desktop-manual-check');
 }
 // 受限或显卡不可用环境（Chromium GPU 进程无法启动）可显式追加开关：
-// AUTOLABEL_EXTRA_LAUNCH_ARGS="--no-sandbox --in-process-gpu --disable-gpu"
+// AUTOLABEL_EXTRA_LAUNCH_ARGS="--disable-gpu-sandbox"
 // GPU 降级开关与判定取共享模块：开发启动（desktop-dev.mjs）用的是同一份，避免两处判定漂移。
 const explicit = explicitLaunchArgs();
 args.push(...explicit);
@@ -143,11 +143,15 @@ return new Promise((resolve, reject) => {
 });
 };
 // 已生效的降级开关：需要传给同一脚本内的后续启动（如 ui-check 的重启持久化校验）。
+// 逐级尝试阶梯（先关 GPU 沙箱保住硬件加速，再退软件渲染），取最后一次实际用上的那一级。
 let activeFallbackArgs = [];
 let exit = await run(args, allowAutoFallback);
-if (allowAutoFallback && isGpuLaunchFailure(exit, lastOutput)) {
-  console.log('检测到 GPU 通道不可用，自动附加降级开关重试一次。');
-  activeFallbackArgs = GPU_FALLBACK_ARGS;
+let tier = 0;
+while (allowAutoFallback && tier < GPU_FALLBACK_LADDER.length && isGpuLaunchFailure(exit, lastOutput)) {
+  const fallback = GPU_FALLBACK_LADDER[tier];
+  console.log(`检测到 GPU 通道不可用，附加降级开关重试：${fallback.join(' ')}`);
+  tier += 1;
+  activeFallbackArgs = fallback;
   exit = await run([...args, ...activeFallbackArgs], false);
 }
 assert.equal(exit, 0);

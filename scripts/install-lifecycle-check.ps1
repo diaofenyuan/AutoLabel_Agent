@@ -48,7 +48,8 @@ try {
   $smokeOut = Join-Path $scratch 'installed-smoke.json'
   $env:AUTOLABEL_TEST_USER_DATA = $smokeDir
   $env:AUTOLABEL_SMOKE_OUTPUT = $smokeOut
-  $env:AUTOLABEL_EXTRA_LAUNCH_ARGS = '--no-sandbox --in-process-gpu --disable-gpu'
+  # 只关 GPU 沙箱，保留硬件加速，使安装态冒烟跑在真实渲染路径上。
+  $env:AUTOLABEL_EXTRA_LAUNCH_ARGS = '--disable-gpu-sandbox'
   $p = Start-Process -FilePath $exe.FullName -ArgumentList @('--desktop-smoke') -Wait -PassThru
   Assert ($p.ExitCode -eq 0) "installed smoke exit 0 (got $($p.ExitCode))"
   $smoke = Get-Content $smokeOut -Raw -Encoding UTF8 | ConvertFrom-Json
