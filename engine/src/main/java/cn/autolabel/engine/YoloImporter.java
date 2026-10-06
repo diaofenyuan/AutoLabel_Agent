@@ -3,13 +3,17 @@ package cn.autolabel.engine;
 import com.google.gson.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.stream.Stream;
 
 final class YoloImporter {
     private final Store store;private final Projects projects;
     YoloImporter(Store store,Projects projects){this.store=store;this.projects=projects;}
     JsonObject importLabels(JsonObject p)throws Exception{
-        String pid=Json.required(p,"projectId"),space=Json.required(p,"labelSpace");if(!Set.of("source","baseline").contains(space))throw new ApiError(400,"label_space_required","请明确标签使用 source 源文件坐标还是 baseline 基准图坐标。");
-        JsonObject project=projects.get(pid),classMap=Json.object(p,"classMap");String type=Json.required(project,"taskType");if(type.equals("classify"))throw new ApiError(422,"classification_import_unsupported","分类数据使用类别文件夹结构，当前标签文本导入入口支持 Detect、Pose、OBB、Segment。");
+        String pid=Json.required(p,"projectId");JsonObject project=projects.get(pid);String type=Json.required(project,"taskType");
+        // 分类没有坐标空间与类别编号，走独立的类别文件夹链路；object 任务继续要求 labelSpace/classMap，由引擎按项目任务类型判定。
+        if(type.equals("classify"))return importClassification(p,project);
+        String space=Json.required(p,"labelSpace");if(!Set.of("source","baseline").contains(space))throw new ApiError(400,"label_space_required","请明确标签使用 source 源文件坐标还是 baseline 基准图坐标。");
+        JsonObject classMap=Json.object(p,"classMap");
         if(classMap.isEmpty())throw new ApiError(400,"class_map_required","请明确 YOLO 类别编号到项目类别 ID 的映射。");
         for(var entry:classMap.entrySet())if(!entry.getKey().matches("0|[1-9][0-9]*")||!entry.getValue().isJsonPrimitive())throw new ApiError(400,"class_map_invalid","类别映射应使用非负整数编号和稳定类别 ID。");
         JsonArray items=Json.array(p,"items").deepCopy();
@@ -31,6 +35,56 @@ final class YoloImporter {
             JsonObject result=projects.save(Json.obj("assetId",aid,"baseVersion",Json.integer(item,"baseVersion",Json.integer(asset,"version",0)),"annotations",annotations,"confirm",Json.bool(p,"confirm",false)),"imported_yolo",Json.obj("labelSpace",space,"fileName",path.getFileName().toString(),"labelHash",Media.hash(path),"importedAt",Json.now(),"sourceToBaselineApplied",space.equals("source"),"classMap",classMap));saved.add(result);
         }catch(Exception e){if(e instanceof ApiError a&&a.status>=500)throw a;errors.add(Json.obj("assetId",aid,"code",e instanceof ApiError a?a.code:"label_read_failed","message",e instanceof ApiError a?a.getMessage():"标签读取或解析失败，原标注保持不变。"));}}
         return Json.obj("imported",saved.size(),"errors",errors,"items",saved);
+    }
+    /**
+     * 分类标签来自「一个类别一个子文件夹」的数据集结构：顶层子文件夹名匹配项目类别名称（其次匹配类别 ID），
+     * 文件夹内的文件名主干匹配素材名。分类没有几何坐标，因此不读坐标、不要求 labelSpace/classMap，
+     * 避免让用户为分类标签选择无意义的坐标空间。整批只写未标注素材：已有正式版本或草稿的素材单独报告并保持原样。
+     */
+    JsonObject importClassification(JsonObject p,JsonObject project)throws Exception{
+        String pid=Json.required(project,"id");
+        if(!Json.array(p,"items").isEmpty())throw new ApiError(400,"classification_items_unsupported","分类标签按类别文件夹导入，请使用 labelsDir，不要逐文件指定 items。");
+        Path directory=Path.of(Json.required(p,"labelsDir")).toAbsolutePath().normalize();if(!Files.isDirectory(directory))throw new ApiError(400,"directory_unavailable","标签目录不可访问。");
+        // 文件夹名优先按类别名称匹配，其次允许直接使用稳定类别 ID；两者都不命中视为数据集组织错误，导入前直接拒绝。
+        Map<String,String> byName=new LinkedHashMap<>(),byId=new HashMap<>();
+        for(JsonElement e:Json.array(project,"classes")){JsonObject c=e.getAsJsonObject();byName.put(Json.required(c,"name"),Json.required(c,"id"));byId.put(Json.required(c,"id"),Json.required(c,"id"));}
+        Map<String,String> folders=new HashMap<>();JsonArray folderNames=new JsonArray();
+        try(Stream<Path> stream=Files.list(directory)){for(Path entry:stream.filter(Files::isDirectory).sorted().toList()){
+            String folder=entry.getFileName().toString(),classId=byName.containsKey(folder)?byName.get(folder):byId.get(folder);
+            if(classId==null)throw new ApiError(422,"classification_folder_unmapped","类别文件夹「"+folder+"」未匹配项目类别；请使用类别名称（"+String.join("、",byName.keySet())+"）命名子文件夹。");
+            folders.put(folder,classId);folderNames.add(folder);}}
+        if(folders.isEmpty())throw new ApiError(400,"classification_dir_empty","所选目录下没有类别子文件夹。");
+        // 先把文件夹内的文件名主干归到类别；同一主干出现在多个类别文件夹时在逐素材阶段报歧义。
+        Map<String,List<String>> classByStem=new HashMap<>();Map<String,Path> pathByStem=new HashMap<>();
+        try(Stream<Path> stream=Files.walk(directory,3)){for(Path file:stream.filter(Files::isRegularFile).sorted().toList()){
+            Path relative=directory.relativize(file);if(relative.getNameCount()<2)continue; // 顶层散落文件不携带类别，忽略
+            String classId=folders.get(relative.getName(0).toString());if(classId==null)continue;
+            String stem=stem(file.getFileName().toString());List<String> found=classByStem.computeIfAbsent(stem,k->new ArrayList<>());
+            if(!found.contains(classId))found.add(classId);pathByStem.putIfAbsent(stem,file);}}
+        JsonArray assets=store.read(c->Store.docs(c,"SELECT data FROM assets WHERE project_id=?",pid));
+        JsonArray requestedAssets=Json.array(p,"assetIds");
+        if(p.has("assetIds")&&requestedAssets.isEmpty())throw new ApiError(400,"asset_selection_empty","请选择素材。");
+        Set<String> wanted=new HashSet<>(),projectIds=new HashSet<>();
+        for(JsonElement e:requestedAssets)wanted.add(e.getAsString());
+        for(JsonElement e:assets)projectIds.add(Json.required(e.getAsJsonObject(),"id"));
+        if(!wanted.isEmpty()&&!projectIds.containsAll(wanted))throw new ApiError(400,"asset_project_mismatch","所选素材不属于当前项目。");
+        List<JsonObject> targets=new ArrayList<>();
+        for(JsonElement e:assets){JsonObject asset=e.getAsJsonObject();if(!wanted.isEmpty()&&!wanted.contains(Json.required(asset,"id")))continue;targets.add(asset);}
+        if(targets.isEmpty())throw new ApiError(400,"asset_selection_empty","没有可导入标签的素材。");if(targets.size()>10000)throw new ApiError(413,"import_batch_too_large","单次标签导入最多 10000 张。");
+        JsonArray errors=new JsonArray(),saved=new JsonArray();
+        for(JsonObject asset:targets){String aid=Json.required(asset,"id");try{
+            String stem=stem(Json.required(asset,"name"));List<String> candidates=classByStem.getOrDefault(stem,List.of());
+            if(candidates.isEmpty())throw new ApiError(404,"label_missing","在类别文件夹中未找到同名样本，原标注保持不变。");
+            if(candidates.size()>1)throw new ApiError(409,"classification_label_ambiguous","同名样本出现在多个类别文件夹，无法唯一确定类别；请整理数据集后重试，原标注保持不变。");
+            if(Json.integer(asset,"version",0)>0||asset.has("draft"))throw new ApiError(409,"annotation_existing","该素材已有正式标注或草稿；分类文件夹导入只写入未标注素材，避免覆盖人工结果。");
+            Path file=pathByStem.get(stem);
+            JsonObject result=projects.save(Json.obj("assetId",aid,"baseVersion",Json.integer(asset,"version",0),
+                "annotations",Json.arr(Json.obj("id",Json.id(),"classId",candidates.get(0),"type","classify")),"confirm",false),"imported_yolo",
+                Json.obj("importKind","classification_folders","folderName",directory.relativize(file).getName(0).toString(),"fileName",file.getFileName().toString(),
+                    "labelHash",Media.hash(file),"classId",candidates.get(0),"importedAt",Json.now()));
+            saved.add(result);
+        }catch(Exception e){if(e instanceof ApiError a&&a.status>=500)throw a;errors.add(Json.obj("assetId",aid,"code",e instanceof ApiError a?a.code:"label_read_failed","message",e instanceof ApiError a?a.getMessage():"标签读取或解析失败，原标注保持不变。"));}}
+        return Json.obj("imported",saved.size(),"errors",errors,"items",saved,"folders",folderNames);
     }
     static String stem(String name){int dot=name.lastIndexOf('.');return dot>0?name.substring(0,dot):name;}
     static JsonArray parse(String text,JsonObject asset,JsonObject project,JsonObject classMap,String space){
