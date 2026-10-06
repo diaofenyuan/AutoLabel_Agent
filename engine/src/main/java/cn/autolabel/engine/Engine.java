@@ -81,6 +81,8 @@ final class Engine implements AutoCloseable {
         case "dataset.version.get"->datasetVersions.get(p);case "dataset.version.list"->datasetVersions.list(p);case "dataset.version.items"->datasetVersions.items(p);
         case "dataset.version.cancel"->datasetVersions.cancel(p);case "dataset.version.delete"->datasetVersions.delete(p);
         case "dataset.version.compare"->datasetVersions.compare(p);case "dataset.version.verify"->datasetVersions.verify(p);
+        // 重试只对失败/取消/中断的版本开放，复用已存配方原地重跑；与取消/删除同口径，不进 Agent 工具白名单。
+        case "dataset.version.retry"->datasetVersions.retry(p);
         case "provider.list"->providers.list();case "provider.save"->providers.save(p);case "provider.delete"->providers.delete(p);case "provider.models"->providers.models(Json.required(p,"providerId"));case "provider.test"->providers.test(p);case "provider.testAll"->providers.testAll(p);case "provider.capabilities"->providers.capabilities(p);case "credential.set"->providers.credential(p);
         case "chat.send"->providers.chat(p);
         case "chat.cancel"->providers.cancel(Json.required(p,"sessionId"));

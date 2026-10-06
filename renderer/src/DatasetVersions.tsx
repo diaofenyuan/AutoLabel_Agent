@@ -26,8 +26,8 @@ interface CompareResult {
 }
 interface VerifyResult { verified: number; total: number; missing: string[]; changed: string[]; consistent: boolean; contentHash: string }
 
-const statusText: Record<string, string> = { draft: '草稿', building: '生成中', ready: '已生成', failed: '生成失败', cancelled: '已取消', deleted: '已删除' };
-const stageText: Record<string, string> = { queued: '排队中', scanning: '解析原始数据集', splitting: '计算划分', copying: '复制与校验副本', publishing: '发布版本', done: '已完成', failed: '已失败', cancelled: '已取消' };
+const statusText: Record<string, string> = { draft: '草稿', building: '生成中', ready: '已生成', failed: '生成失败', cancelled: '已取消', interrupted: '已中断', deleted: '已删除' };
+const stageText: Record<string, string> = { queued: '排队中', scanning: '解析原始数据集', splitting: '计算划分', copying: '复制与校验副本', publishing: '发布版本', done: '已完成', failed: '已失败', cancelled: '已取消', interrupted: '已中断' };
 const scopeLabels: Array<[string, string]> = [['labeled', '有正式标注（候选 / 已修改 / 已确认）'], ['confirmed', '仅人工已确认'],
   ['all', '包含未标注素材（按无目标样本处理）']];
 /**
@@ -185,6 +185,7 @@ export function DatasetVersionDialog({ project, onClose, onOpenTemplate, onOpenC
       else if (action === 'verify') setVerified(await request<VerifyResult>('dataset.version.verify', { versionId }));
       else await request(`dataset.version.${action}`, { versionId, ...extra });
       if (action === 'verify') notify('复核完成。');
+      if (action === 'retry') notify('已按原配方重新开始生成，进度在下方实时更新。');
       if (action === 'delete') { setDetailId(''); setCompared(null); setVerified(null); notify('版本已删除（副本保留，可由生命周期清理）。'); }
       await refresh();
     } catch (e) { notify(readableError(e), true); }
@@ -276,7 +277,7 @@ export function DatasetVersionDialog({ project, onClose, onOpenTemplate, onOpenC
           const images = summary.images ?? counts;
           return <div className="training-card" key={version.id} style={detailId === version.id ? { borderColor: 'var(--accent)' } : undefined}>
             <header><strong style={{ fontSize: 13 }}>v{version.number}{version.name ? ` · ${version.name}` : ''}</strong>
-              <span className={`training-badge ${version.status === 'ready' ? 'ready' : version.status === 'failed' ? 'invalid' : ''}`}>{statusText[version.status] ?? version.status}</span></header>
+              <span className={`training-badge ${version.status === 'ready' ? 'ready' : version.status === 'failed' || version.status === 'interrupted' ? 'invalid' : ''}`}>{statusText[version.status] ?? version.status}</span></header>
             <p className="muted tiny">{scopeShort[version.annotationScope] ?? version.annotationScope} · {version.taskType.toUpperCase()} · {images} 张图片 · {String(summary.objects ?? '—')} 个目标</p>
             <p className="muted tiny">{size(summary.bytes)} · 排除 {String(summary.excluded ?? 0)} 张 · 来源组 {String(summary.groups ?? '—')} 个</p>
             {version.status === 'building' && version.build?.progress && <><div className="progress"><span style={{ width: `${Math.min(100, (version.build.progress.done ?? 0) / Math.max(1, version.build.progress.total ?? 1) * 100)}%` }} /></div>
@@ -290,6 +291,8 @@ export function DatasetVersionDialog({ project, onClose, onOpenTemplate, onOpenC
               {version.status === 'ready' && <Button disabled={busy || !base || base === version.id} onClick={() => void act('compare', version.id)}><GitCompare size={13} />对比</Button>}
               {version.status === 'ready' && <Button onClick={() => setBase(base === version.id ? '' : version.id)}>{base === version.id ? '取消基准' : '设为基准'}</Button>}
               {version.status === 'building' && <Button disabled={busy} onClick={() => void act('cancel', version.id)}><X size={13} />取消生成</Button>}
+              {/* 生成失败/取消/引擎重启中断都可原地重试：复用已存配方重跑，版本号不变。 */}
+              {['failed', 'cancelled', 'interrupted'].includes(version.status) && <Button disabled={busy} onClick={() => void act('retry', version.id)}><RefreshCw size={13} />重试生成</Button>}
               {version.status !== 'building' && <Button disabled={busy} onClick={() => void act('delete', version.id, { confirm: true })}><Trash2 size={13} />删除</Button>}
             </div>
           </div>;

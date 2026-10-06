@@ -31,11 +31,85 @@ final class DatasetVersions implements AutoCloseable {
     private static final Set<String> SCOPES=Set.of("labeled","confirmed","all");
     private static final Set<String> SPLITS=Set.of("train","val","test");
 
+    // 重试生成只对「没有发布快照」的终态开放；ready 是不可变已发布版本，building 是已在跑的构建。
+    private static final Set<String> RETRYABLE=Set.of("failed","cancelled","interrupted");
+    // 构建期间写入的半成品目录前缀：以 versionId 结尾，崩溃后按版本定位清理。
+    private static final String PARTIAL_PREFIX=".autolabel-partial-";
+
     private final Store store;private final Projects projects;private final Exporter exporter;
     private final ExecutorService builds=Executors.newVirtualThreadPerTaskExecutor();
     private final Set<String> cancelled=ConcurrentHashMap.newKeySet();
+    private volatile boolean closed;
 
-    DatasetVersions(Store store,Projects projects,Exporter exporter){this.store=store;this.projects=projects;this.exporter=exporter;}
+    DatasetVersions(Store store,Projects projects,Exporter exporter){this.store=store;this.projects=projects;this.exporter=exporter;recover();}
+
+    /**
+     * 引擎重启恢复：进程内的构建线程随上次退出已消失，持久化为 building 的记录再也不会有人推进。
+     * 不恢复就会永久卡死——cancel 只作用于内存中的构建线程，delete 又拦截 building，
+     * 用户既取消不掉也删不掉，界面永远显示「生成中」。这里如实结算为 interrupted（保留已写进度与配方，
+     * 可原地重试），并清掉崩溃残留的半成品目录。
+     */
+    private void recover(){
+        List<String> stuck=store.read(c->{List<String> ids=new ArrayList<>();
+            for(JsonObject row:Store.rows(c,"SELECT id FROM dataset_versions WHERE status='building'"))ids.add(Json.required(row,"id"));
+            return ids;});
+        for(String versionId:stuck){
+            deleteVersionArtifacts(versionId);
+            store.tx(c->{
+                JsonObject record=load(c,versionId);
+                JsonObject failure=Json.obj("code","dataset_version_interrupted","message","引擎重启中断了版本生成；已清理半成品副本，可重试生成。");
+                Store.update(c,"UPDATE dataset_versions SET status='interrupted',data=json_set(data,'$.status','interrupted','$.failure',json(?)) WHERE id=?",failure.toString(),versionId);
+                for(JsonObject row:Store.rows(c,"SELECT id,data FROM dataset_version_builds WHERE version_id=? AND status IN ('queued','running')",versionId)){
+                    JsonObject build=Json.parse(Json.required(row,"data"));JsonObject progress=Json.object(build,"progress");
+                    progress.addProperty("stage","interrupted");build.add("progress",progress);build.add("failure",failure.deepCopy());
+                    Store.update(c,"UPDATE dataset_version_builds SET status='interrupted',updated_at=?,data=? WHERE id=?",Json.now(),build,Json.required(row,"id"));
+                }
+                Store.event(c,"dataset.version.interrupted",null,null,null,Json.obj("versionId",versionId,"projectId",Json.str(record,"projectId",null)));
+                return null;});
+        }
+    }
+
+    /**
+     * 重试生成：只对 failed / cancelled / interrupted 开放（ready 是已发布快照，不可重写；building 已在跑）。
+     * 复用已存配方原地重跑，对外版本号不变；上次中断留下的半成品目录与陈旧逐项记录先清掉再重来。
+     */
+    JsonObject retry(JsonObject p){
+        keys(p,"versionId");
+        String versionId=string(p,"versionId",128);
+        if(closed)throw error(503,"engine_closing","引擎正在退出，暂时无法重试生成。");
+        String buildId=Json.id(),now=Json.now();
+        JsonObject plan=store.tx(c->{
+            JsonObject record=load(c,versionId);
+            String status=Json.required(record,"status");
+            if(status.equals("building"))throw error(409,"dataset_version_building","该版本正在生成中，请等待完成或先取消。");
+            if(!RETRYABLE.contains(status))throw error(409,"dataset_version_retry_invalid","只有失败、取消或中断的版本可以重试生成。");
+            if(!record.has("recipe"))throw error(409,"dataset_version_recipe_missing","该版本缺少生成配方，无法重试；请重新新建版本。");
+            JsonObject recipe=Json.object(record,"recipe").deepCopy();
+            Store.update(c,"UPDATE dataset_versions SET status='building',content_hash=NULL,manifest_hash=NULL,completed_at=NULL,"
+                +"data=json_set(json_remove(data,'$.failure','$.completedAt','$.summary','$.split','$.selection','$.transform','$.inspection'),'$.status','building') WHERE id=?",versionId);
+            Store.update(c,"DELETE FROM dataset_version_items WHERE version_id=?",versionId);
+            Store.update(c,"INSERT INTO dataset_version_builds(id,version_id,status,created_at,updated_at,data) VALUES(?,?,?,?,?,?)",
+                buildId,versionId,"queued",now,now,Json.obj("versionId",versionId,"progress",Json.obj("stage","queued","done",0,"total",0)));
+            Store.event(c,"dataset.version.retried",null,null,null,Json.obj("versionId",versionId,"projectId",Json.str(record,"projectId",null)));
+            return Json.obj("projectId",Json.required(record,"projectId"),"annotationScope",Json.required(record,"annotationScope"),
+                "recipe",recipe,"recipeHash",Json.str(record,"recipeHash",hashText(recipe.toString())));});
+        // 崩溃残留的目录会让 run 的 createDirectory / ATOMIC_MOVE 直接失败，必须在这里先清掉。
+        deleteVersionArtifacts(versionId);
+        JsonObject recipe=Json.object(plan,"recipe");
+        String seed=Json.str(Json.object(recipe,"split"),"seed","");
+        try{
+            builds.execute(()->run(versionId,buildId,Json.required(plan,"projectId"),Json.required(plan,"annotationScope"),recipe,
+                Json.required(plan,"recipeHash"),seed,Json.object(recipe,"selection")));
+        }catch(RejectedExecutionException closing){
+            // 派发失败必须把版本还原为可重试的终态，不能留下永远没人推进的 building。
+            store.tx(c->{JsonObject failure=Json.obj("code","dataset_version_interrupted","message","引擎正在退出，重试未派发；可稍后再次重试。");
+                Store.update(c,"UPDATE dataset_versions SET status='interrupted',data=json_set(data,'$.status','interrupted','$.failure',json(?)) WHERE id=?",failure.toString(),versionId);
+                Store.update(c,"UPDATE dataset_version_builds SET status='interrupted',updated_at=?,data=json_set(data,'$.progress',json(?)) WHERE id=?",Json.now(),Json.obj("stage","interrupted","done",0,"total",0).toString(),buildId);
+                return null;});
+            throw error(503,"engine_closing","引擎正在退出，暂时无法重试生成。");
+        }
+        return get(Json.obj("versionId",versionId));
+    }
 
     // ===== 数据源解析 =====
 
@@ -889,7 +963,7 @@ final class DatasetVersions implements AutoCloseable {
                 switch(Json.str(row,"status","")){
                     case "building"->building=count;
                     case "ready"->ready=count;
-                    case "failed","cancelled"->failed+=count;
+                    case "failed","cancelled","interrupted"->failed+=count;
                     default->{}
                 }
             }
@@ -944,6 +1018,19 @@ final class DatasetVersions implements AutoCloseable {
         catch(Exception ignored){}
     }
 
+    /**
+     * 清理某版本的崩溃残留目录，共两类：
+     * 1) 半成品 `.autolabel-partial-<id>`——复制阶段被杀死时留下，不删会让重试的 createDirectory 抛已存在；
+     * 2) 正式目录 `<id>`——发布 move 已完成但状态事务未提交时留下（本方法只对 building/failed/cancelled/interrupted
+     *    的版本调用，这些状态按定义没有已发布快照），不删会让重试的 ATOMIC_MOVE 目标非空而失败。
+     * 二者都是派生数据，重试会按同一配方与种子确定性地重建；不在这里做「就地转 ready」的抢救，避免把半成品当成品放行。
+     */
+    private void deleteVersionArtifacts(String versionId){
+        Path base=versionsDirectory();
+        deleteDirectory(base.resolve(PARTIAL_PREFIX+versionId));
+        deleteDirectory(base.resolve(versionId));
+    }
+
     static String hashText(String text){
         try{
             MessageDigest digest=MessageDigest.getInstance("SHA-256");
@@ -969,5 +1056,6 @@ final class DatasetVersions implements AutoCloseable {
         return text;
     }
     private static ApiError error(int status,String code,String message){return new ApiError(status,code,message);}
-    @Override public void close(){builds.shutdownNow();}
+    // closed 先置位再关池：重试入口据此拒绝派发，避免关停期间还往已关闭的执行器提交新构建。
+    @Override public void close(){closed=true;builds.shutdownNow();}
 }
