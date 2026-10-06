@@ -79,6 +79,18 @@ export interface TrackTimelineMutation {
   timeline: TrackTimeline; affectedTrackIds: string[];
 }
 export interface TrackTimelineCreateRequest { projectId: string; mediaJobId: string; name?: string }
+/** 已入库抽帧任务批量补建时间轴：只补「完全没有时间轴」的任务，已存在的归入 existing 不重复建。 */
+export interface TrackTimelineEnsureRequest { projectId: string }
+export interface TrackTimelineEnsureSkip { mediaJobId: string; reason: string; message: string }
+export interface TrackTimelineEnsureResult {
+  projectId: string; taskType: string;
+  /** 仅 detect/pose 支持视频轨迹时间轴；为假时 created 必为空、skipped 逐条给出原因。 */
+  supported: boolean;
+  created: TrackTimeline[]; existing: TrackTimeline[];
+  skipped: TrackTimelineEnsureSkip[];
+  /** 已入库抽帧任务超过单轮上限时为真：本轮未处理的缺口会在后续轮次继续补。 */
+  truncated: boolean;
+}
 export interface TrackTimelineUpdateRequest {
   timelineId: string; baseVersion: number; name?: string; scenes?: TrackSceneRange[];
 }
@@ -211,6 +223,7 @@ export type TrackGenerationResults<S extends TrackGenerationSection = TrackGener
 
 export interface TrackCommandMap {
   'track.timeline.create': { request: TrackTimelineCreateRequest; response: TrackTimeline };
+  'track.timeline.ensure': { request: TrackTimelineEnsureRequest; response: TrackTimelineEnsureResult };
   'track.timeline.list': { request: TrackPageRequest & { projectId: string }; response: TrackPage<TrackTimeline> };
   'track.timeline.get': { request: { timelineId: string }; response: TrackTimelineDetail };
   'track.timeline.frames': { request: TrackTimelineFramesRequest; response: TrackFramePage };

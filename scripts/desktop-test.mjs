@@ -9,6 +9,7 @@ const entries = [['desktop/security.test.ts', 'desktop/dist/security.test.cjs'],
   ['renderer/tests/video-continuity.test.ts', 'desktop/dist/video-continuity.test.cjs'],
   ['renderer/tests/video-batch.test.ts', 'desktop/dist/video-batch.test.cjs'],
   ['renderer/tests/frame-auto-import.test.ts', 'desktop/dist/frame-auto-import.test.cjs'],
+  ['renderer/tests/timeline-ensure.test.ts', 'desktop/dist/timeline-ensure.test.cjs'],
   ['renderer/tests/thumbnail-url.test.ts', 'desktop/dist/thumbnail-url.test.cjs'],
   ['renderer/tests/review-target.test.ts', 'desktop/dist/review-target.test.cjs'],
   // 桌面存储与业务边界单测统一登记，避免只有孤儿 runner 而未进入回归。

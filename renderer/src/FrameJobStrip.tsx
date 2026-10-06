@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from './context';
 import { errorMessage, request } from './bridge';
 import { Button } from './ui';
 import { mediaJobName, mediaStatuses } from './mediaUi';
 import type { MediaJob, MediaJobList } from '../../shared/media';
 import { AUTO_IMPORT_MAX_ATTEMPTS, autoImportExhausted, importableVideoJobs, isImportableVideoJob, registerAutoImportFailure } from './frameAutoImport';
+import { trackRequest } from './trackUi';
+import { ensuredTimelineId } from './timelineEnsure';
 
 /**
  * 抽帧进度条（对话区常驻）。
@@ -38,7 +40,7 @@ const SWEEP_MAX_JOBS = 1000;
  * 判定后必须提示用户并给出「任务 → 素材任务」出口；引擎对重复导入幂等。
  */
 export function AutoImportWatcher() {
-  const { prefs, notify, refreshAssets, refreshProjects, project, navigate, setMediaTaskId } = useApp();
+  const { prefs, notify, refreshAssets, refreshProjects, navigate, setMediaTaskId } = useApp();
   const autoImport = prefs.frameAutoImport !== false;
   useEffect(() => {
     if (!autoImport) return;
@@ -46,6 +48,8 @@ export function AutoImportWatcher() {
     async function sweep() {
       // 本轮刚达失败上限、需要人工处理的条目：只在这一刻提示一次，瞬时故障不打扰用户。
       const exhausted: string[] = [];
+      // 本轮导入过素材的项目：导入落库后统一补建时间轴，避免按任务重复调用。
+      const importedProjects = new Set<string>();
       try {
         // media.job.list 按 rowid 倒序、单页最多 100：只看第一页会让积压（例如关掉自动导入一段时间后
         // 再打开）里排在 100 条之外的就绪产物永远没人导入。这里按页扫到末尾，并保留一个任务数上限。
@@ -59,17 +63,19 @@ export function AutoImportWatcher() {
               await request<MediaJob>('media.video.import', { jobId: job.id });
               imported++;
               autoImportAttempts.delete(job.id);
+              importedProjects.add(job.projectId);
               await Promise.all([refreshAssets(), refreshProjects()]);
-              // 与进度条同一条「导入即建轴」约定；只给当前打开的项目建，其他项目打开时由轨迹页补。
-              if (project && project.id === job.projectId && ['detect', 'pose'].includes(project.taskType)) {
-                try { await request<{ id: string }>('track.timeline.create', { projectId: project.id, mediaJobId: job.id }); }
-                catch { /* 建轴失败不影响素材已经入库这件事 */ }
-              }
             } catch { if (registerAutoImportFailure(autoImportAttempts, job.id)) exhausted.push(job.id); }
             finally { importing.delete(job.id); }
             if (!live) return;
           }
           if (!list.items.length || offset + list.items.length >= list.total) break;
+        }
+        // 与进度条同一条「导入即建轴」约定：对导入过的每个项目统一走 ensure，既覆盖当前打开的项目，
+        // 也覆盖助手/重试在别的项目里产生的任务。引擎幂等，且会如实回报不支持的任务。
+        for (const projectId of importedProjects) {
+          try { await trackRequest('track.timeline.ensure', { projectId }); }
+          catch { /* 建轴失败不影响素材已经入库这件事，打开该项目的轨迹页时会再补一次 */ }
         }
       } catch { /* 引擎未就绪或请求失败：静默等下一轮，不打扰用户 */ }
       if (live) {
@@ -82,18 +88,29 @@ export function AutoImportWatcher() {
     }
     void sweep();
     return () => { live = false; clearTimeout(timer); };
-  }, [autoImport, project, refreshAssets, refreshProjects, notify, navigate, setMediaTaskId]);
+  }, [autoImport, refreshAssets, refreshProjects, notify, navigate, setMediaTaskId]);
   return null;
 }
 
 export function FrameJobStrip() {
-  const { mediaJob, setMediaJob, prefs, notify, refreshAssets, refreshProjects, project, navigate } = useApp();
+  const { mediaJob, setMediaJob, prefs, notify, refreshAssets, refreshProjects, navigate } = useApp();
   const [job, setJob] = useState<MediaJob | null>(null);
   const [error, setError] = useState('');
   const [createdTimelineId, setCreatedTimelineId] = useState<string | null>(null);
   const jobId = mediaJob?.id ?? '';
   const autoImport = prefs.frameAutoImport !== false;
   const advanced = useRef('');
+
+  // 导入后统一走 ensure 补建时间轴：用任务自己的项目（助手/重试可能在非当前项目里建任务），
+  // 引擎幂等，且会如实回报不支持轨迹的任务；建轴失败不影响「素材已入库」这件事。
+  const ensureTimeline = useCallback(async (target: MediaJob) => {
+    try {
+      const timelineId = ensuredTimelineId(await trackRequest('track.timeline.ensure', { projectId: target.projectId }), target.id);
+      if (!timelineId) return;
+      setCreatedTimelineId(timelineId);
+      setMediaJob(current => current?.id === target.id ? { ...current, timelineId } : current);
+    } catch { /* 打开该项目的轨迹页时会再补一次 */ }
+  }, [setMediaJob]);
 
   useEffect(() => {
     if (!jobId) { setJob(null); setCreatedTimelineId(null); return; }
@@ -128,19 +145,13 @@ export function FrameJobStrip() {
         setJob(imported);
         await Promise.all([refreshAssets(), refreshProjects()]);
         // 导入后接着把时间轴建好：原设计就是「导入即建轴」，用户点进去就是这一条，不必在历史里找。
-        if (project && ['detect', 'pose'].includes(project.taskType)) {
-          try {
-            const timeline = await request<{ id: string }>('track.timeline.create', { projectId: project.id, mediaJobId: jobId });
-            setCreatedTimelineId(timeline.id);
-            setMediaJob(current => current?.id === jobId ? { ...current, timelineId: timeline.id } : current);
-          } catch { /* 建轴失败不影响素材已经入库这件事，如实让用户自己去轨迹页建 */ }
-        }
+        await ensureTimeline(imported);
         notify('抽帧产物已自动导入项目，素材可以直接标注了。');
       } catch (e) {
         setError(errorMessage(e));
       } finally { importing.delete(jobId); }
     })();
-  }, [job, jobId, autoImport, project, refreshAssets, refreshProjects, notify, setMediaJob]);
+  }, [job, jobId, autoImport, ensureTimeline, refreshAssets, refreshProjects, notify]);
 
   // 一键抽帧建出的任务队列：当前这条走到终态（素材已入库、失败、取消等）就接上下一条，
   // 让整批任务都享有同一条进度与自动导入链路；单个任务没有 following，行为与原先完全一致。
@@ -173,7 +184,7 @@ export function FrameJobStrip() {
       {(imported && (mediaJob?.timelineId ?? createdTimelineId)) && <Button onClick={() => void navigate('tasks')}>查看这条视频轨迹</Button>}
       {imported && <Button onClick={() => { setMediaJob(null); void navigate('overview'); }}>查看素材</Button>}
       {!imported && importable && !autoImport && <Button className="primary" onClick={async () => {
-        try { setJob(await request<MediaJob>('media.video.import', { jobId })); await Promise.all([refreshAssets(), refreshProjects()]); }
+        try { const next = await request<MediaJob>('media.video.import', { jobId }); setJob(next); await Promise.all([refreshAssets(), refreshProjects()]); await ensureTimeline(next); }
         catch (e) { setError(errorMessage(e)); }
       }}>立即导入素材</Button>}
       {!imported && job.status === 'completed' && !job.artifactCommitted && <span className="muted tiny">正在封存抽帧产物…</span>}

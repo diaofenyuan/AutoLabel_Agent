@@ -293,6 +293,8 @@ const schemas: Record<string, z.ZodType> = {
   }),
   'media.recipe.delete': z.strictObject({ recipeId }),
   'track.timeline.create': z.strictObject({ projectId: trackIdentifier, mediaJobId: trackIdentifier, name: trackName.optional() }),
+  // 自动补建轴是界面/流程驱动的批量写入，不开放给 Agent（与 track.timeline.create 一致）。
+  'track.timeline.ensure': z.strictObject({ projectId: trackIdentifier }),
   'track.timeline.list': z.strictObject({ projectId: trackIdentifier, ...trackPage }),
   'track.timeline.get': z.strictObject({ timelineId: trackIdentifier }),
   'track.timeline.frames': z.strictObject({ timelineId: trackIdentifier, trackId: trackIdentifier.optional(), aroundFrameId: trackIdentifier.optional(), ...trackDetailPage })

@@ -7,6 +7,7 @@ import { SseDecoder } from './sse';
 const write = { trackId: 'track', baseVersion: 1, timelineVersion: 1 };
 const valid: { [C in keyof TrackCommandMap]: TrackCommandMap[C]['request'] } = {
   'track.timeline.create': { projectId: 'project', mediaJobId: 'media', name: '行人片段' },
+  'track.timeline.ensure': { projectId: 'project' },
   'track.timeline.list': { projectId: 'project', limit: 100 },
   'track.timeline.get': { timelineId: 'timeline' },
   'track.timeline.frames': { timelineId: 'timeline', trackId: 'track', offset: 0, limit: 500 },
@@ -36,8 +37,8 @@ const valid: { [C in keyof TrackCommandMap]: TrackCommandMap[C]['request'] } = {
   'track.local.sequence.promote': { candidateId: 'candidate', timelineId: 'timeline', timelineVersion: 1, confirm: true },
 };
 
-test('轨迹命令闭合到 27 项公共契约，仅开放指定 Agent 命令并拒绝文件路径', () => {
-  assert.equal(Object.keys(valid).length, 27);
+test('轨迹命令闭合到 28 项公共契约，仅开放指定 Agent 命令并拒绝文件路径', () => {
+  assert.equal(Object.keys(valid).length, 28);
   const agentAllowed = new Set<string>(['track.timeline.list', 'track.timeline.get', 'track.timeline.frames', 'track.list', 'track.get', 'track.keyframe.list',
     'track.generation.list', 'track.generation.get', 'track.generation.results', 'track.generate.preview', 'track.generate', 'track.generation.cancel',
     'track.local.sequence.get', 'track.local.sequence.list'] satisfies Array<keyof TrackCommandMap>);
