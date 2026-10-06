@@ -18,6 +18,14 @@ import java.util.concurrent.atomic.*;
 public final class EngineTest {
     static int assertions;
     static Path root;
+    /**
+     * 允许的作用域与 scripts/engine-build.ps1 的 -TestScope 取值保持一致。
+     * 目的是让拼写错误或已删除的作用域显式失败，而不是悄悄回退到默认套件：
+     * 后者会让人误以为跑的是专项，实际跑的是另一套，专项烂掉也没人发现。
+     */
+    static final Set<String> SCOPES=Set.of("all","transport","manual","evaluation","capabilities","cost-rerun","five-task","resource-integration",
+        "data-maintenance","backup-integration","flow-foundation","flow-integration","reuse-integration","local-integration","view-integration",
+        "training-datasets","training-root","materials-root","dataset-versions","asset-overview","media-recipes","payload");
     static void check(boolean ok,String message){assertions++;if(!ok)throw new AssertionError(message);}
     static JsonObject obj(Object value){return ((JsonElement)value).getAsJsonObject();}
     static JsonObject command(Engine e,String command,JsonObject payload)throws Exception{return obj(e.command(command,payload));}
@@ -44,6 +52,8 @@ public final class EngineTest {
         // 先创建本次运行目录再裁剪，否则稳态会是 keep+1（本次运行总在裁剪之后新建）。
         root=base.resolve("run-"+System.currentTimeMillis());Files.createDirectories(root);
         pruneVerification(base,20);
+        String scope=args.length>0?args[0]:"";
+        if(!scope.isEmpty()&&!SCOPES.contains(scope))throw new AssertionError("未知的引擎验证作用域："+scope+"；可用作用域见 EngineTest.SCOPES。");
         if(args.length>0&&args[0].equals("training-datasets")){TrainingDatasetsTest.run(root);System.out.println("PASS "+assertions+" training dataset assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("materials-root")){MaterialsRootTest.run(root);System.out.println("PASS "+assertions+" materials root assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("training-root")){TrainingRootTest.run(root);System.out.println("PASS "+assertions+" training root assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
@@ -232,7 +242,9 @@ public final class EngineTest {
         }
     }
     static void httpProcess()throws Exception{
-        Path jar=Path.of("engine/build/autolabel-engine.jar").toAbsolutePath();Process process=new ProcessBuilder(Path.of(System.getProperty("java.home"),"bin/java.exe").toString(),"-Djava.awt.headless=true","-jar",jar.toString()).redirectError(root.resolve("process-stderr.txt").toFile()).start();
+        // 只按平台补 .exe 后缀：原来写死 java.exe，非 Windows 的验证环境根本起不了 JAR 握手，整段冒烟被迫跳过。
+        String executable=System.getProperty("os.name","").startsWith("Windows")?"java.exe":"java";
+        Path jar=Path.of("engine/build/autolabel-engine.jar").toAbsolutePath();Process process=new ProcessBuilder(Path.of(System.getProperty("java.home"),"bin",executable).toString(),"-Djava.awt.headless=true","-jar",jar.toString()).redirectError(root.resolve("process-stderr.txt").toFile()).start();
         try{String token="test-startup-token-000000000000000000";BufferedWriter stdin=new BufferedWriter(new OutputStreamWriter(process.getOutputStream(),StandardCharsets.UTF_8));stdin.write(Json.obj("token",token,"dataDir",root.resolve("http-data").toString(),"protocolVersion",1).toString());stdin.newLine();stdin.flush();
             BufferedReader stdout=process.inputReader(StandardCharsets.UTF_8);JsonObject ready=Json.parse(stdout.readLine());check(Json.required(ready,"type").equals("ready"),"JAR ready handshake");String base="http://127.0.0.1:"+Json.integer(ready,"port",0);HttpClient http=HttpClient.newHttpClient();
             check(http.send(HttpRequest.newBuilder(URI.create(base+"/health")).GET().build(),HttpResponse.BodyHandlers.ofString()).statusCode()==401,"HTTP token protection");
