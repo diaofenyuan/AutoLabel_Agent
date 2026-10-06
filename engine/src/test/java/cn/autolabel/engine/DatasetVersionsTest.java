@@ -24,6 +24,7 @@ final class DatasetVersionsTest {
         consumption(root.resolve("consumption"));
         versionEvaluation(root.resolve("evaluation"));
         backup(root.resolve("backup"));
+        recovery(root.resolve("recovery"));
     }
 
     // ===== 过滤与硬规则 =====
@@ -651,6 +652,67 @@ final class DatasetVersionsTest {
                 "恢复后的版本副本仍可复核");
             check(Json.required(EngineTest.command(recovered,"dataset.version.get",Json.obj("versionId",versionId)),"status").equals("ready"),
                 "恢复后的版本状态保持 ready");
+        }
+    }
+
+    // ===== 引擎重启恢复与重试生成 =====
+
+    /**
+     * 引擎崩溃后，持久化为 building 的记录已没有任何进程会推进：必须如实结算为 interrupted 并清掉崩溃残留，
+     * 否则用户既取消不掉（内存构建线程随进程消失）也删不掉（delete 拦截 building），界面永远卡在「生成中」。
+     * 重试按已存配方与种子原地重跑，版本号不变；ready 是已发布快照不可重写，building 不可并发重入。
+     */
+    private static void recovery(Path root)throws Exception{
+        Path data=root.resolve("data");
+        String pid,stuckId,readyId,stuckNumber;
+        try(Engine e=new Engine(data)){
+            JsonObject project=EngineTest.command(e,"project.create",Json.obj("name","版本恢复","taskType","detect",
+                "classes",Json.arr(Json.obj("id","cat","name","猫","color","#3b82f6"))));
+            pid=Json.required(project,"id");
+            JsonArray ids=EngineTest.importSamples(e,pid,4);
+            for(JsonElement id:ids)annotateAt(e,id.getAsString(),"cat",200,180,200,120);
+
+            JsonObject stuck=await(e,EngineTest.command(e,"dataset.version.create",Json.obj("projectId",pid,"seed","recover-seed")));
+            stuckId=Json.required(stuck,"id");stuckNumber=Json.required(stuck,"number");
+            check(Files.isRegularFile(versionDirectory(e,stuckId).resolve("manifest.json")),"恢复前版本已发布清单");
+            readyId=Json.required(await(e,EngineTest.command(e,"dataset.version.create",Json.obj("projectId",pid,"seed","ready-seed"))),"id");
+
+            // 模拟崩溃窗口：发布 move 已完成但状态事务未提交（正式目录在、状态仍是 building），另有复制阶段残留的半成品。
+            Path base=DatasetVersions.versionsRoot(e.store);
+            Files.createDirectories(base.resolve(".autolabel-partial-"+stuckId).resolve("images/train"));
+            Files.writeString(base.resolve(".autolabel-partial-"+stuckId).resolve("images/train/stale.txt"),"half-written");
+            e.store.tx(c->{
+                Store.update(c,"UPDATE dataset_versions SET status='building',content_hash=NULL,manifest_hash=NULL,completed_at=NULL,"
+                    +"data=json_set(data,'$.status','building') WHERE id=?",stuckId);
+                Store.update(c,"UPDATE dataset_version_builds SET status='running' WHERE version_id=?",stuckId);
+                return null;});
+            // 本进程内 building 不可重入。
+            rejects("dataset_version_building",()->EngineTest.command(e,"dataset.version.retry",Json.obj("versionId",stuckId)));
+        }
+        // 重启：新引擎构造时的 recover() 应把卡死的 building 结算为 interrupted，并清掉两类崩溃残留。
+        try(Engine e=new Engine(data)){
+            Path base=DatasetVersions.versionsRoot(e.store);
+            JsonObject recovered=EngineTest.command(e,"dataset.version.get",Json.obj("versionId",stuckId));
+            check(Json.required(recovered,"status").equals("interrupted"),"重启把无人推进的 building 结算为 interrupted");
+            check(Json.required(Json.object(recovered,"failure"),"code").equals("dataset_version_interrupted"),"中断记录带可读失败码");
+            check(!Files.exists(base.resolve(".autolabel-partial-"+stuckId)),"崩溃残留的半成品目录被清理");
+            check(!Files.exists(base.resolve(stuckId)),"发布窗口残留的正式目录被清理，避免重试时 ATOMIC_MOVE 目标非空失败");
+            // 恢复不波及同项目里已发布的版本。
+            check(Json.required(EngineTest.command(e,"dataset.version.get",Json.obj("versionId",readyId)),"status").equals("ready"),"已发布版本不受恢复影响");
+            check(Json.bool(EngineTest.command(e,"dataset.version.verify",Json.obj("versionId",readyId)),"consistent",false),"已发布版本仍可复核");
+
+            // 重试：复用配方原地重跑，版本号不变，产物与清单一致（同种子确定性）。
+            JsonObject retried=await(e,EngineTest.command(e,"dataset.version.retry",Json.obj("versionId",stuckId)));
+            check(Json.required(retried,"status").equals("ready"),"中断版本重试后重新就绪");
+            check(Json.required(retried,"number").equals(stuckNumber),"重试不改版本号");
+            check(Json.bool(EngineTest.command(e,"dataset.version.verify",Json.obj("versionId",stuckId)),"consistent",false),"重试产物通过清单复核");
+            // 反例：ready 已发布不可重写；不存在的版本与已删除的版本都不在重试集合内。
+            rejects("dataset_version_retry_invalid",()->EngineTest.command(e,"dataset.version.retry",Json.obj("versionId",stuckId)));
+            rejects("not_found",()->EngineTest.command(e,"dataset.version.retry",Json.obj("versionId","不存在的版本")));
+            JsonObject doomed=await(e,EngineTest.command(e,"dataset.version.create",Json.obj("projectId",pid,"seed","doomed-seed")));
+            String doomedId=Json.required(doomed,"id");
+            EngineTest.command(e,"dataset.version.delete",Json.obj("versionId",doomedId,"confirm",true));
+            rejects("dataset_version_retry_invalid",()->EngineTest.command(e,"dataset.version.retry",Json.obj("versionId",doomedId)));
         }
     }
 
