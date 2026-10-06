@@ -75,6 +75,8 @@ export function ConfirmModal({ message, onYes, onNo }: { message: string; onYes:
 }
 export function Composer({ value, onChange, onSend, placeholder, busy, onCancel, children, hint, attachments, onRemoveAttachment, onAttachFiles }: { value: string; onChange: (v: string) => void; onSend: () => void; placeholder: string; busy?: boolean; onCancel?: () => void; children?: ReactNode; hint?: ReactNode; attachments?: ChatAttachment[]; onRemoveAttachment?: (id: string) => void; onAttachFiles?: (files: File[]) => void }) {
   const hasAttachments = Boolean(attachments?.length);
+  // 欢迎页的 busy 是不可取消的文件/项目准备过程，只有会话页传入 onCancel 时才代表可停止任务。
+  const canCancel = Boolean(busy && onCancel);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const iconOf = (kind: ChatAttachment['kind']) => kind === 'image' ? <ImageIcon size={12} /> : kind === 'video' ? <Film size={12} /> : <Folder size={12} />;
   function resizeTextarea(target: HTMLTextAreaElement) {
@@ -97,7 +99,7 @@ export function Composer({ value, onChange, onSend, placeholder, busy, onCancel,
       {/* 拖拽之外的一等输入路径：点选与粘贴（Ctrl+V）都直接进附件条。 */}
       {onAttachFiles && <button type="button" className="composer-pick icon-button" title="选择文件作为附件" aria-label="选择文件作为附件" onClick={() => { const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'image/*,video/*'; input.onchange = () => onAttachFiles([...(input.files ?? [])]); input.click(); }}><Paperclip size={13} /></button>}
       <kbd className="composer-kbd">Ctrl + Enter</kbd>
-      <button className="send-button" aria-label={busy ? '停止对话' : '发送'} disabled={!busy && !value.trim() && !hasAttachments} onClick={busy ? onCancel : onSend}>{busy ? <Square size={13} /> : <ArrowUp size={17} />}<span className="send-button-label">{busy ? '停止' : '发送'}</span></button>
+      <button className="send-button" aria-label={canCancel ? '停止对话' : busy ? '处理中' : '发送'} disabled={busy ? !canCancel : !value.trim() && !hasAttachments} onClick={canCancel ? onCancel : onSend}>{canCancel ? <Square size={13} /> : busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <ArrowUp size={17} />}<span className="send-button-label">{canCancel ? '停止' : busy ? '处理中' : '发送'}</span></button>
     </div>
     {/* 落点 / 快捷键这类说明独占一行放在工具行下方：混进工具行会和选择器抢宽度，把模型选择挤到第二行。 */}
     {hint && <span className="composer-hint">{hint}</span>}
