@@ -151,7 +151,10 @@ export function useChatFileDrop(onAttach: (attachments: ChatAttachment[]) => voi
     chooseVideo: (path: string) => { const current = picks; setPicks(null); if (current) setVideo({ projectId: current.projectId, path }); },
     batch, closeBatch: () => setBatch(null),
     // 一键抽帧整批接手当前清单：清单关闭，批量弹窗按同一批文件（含搜索筛选后的结果）打开。
-    chooseAll: (files: string[]) => { const current = picks; setPicks(null); if (current) setBatch({ projectId: current.projectId, files }); }
+    chooseAll: (files: string[]) => { const current = picks; setPicks(null); if (current) setBatch({ projectId: current.projectId, files }); },
+    // 批量面板收起后若有视频没建成任务，调用方用这里把「只有这几个」的面板原样重开，
+    // 不必让用户重新拖一遍整批。带上项目归属，重开后面板仍归这个项目。
+    openBatch: (value: VideoPicks) => setBatch(value)
   };
 }
 

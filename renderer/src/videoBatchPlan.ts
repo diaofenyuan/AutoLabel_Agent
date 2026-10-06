@@ -14,6 +14,32 @@ export function remainingBatchItems<T extends { state: { kind: string } }>(items
   return items.filter(item => item.state.kind !== 'queued');
 }
 
+/** 一键抽帧的条目统计：失败数必须能被带出弹窗，不能只剩一个「未能创建」的数字。 */
+export interface BatchOutcome { queued: number; failed: number; pending: number }
+
+export function batchOutcome(items: Array<{ state: { kind: string } }>): BatchOutcome {
+  const result: BatchOutcome = { queued: 0, failed: 0, pending: 0 };
+  for (const item of items) {
+    if (item.state.kind === 'queued') result.queued++;
+    else if (item.state.kind === 'failed') result.failed++;
+    else result.pending++;
+  }
+  return result;
+}
+
+/** 失败项明细：面板关闭后调用方据此提示「哪些视频没建成、原因是什么」，并可原样重开续跑。 */
+export interface BatchFailure { path: string; name: string; error: string }
+
+export function batchFailures(items: Array<{ path: string; name: string; state: { kind: string; error?: string } }>): BatchFailure[] {
+  const failures: BatchFailure[] = [];
+  for (const item of items) {
+    if (item.state.kind !== 'failed') continue;
+    // 原因取界面已经显示给用户的那一条；接口没给原因时如实说未知，不编造。
+    failures.push({ path: item.path, name: item.name, error: item.state.error || '未返回失败原因' });
+  }
+  return failures;
+}
+
 export function batchExtractionPlan(inspection: VideoInspection): { parameters: VideoExtractionParameters; note?: string } | { error: string } {
   // 时长未知时引擎要求显式时间范围，批量场景没人填：这段只能退回单个面板手动处理。
   if (inspection.durationSeconds === null) return { error: '视频时长未知，无法按默认参数抽帧；请在单个抽帧面板里指定时间范围。' };

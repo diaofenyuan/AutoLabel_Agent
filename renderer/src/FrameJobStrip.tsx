@@ -93,9 +93,10 @@ export function AutoImportWatcher() {
 }
 
 export function FrameJobStrip() {
-  const { mediaJob, setMediaJob, prefs, notify, refreshAssets, refreshProjects, navigate } = useApp();
+  const { mediaJob, setMediaJob, prefs, notify, refreshAssets, refreshProjects, navigate, setMediaTaskId } = useApp();
   const [job, setJob] = useState<MediaJob | null>(null);
   const [error, setError] = useState('');
+  const [retrying, setRetrying] = useState(false);
   const [createdTimelineId, setCreatedTimelineId] = useState<string | null>(null);
   const jobId = mediaJob?.id ?? '';
   const autoImport = prefs.frameAutoImport !== false;
@@ -156,17 +157,46 @@ export function FrameJobStrip() {
   // 一键抽帧建出的任务队列：当前这条走到终态（素材已入库、失败、取消等）就接上下一条，
   // 让整批任务都享有同一条进度与自动导入链路；单个任务没有 following，行为与原先完全一致。
   const following = mediaJob?.following;
+  // 批量任务的失败清单。队列不会为一个视频失败就停住整批，但「哪几个失败了」必须留下来：
+  // 建了 20 个只入库 17 个，用户只会奇怪少了 3 个却无处查——原先失败的条目被队列直接跳过，悄无声息。
+  const failedInBatch = useRef<Set<string>>(new Set());
+  const wasBatch = useRef(false), reportedBatch = useRef(false);
   useEffect(() => {
-    if (!job || !jobId || !following?.length) return;
+    if (!job || !jobId) return;
+    if (following?.length) wasBatch.current = true;
     if (!['completed', 'failed', 'cancelled', 'interrupted'].includes(job.status)) return;
-    // 还能导入（含导入被中断的 interrupted）时，要给自动导入留出兑现时间：导入在跑（importing 里还有它）
-    // 或还没轮到它都不推进。原先按 status==='completed' 判断会把 interrupted 任务当成已结算而跳过，
-    // 队列会越过它直接跑下一条，这条的产物就再也补不进来了。
-    const settled = !isImportableVideoJob(job) || !autoImport
-      || (advanced.current === jobId && !importing.has(jobId));
-    if (!settled) return;
-    setMediaJob(current => current?.id === jobId ? { id: following[0], following: following.slice(1) } : current);
-  }, [job, jobId, following, autoImport, setMediaJob]);
+    if (job.status === 'failed') failedInBatch.current.add(jobId);
+    if (following?.length) {
+      // 还能导入（含导入被中断的 interrupted）时，要给自动导入留出兑现时间：导入在跑（importing 里还有它）
+      // 或还没轮到它都不推进。原先按 status==='completed' 判断会把 interrupted 任务当成已结算而跳过，
+      // 队列会越过它直接跑下一条，这条的产物就再也补不进来了。
+      const settled = !isImportableVideoJob(job) || !autoImport
+        || (advanced.current === jobId && !importing.has(jobId));
+      if (!settled) return;
+      setMediaJob(current => current?.id === jobId ? { id: following[0], following: following.slice(1) } : current);
+      return;
+    }
+    // 队列走完：批量里出现失败才汇总播报一次，并给出去处（失败任务的详情页已经能看原因、能重试）。
+    // 单个任务不走这里——进度条原地就显示原因和「重试这条」，不必再弹一条通知。
+    if (!wasBatch.current || reportedBatch.current || !failedInBatch.current.size) return;
+    reportedBatch.current = true;
+    const failedIds = [...failedInBatch.current];
+    notify(`这批抽帧有 ${failedIds.length} 个任务失败、素材未入库；其余任务的素材已照常自动导入。`,
+      { error: true, action: { label: '查看失败任务', run: () => { setMediaTaskId(failedIds[0]); void navigate('tasks'); } } });
+  }, [job, jobId, following, autoImport, setMediaJob, notify, navigate, setMediaTaskId]);
+
+  // 单个任务失败时原地重试：引擎按原来源与参数建一个新任务，把它接回进度条跟踪，
+  // 并清掉自动导入的一次性标记，让新一轮自动导入照常对这条新任务生效。
+  async function retry() {
+    setRetrying(true); setError('');
+    try {
+      const next = await request<MediaJob>('media.job.retry', { jobId });
+      advanced.current = '';
+      setJob(next);
+      setMediaJob({ id: next.id });
+    } catch (e) { setError(errorMessage(e)); }
+    finally { setRetrying(false); }
+  }
 
   if (!jobId || !job) return null;
   const importable = isImportableVideoJob(job);
@@ -179,10 +209,15 @@ export function FrameJobStrip() {
       : importable ? (autoImport
         ? (importInterrupted ? '上次导入被中断，正在自动补导入…' : '抽帧就绪，正在导入素材…')
         : (importInterrupted ? '导入被中断，产物已封存，可手动导入' : '抽帧就绪，待导入'))
-        : `${mediaStatuses[job.status]} · 已生成 ${job.progress.completedFrames ?? 0} 帧`}</span>
+        // 失败原因直接摆出来：原先只写「失败 · 已生成 N 帧」，用户既不知道错在哪，也不知道能不能重来。
+        : job.status === 'failed'
+          ? `抽帧失败：${job.error?.message ?? '引擎未返回失败原因'}`
+          : `${mediaStatuses[job.status]} · 已生成 ${job.progress.completedFrames ?? 0} 帧`}</span>
     <span className="frame-job-actions">
       {(imported && (mediaJob?.timelineId ?? createdTimelineId)) && <Button onClick={() => void navigate('tasks')}>查看这条视频轨迹</Button>}
       {imported && <Button onClick={() => { setMediaJob(null); void navigate('overview'); }}>查看素材</Button>}
+      {/* 失败后原地重试：源视频修好后不必回到清单重新找一遍，这里直接按原参数再跑一次。 */}
+      {!imported && job.status === 'failed' && job.canRetry && <Button className="primary" busy={retrying} onClick={() => void retry()}>重试这条</Button>}
       {!imported && importable && !autoImport && <Button className="primary" onClick={async () => {
         try { const next = await request<MediaJob>('media.video.import', { jobId }); setJob(next); await Promise.all([refreshAssets(), refreshProjects()]); await ensureTimeline(next); }
         catch (e) { setError(errorMessage(e)); }

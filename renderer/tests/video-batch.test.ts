@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { VideoInspection } from '../../shared/media';
 import { VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_DOWNSAMPLE_THRESHOLD, VIDEO_MAX_FRAMES, VIDEO_SCENE_MIN_INTERVAL_SECONDS, VIDEO_SCENE_THRESHOLD } from '../../shared/media';
-import { batchExtractionPlan, remainingBatchItems } from '../src/videoBatchPlan';
+import { batchExtractionPlan, batchFailures, batchOutcome, remainingBatchItems } from '../src/videoBatchPlan';
 
 function inspection(overrides: Partial<VideoInspection> = {}): VideoInspection {
   return {
@@ -68,4 +68,24 @@ test('再次开始时跳过已排队的视频，失败与待处理的仍会重�
   assert.deepEqual(remainingBatchItems(items).map(item => item.path), ['C:/clips/b.mp4', 'C:/clips/c.mp4']);
   // 全部排完队后没有可发起的条目：面板只剩「关闭」，不会再建第二个任务。
   assert.deepEqual(remainingBatchItems(items.map(item => ({ ...item, state: { kind: 'queued' } }))), []);
+});
+
+test('批量条目按排队/失败/待处理统计，失败明细与未完成清单可带出面板续跑', () => {
+  const items = [
+    { path: 'C:/clips/a.mp4', name: 'a.mp4', state: { kind: 'queued' } },
+    { path: 'C:/clips/b.mp4', name: 'b.mp4', state: { kind: 'failed', error: '视频时长未知，无法按默认参数抽帧。' } },
+    { path: 'C:/clips/c.mp4', name: 'c.mp4', state: { kind: 'failed' } },
+    { path: 'C:/clips/d.mp4', name: 'd.mp4', state: { kind: 'pending' } },
+    { path: 'C:/clips/e.mp4', name: 'e.mp4', state: { kind: 'working', label: '正在检查…' } },
+  ];
+  assert.deepEqual(batchOutcome(items), { queued: 1, failed: 2, pending: 2 });
+  assert.deepEqual(batchFailures(items), [
+    { path: 'C:/clips/b.mp4', name: 'b.mp4', error: '视频时长未知，无法按默认参数抽帧。' },
+    // 接口没给原因时如实说未知：既要能提示，也不能编造一条原因。
+    { path: 'C:/clips/c.mp4', name: 'c.mp4', error: '未返回失败原因' },
+  ]);
+  // 未完成清单 = 失败 + 待处理 + 处理中，正是调用方重开面板时该带上的那批文件。
+  assert.deepEqual(remainingBatchItems(items).map(item => item.path), ['C:/clips/b.mp4', 'C:/clips/c.mp4', 'C:/clips/d.mp4', 'C:/clips/e.mp4']);
+  assert.deepEqual(batchOutcome([]), { queued: 0, failed: 0, pending: 0 });
+  assert.deepEqual(batchFailures([]), []);
 });

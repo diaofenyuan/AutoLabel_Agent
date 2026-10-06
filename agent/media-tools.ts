@@ -268,6 +268,17 @@ export const MEDIA_TOOL_DEFINITIONS: ToolDefinition[] = [
     } },
   { name: 'get_media_job', description: '读取同项目媒体任务状态、真实进度和是否提交产物/入库，不将后台执行中或 ready 状态宣称已完成导入。', parameters: schema(jobProperties), mutation: false,
     async execute(args, env) { fields(args, ['jobId']); return jobSummary(await mediaJob(env, id(args.jobId, '媒体任务'))); } },
+  { name: 'retry_media_job', description: '对失败、取消或中断的同项目媒体任务提交一次重试，返回按原来源与参数新建的真实 job。只复用原任务已记录的来源与参数，不新增本地路径授权、不改标注数据；完成任务不能重跑。重试出的任务仍需后续查询结果，其素材走原有自动导入链路。',
+    parameters: schema(jobProperties), mutation: true,
+    async execute(args, env) {
+      fields(args, ['jobId']);
+      const jobId = id(args.jobId, '媒体任务'), source = await mediaJob(env, jobId);
+      // 只信引擎的 canRetry：进行中或已完成的任务重跑一遍既白费解码，也可能和在途任务抢同一批产物。
+      if (!source.canRetry) throw new AgentError('MEDIA_RETRY_INVALID', '只有失败、取消或中断的媒体任务可以重试');
+      const result = job(await mediaRequest(env, 'media.job.retry', { jobId }), env);
+      if (result.originalJobId !== jobId) invalid('重试任务未指向原媒体任务');
+      return { submitted: true, retriedJobId: jobId, job: jobSummary(result) };
+    } },
   { name: 'get_video_frames', description: '分页读取已完成视频产物的帧身份、真实 PTS 与时间，保留同画面不同帧。未绑定 assetId 的帧尚未入库，不返回图像或文件路径。',
     parameters: schema({ ...jobProperties, ...pageProperties }), mutation: false,
     async execute(args, env) {

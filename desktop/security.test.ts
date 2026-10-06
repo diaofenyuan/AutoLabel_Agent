@@ -536,11 +536,16 @@ test('媒体抽帧和筛选严格校验范围，不接受私有路径与多种�
   for (const kind of MEDIA_JOB_KINDS) assert.equal(isMediaJobKind(kind), true);
   for (const kind of ['video', '', 1, null, undefined, {}]) assert.equal(isMediaJobKind(kind), false);
   assert.throws(() => validateCommand('media.job.resolve', { jobId: 'job' }));
+  assert.doesNotThrow(() => validateCommand('media.job.retry', { jobId: 'job' }));
+  // 重试只带 jobId：来源与参数只能由引擎从原任务取，界面和助手都不能借重试塞入新路径。
+  assert.throws(() => validateCommand('media.job.retry', { jobId: 'job', sourcePath: 'C:\\hidden.mp4' }));
   for (const field of ['ffmpegPath', 'ffprobePath', 'mediaFfmpegPath', 'mediaFfprobePath']) assert.throws(() => validateCommand('settings.save', { settings: { desktop: { nested: { [field]: 'C:\\tool.exe' } } } }));
   assert.throws(() => assertAgentCommand('media.runtime.configure', { ffmpegPath: null, ffprobePath: null }));
   // media.video.create 开放给 Agent 的前提是 PathGrants 只放行用户已授权（kind=video）的路径；
   // 授权本身仍只能由文件选择器或拖拽产生，见下方「视频探测和创建只能读取原生视频选择授权」用例。
   assert.doesNotThrow(() => assertAgentCommand('media.video.create', input));
+  // media.job.retry 复用原任务已记录的来源与参数，不新增路径授权；桌面侧仍会按原任务的 sourcePath 复核一次视频授权。
+  assert.doesNotThrow(() => assertAgentCommand('media.job.retry', { jobId: 'job' }));
   for (const command of ['media.job.get', 'media.job.list', 'media.video.frames', 'media.screening.result', 'media.screening.create']) assert.doesNotThrow(() => assertAgentCommand(command));
   const definition = { version: 1, name: '媒体导入', steps: [{ id: 'import.1', kind: 'import', enabled: true, parameters: { mediaJobId: 'job' } }] };
   const flow = { projectId: 'project', definition, input: { source: 'project', selection: 'all' } };

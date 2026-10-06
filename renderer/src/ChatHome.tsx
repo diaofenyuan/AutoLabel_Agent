@@ -259,12 +259,23 @@ export default function ChatHome() {
       const batch = drop.batch;
       return <VideoBatchImport key={batch.projectId} projectId={batch.projectId} files={batch.files}
         onClose={drop.closeBatch}
-        onCreated={async ({ jobs, failed, stopped }) => {
+        onCreated={async ({ jobs, failedItems, unfinished }) => {
           drop.closeBatch();
-          const pending = stopped ? batch.files.length - jobs.length - failed : 0;
+          // 有没建成任务的视频时不切页：概览会卸载欢迎页，存放批量面板的局部状态随之消失，
+          // 提示里的「重试失败项」就再也打不开。留在原地直接续跑；整批都建成才照旧切到概览。
+          if (unfinished.length) {
+            setMediaTaskId(jobs[0].id); setMediaJob({ id: jobs[0].id, following: jobs.slice(1).map(job => job.id) });
+            const unprocessed = unfinished.length - failedItems.length;
+            notify(`已为 ${jobs.length} 个视频创建抽帧任务，正在排队逐个处理${failedItems.length ? `；${failedItems.length} 个未能创建` : ''}${unprocessed ? `，另有 ${unprocessed} 个未处理` : ''}。`, {
+              error: true,
+              action: { label: unprocessed ? `继续处理未完成的 ${unfinished.length} 个` : `重试这 ${failedItems.length} 个失败视频`,
+                run: () => drop.openBatch({ projectId: batch.projectId, files: unfinished }) },
+            });
+            return;
+          }
           await showProjectOverview(batch.projectId);
           setMediaTaskId(jobs[0].id); setMediaJob({ id: jobs[0].id, following: jobs.slice(1).map(job => job.id) });
-          notify(`已为 ${jobs.length} 个视频创建抽帧任务，正在排队逐个处理${failed ? `，另有 ${failed} 个未能创建` : ''}${pending ? `，停止时还有 ${pending} 个未处理` : ''}；素材就绪后自动导入，进度见侧栏「任务」。`);
+          notify(`已为 ${jobs.length} 个视频创建抽帧任务，正在排队逐个处理；素材就绪后自动导入，进度见侧栏「任务」。`);
         }} />;
     })()}
     {/* 发送 / 导入共用的项目归属确认框：用户在这里命名或选已有项目，确认后才执行真正的动作。 */}
