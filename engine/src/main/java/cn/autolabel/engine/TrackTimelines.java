@@ -24,8 +24,11 @@ final class TrackTimelines {
     static JsonObject definition(JsonObject project){JsonObject snapshot=TaskTemplates.snapshot(project);TrackInterpolation.templateHash(snapshot);return snapshot;}
 
     JsonObject create(JsonObject p){FlowPlans.keys(p,"projectId","mediaJobId","name");String pid=id(p,"projectId"),jobId=id(p,"mediaJobId");String title=name(p,"name","视频轨迹时间轴");
-        return store.tx(c->{JsonObject project=Store.document(c,"projects",pid),template=definition(project),job=Store.document(c,"media_jobs",jobId);String templateHash=TrackInterpolation.templateHash(template);if(!pid.equals(Json.required(job,"projectId"))||!Json.required(job,"kind").equals("video_extract")||!Json.bool(job,"assetsCommitted",false))throw error(422,"track_video_not_imported","时间轴需要当前项目已完整入库的抽帧任务。");
-            JsonObject existing=Store.one(c,"SELECT data FROM track_timelines WHERE project_id=? AND media_job_id=? AND template_hash=?",pid,jobId,templateHash);if(existing!=null)return view(Json.parse(Json.required(existing,"data")));
+        return Json.object(store.tx(c->createIn(c,pid,jobId,title)),"timeline");
+    }
+    /** ensure 与手动建轴共用的内核：同一 (项目, 抽帧任务, 模板) 只落一条，返回是否新建。 */
+    private JsonObject createIn(Connection c,String pid,String jobId,String title)throws Exception{JsonObject project=Store.document(c,"projects",pid),template=definition(project),job=Store.document(c,"media_jobs",jobId);String templateHash=TrackInterpolation.templateHash(template);if(!pid.equals(Json.required(job,"projectId"))||!Json.required(job,"kind").equals("video_extract")||!Json.bool(job,"assetsCommitted",false))throw error(422,"track_video_not_imported","时间轴需要当前项目已完整入库的抽帧任务。");
+            JsonObject existing=Store.one(c,"SELECT data FROM track_timelines WHERE project_id=? AND media_job_id=? AND template_hash=?",pid,jobId,templateHash);if(existing!=null)return Json.obj("timeline",view(Json.parse(Json.required(existing,"data"))),"created",false);
             List<JsonObject> assets=Store.rows(c,"SELECT data,path FROM assets WHERE project_id=? AND json_extract(data,'$.metadata.mediaJobId')=?",pid,jobId);if(assets.isEmpty()||assets.size()>10000||assets.size()!=Json.integer(Json.object(job,"summary"),"frameCount",-1))throw error(409,"track_frames_changed","已入库视频帧数量与完成记录不符。");
             assets.sort(Comparator.comparing(row->new BigInteger(Json.required(Json.object(Json.parse(Json.required(row,"data")),"metadata"),"sourcePts"))));String timelineId=Json.id(),now=Json.now();JsonArray frames=new JsonArray();int width=-1,height=-1;BigInteger previous=null;Set<String> frameIds=new HashSet<>();
             for(JsonObject row:assets){JsonObject asset=Json.parse(Json.required(row,"data")),metadata=Json.object(asset,"metadata");String frameId=Json.required(metadata,"frameId"),source=Json.required(metadata,"sourceVideoId");BigInteger pts=new BigInteger(Json.required(metadata,"sourcePts"));if(!source.equals(Json.required(job,"sourceVideoId"))||!frameIds.add(frameId)||previous!=null&&pts.compareTo(previous)<=0)throw error(409,"track_frames_changed","抽帧批次存在重复时间、来源混合或帧身份冲突。");previous=pts;int w=Json.integer(asset,"width",0),h=Json.integer(asset,"height",0);if(width<0){width=w;height=h;}else if(w!=width||h!=height)throw error(422,"track_frame_geometry_mismatch","同一时间轴需要同尺寸的固定基准图。");
@@ -33,8 +36,25 @@ final class TrackTimelines {
                 for(String field:List.of("sourceVideoId","videoSourceHash","sourcePresentationIndex","sourcePts","originPts","relativePts","timeBase","timeSeconds","rangeIndex"))frame.add(field,metadata.get(field));frames.add(frame);
             }
             JsonObject timeline=Json.obj("id",timelineId,"projectId",pid,"mediaJobId",jobId,"sourceVideoId",job.get("sourceVideoId"),"name",title,"version",1,"taskType",project.get("taskType"),"templateHash",templateHash,"template",template,"frameCount",frames.size(),"width",width,"height",height,"createdAt",now,"updatedAt",now);
-            Store.update(c,"INSERT INTO track_timelines(id,project_id,media_job_id,template_hash,version,data) VALUES(?,?,?,?,?,?)",timelineId,pid,jobId,templateHash,1,timeline);int position=0;for(JsonElement element:frames){JsonObject frame=element.getAsJsonObject();Store.update(c,"INSERT INTO timeline_frames(id,timeline_id,frame_id,asset_id,position,data) VALUES(?,?,?,?,?,?)",Json.id(),timelineId,Json.required(frame,"frameId"),Json.required(frame,"assetId"),position++,frame);}event(c,"timeline.created",timeline,null,null,new JsonObject());save(c,timeline);return view(timeline);
-        });
+            Store.update(c,"INSERT INTO track_timelines(id,project_id,media_job_id,template_hash,version,data) VALUES(?,?,?,?,?,?)",timelineId,pid,jobId,templateHash,1,timeline);int position=0;for(JsonElement element:frames){JsonObject frame=element.getAsJsonObject();Store.update(c,"INSERT INTO timeline_frames(id,timeline_id,frame_id,asset_id,position,data) VALUES(?,?,?,?,?,?)",Json.id(),timelineId,Json.required(frame,"frameId"),Json.required(frame,"assetId"),position++,frame);}event(c,"timeline.created",timeline,null,null,new JsonObject());save(c,timeline);return Json.obj("timeline",view(timeline),"created",true);
+    }
+    /** ensure 单轮最多处理的已入库抽帧任务数：兜住超大历史，避免一次命令退化成整表建轴。 */
+    private static final int ENSURE_MAX_JOBS=500;
+    /**
+     * 为「已入库但完全没有时间轴」的抽帧任务批量补建时间轴。
+     * 只补真实缺口：已存在任何时间轴（即使模板语义已变）的任务归入 existing，不重复建轴——
+     * 模板变化后是否另建仍由用户通过 track.timeline.create 显式决定。
+     * 非 detect/pose 项目不建轴并逐条说明；单个任务失败只跳过它自己，不影响其余任务。
+     */
+    JsonObject ensure(JsonObject p){FlowPlans.keys(p,"projectId");String pid=id(p,"projectId");
+        JsonObject scan=store.read(c->{JsonObject project=Store.document(c,"projects",pid);JsonArray jobs=Store.docs(c,"SELECT data FROM media_jobs WHERE project_id=? AND kind='video_extract' AND json_extract(data,'$.assetsCommitted')=1 ORDER BY rowid DESC LIMIT ?",pid,ENSURE_MAX_JOBS+1);boolean truncated=jobs.size()>ENSURE_MAX_JOBS;JsonArray existing=new JsonArray(),missing=new JsonArray();
+            for(int i=0;i<jobs.size()&&i<ENSURE_MAX_JOBS;i++){JsonObject job=jobs.get(i).getAsJsonObject();String jobId=Json.required(job,"id");JsonObject timeline=Store.one(c,"SELECT data FROM track_timelines WHERE project_id=? AND media_job_id=? ORDER BY rowid LIMIT 1",pid,jobId);if(timeline==null)missing.add(jobId);else existing.add(view(Json.parse(Json.required(timeline,"data"))));}
+            return Json.obj("taskType",Json.str(project,"taskType",""),"existing",existing,"missing",missing,"truncated",truncated);});
+        String taskType=Json.str(scan,"taskType","");boolean supported=Set.of("detect","pose").contains(taskType);JsonArray created=new JsonArray(),existing=Json.array(scan,"existing"),skipped=new JsonArray();
+        for(JsonElement value:Json.array(scan,"missing")){String jobId=value.getAsString();if(!supported){skipped.add(Json.obj("mediaJobId",jobId,"reason","track_task_type_unsupported","message","当前项目为「"+taskType+"」任务，不支持视频轨迹时间轴。"));continue;}
+            try{JsonObject outcome=store.tx(c->createIn(c,pid,jobId,"视频轨迹时间轴"));if(Json.bool(outcome,"created",false))created.add(outcome.get("timeline"));else existing.add(outcome.get("timeline"));}
+            catch(ApiError e){skipped.add(Json.obj("mediaJobId",jobId,"reason",e.code,"message",e.getMessage()));}}
+        return Json.obj("projectId",pid,"taskType",taskType,"supported",supported,"created",created,"existing",existing,"skipped",skipped,"truncated",Json.bool(scan,"truncated",false));
     }
     static JsonObject view(JsonObject timeline){JsonObject result=timeline.deepCopy();result.remove("template");return result;}
     JsonObject get(JsonObject p){FlowPlans.keys(p,"timelineId");return store.read(c->Store.document(c,"track_timelines",id(p,"timelineId")));}
