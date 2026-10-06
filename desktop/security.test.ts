@@ -351,6 +351,18 @@ test('重新评测要求明确请求上限，允许重复实验且参考素材�
     assert.throws(() => validateCommand('evaluation.rerun.create', { ...rerun, schemes: [{ ...scheme, ...change }] }), /格式不正确/);
   }
 });
+test('分类文件夹标签导入只放宽 labelSpace/classMap，存在字段与其余结构仍严格校验', () => {
+  const labelsDir = '/tmp/分类集';
+  // 分类路径没有坐标空间与类别编号：缺省 labelSpace/classMap 必须通过参数校验，是否合法交给引擎按项目任务类型判定。
+  assert.equal(validateCommand('annotation.importYolo', { projectId: 'p', labelsDir, assetIds: ['a'] }).payload.labelsDir, labelsDir);
+  // 字段一旦出现仍受原类型约束：坐标空间枚举、数字类别编号、items 结构不能被这条放宽绕过。
+  assert.throws(() => validateCommand('annotation.importYolo', { projectId: 'p', labelSpace: 'image', classMap: { '0': 'car' } }), /格式不正确/);
+  assert.throws(() => validateCommand('annotation.importYolo', { projectId: 'p', labelSpace: 'source', classMap: { car: 'car' }, labelsDir }), /格式不正确/);
+  assert.throws(() => validateCommand('annotation.importYolo', { projectId: 'p', labelSpace: 'source', classMap: { '0': 'car' }, items: [{ assetId: 'a', labelPath: '/tmp/a.txt', extra: 1 }] }), /格式不正确/);
+  // labelsDir 与 items 仍然互斥且必须二选一。
+  assert.throws(() => validateCommand('annotation.importYolo', { projectId: 'p', labelSpace: 'source', classMap: { '0': 'car' }, labelsDir, items: [{ assetId: 'a', labelPath: '/tmp/a.txt' }] }), /格式不正确/);
+  assert.throws(() => validateCommand('annotation.importYolo', { projectId: 'p', labelSpace: 'source', classMap: { '0': 'car' } }), /格式不正确/);
+});
 test('手工链路只接受已选择的标签、重定位目录和精确输出文件', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'autolabel-manual-grant-'));
   try {
@@ -369,6 +381,9 @@ test('手工链路只接受已选择的标签、重定位目录和精确输出�
     await grants.add(labels, 'directory');
     await run('asset.relocate', { projectId: 'p', directory: labels });
     await run('annotation.importYolo', { projectId: 'p', labelSpace: 'source', classMap: { '0': 'car' }, labelsDir: labels });
+    // 分类文件夹导入同样要有目录授权：未选择的目录不能借放宽后的参数进入引擎读取。
+    await run('annotation.importYolo', { projectId: 'p', labelsDir: labels, assetIds: ['a'] });
+    await assert.rejects(run('annotation.importYolo', { projectId: 'p', labelsDir: outside }), /尚未通过/);
     await run('export.reproduce', { exportId: 'export1', outputDir: labels });
     await assert.rejects(run('export.reproduce', { exportId: 'export1', outputDir: outside }), /尚未通过/);
     const outputPath = path.join(labels, '效果图.png');

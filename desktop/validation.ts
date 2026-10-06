@@ -337,7 +337,9 @@ const schemas: Record<string, z.ZodType> = {
   'annotation.draft': z.strictObject({ assetId: id, annotations, baseVersion: count }),
   'annotation.history': z.strictObject({ assetId: id }),
   'annotation.draft.discard': z.strictObject({ assetId: id }),
-  'annotation.importYolo': z.strictObject({ projectId: id, labelSpace: z.enum(['source', 'baseline']), classMap: z.record(z.string().regex(/^\d+$/), id),
+  // labelSpace/classMap 只在对象类任务必填：分类任务走类别文件夹，没有坐标空间与类别编号，由引擎按项目任务类型判定。
+  // 这里保持字段存在时的严格类型，可选化只是为了不把分类的合法请求拦在参数校验阶段。
+  'annotation.importYolo': z.strictObject({ projectId: id, labelSpace: z.enum(['source', 'baseline']).optional(), classMap: z.record(z.string().regex(/^\d+$/), id).optional(),
     labelsDir: z.string().min(1).max(32767).optional(), assetIds, confirm: z.literal(false).optional(),
     items: z.array(z.strictObject({ assetId: id, labelPath: z.string().min(1).max(32767), baseVersion: count.optional() })).max(100000).optional(),
   }).refine(value => !!value.labelsDir !== !!value.items, '应选择标签文件夹或文件列表'),
