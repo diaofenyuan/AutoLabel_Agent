@@ -89,6 +89,24 @@ test('文件路径权限仅来自用户选择，目录连接不能越界', async
     await rm(root, { recursive: true, force: true });
   }
 });
+test('大小写敏感文件系统上授权只覆盖真实路径，不同大小写路径不能互相继承', { skip: process.platform === 'win32' }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'autolabel-grant-case-'));
+  try {
+    const upper = path.join(root, 'Selected'); const lower = path.join(root, 'selected');
+    await mkdir(upper); await mkdir(lower);
+    await writeFile(path.join(upper, 'image.png'), 'upper'); await writeFile(path.join(lower, 'image.png'), 'lower');
+    const grants = new PathGrants(); await grants.add(path.join(upper, 'image.png'), 'images');
+    assert.equal(await grants.require(path.join(upper, 'image.png'), ['images']), path.join(upper, 'image.png'));
+    await assert.rejects(grants.require(path.join(lower, 'image.png'), ['images']));
+    // 目录前缀匹配同样按真实路径：授权 Selected 目录不得放行 selected 目录里的同名文件。
+    const directories = new PathGrants(); await directories.add(upper, 'directory');
+    assert.equal(await directories.require(path.join(upper, 'image.png'), ['directory'], false), path.join(upper, 'image.png'));
+    await assert.rejects(directories.require(path.join(lower, 'image.png'), ['directory'], false));
+  } finally {
+    assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep + 'autolabel-grant-case-'));
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test('素材协议拒绝路径、查询参数与外部来源', () => {
   assert.equal(assetIdFromUrl('autolabel-media://asset/asset-123'), 'asset-123');
   for (const url of ['autolabel-media://asset/a/b', 'autolabel-media://asset/a?path=x', 'autolabel-media://elsewhere/a', 'autolabel-media://asset/%2e%2e%5csecret']) assert.throws(() => assetIdFromUrl(url));

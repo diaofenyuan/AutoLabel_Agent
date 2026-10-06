@@ -137,6 +137,29 @@ test('模型执行授权按作用域和摘要持久化，外部恢复与改写�
   } finally { await f.close(); }
 });
 
+test('授权键保留真实路径：重启后完整回读，大小写不同的文件互不继承授权', { skip: process.platform === 'win32' }, async () => {
+  const f = await fixture();
+  try {
+    const upper = path.join(f.root, 'Model.pt'), lower = path.join(f.root, 'model.pt');
+    await writeFile(upper, 'upper-model'); await writeFile(lower, 'lower-model');
+    await f.grants.add(upper, 'model'); await f.grants.add(lower, 'model');
+    const upperHash = createHash('sha256').update('upper-model').digest('hex');
+    const lowerHash = createHash('sha256').update('lower-model').digest('hex');
+    await f.local.authorizeSelectedModel('current', upper, () => undefined, f.engine);
+    assert.deepEqual(f.calls, [{ command: 'local.model.authorize', payload: { path: upper, modelHash: upperHash } }]);
+    // 落盘键必须是真实路径本身，不能被折叠成另一个路径。
+    const saved = f.preferences.value.localModelGrants as Record<string, Record<string, string>>;
+    assert.deepEqual(Object.keys(saved.current), [upper]);
+    const reloaded = new DesktopPreferences(f.preferences.filename); await reloaded.load();
+    const restarted = new LocalExecutionSettings(reloaded, new PathGrants());
+    assert.equal(await restarted.requireModel('current', upper, upperHash), upper);
+    // 仅大小写不同的另一个文件不得借用这条授权。
+    await assert.rejects(restarted.requireModel('current', lower, lowerHash), /重新选择/);
+    await assert.rejects(restarted.requireModel('current', lower, upperHash), /重新选择/);
+    assert.deepEqual(await restarted.modelAuthorizations('current'), [{ path: upper, modelHash: upperHash }]);
+  } finally { await f.close(); }
+});
+
 test('固定输入媒体只读取受管 PNG，拒绝错绑、查询、外部文件和目录连接', async () => {
   const f = await fixture();
   try {
