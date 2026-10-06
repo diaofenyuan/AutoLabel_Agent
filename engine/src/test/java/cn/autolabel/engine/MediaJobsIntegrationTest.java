@@ -21,7 +21,7 @@ public final class MediaJobsIntegrationTest {
     private static JsonObject step(String id,String kind,JsonObject p){return Json.obj("id",id,"kind",kind,"enabled",true,"parameters",p);}
     public static void main(String[] args)throws Exception{
         if(args.length!=3)throw new IllegalArgumentException("ffmpeg ffprobe video");ffmpeg=Path.of(args[0]).toAbsolutePath();ffprobe=Path.of(args[1]).toAbsolutePath();video=Path.of(args[2]).toAbsolutePath();root=Path.of("engine/build/verification/media-jobs-"+System.currentTimeMillis()).toAbsolutePath();Files.createDirectories(root);
-        realVideo();sameContent();bulkImport();recoveryAndCancellation();artifactRecovery();importRecovery();System.out.println("PASS "+checks+" media integration checks; VERIFICATION_DIR="+root);
+        realVideo();sameContent();bulkImport();assetImportRetry();recoveryAndCancellation();artifactRecovery();importRecovery();System.out.println("PASS "+checks+" media integration checks; VERIFICATION_DIR="+root);
     }
     private static void realVideo()throws Exception{
         try(Engine e=new Engine(root.resolve("real"),startup())){
@@ -91,6 +91,23 @@ public final class MediaJobsIntegrationTest {
             System.out.println("bulk import: 1000 images + 1 corrupt in "+elapsed+"s (submit "+submitMs+"ms)");
         }
     }
+    private static void assetImportRetry()throws Exception{
+        try(Engine e=new Engine(root.resolve("asset-import-retry"),startup())){
+            String pid=Json.required(project(e),"id");Path source=root.resolve("retry-source");Files.createDirectories(source);Path corrupt=source.resolve("broken.png");Files.write(corrupt,new byte[]{1,2,3,4});
+            JsonObject queued=cmd(e,"asset.import",Json.obj("projectId",pid,"paths",Json.arr(corrupt.toString()),"mode","copy"));String originalId=Json.required(queued,"jobId");JsonObject failed=await(e,originalId);check(Json.required(failed,"status").equals("failed"),"corrupt async import fails naturally");
+            Path manifest=root.resolve("asset-import-retry/media-jobs").resolve(originalId).resolve("import-paths.json");JsonArray paths=Json.array(Json.parse(Files.readString(manifest)),"paths");paths.set(0,new com.google.gson.JsonPrimitive(createValidImage(source.resolve("fixed.png")).toString()));Files.writeString(manifest,Json.obj("paths",paths).toString());
+            JsonObject retried=cmd(e,"media.job.retry",Json.obj("jobId",originalId));String retryId=Json.required(retried,"id");check(!retryId.equals(originalId)&&Json.required(await(e,retryId),"status").equals("completed"),"retried asset import executes to completion");check(Json.integer(e.projects.get(pid),"assetCount",0)==1,"retried import commits its valid image");
+            for(String invalidCase:List.of("missing","damaged")){
+                Path badSource=root.resolve("asset-import-retry/media-jobs").resolve(invalidCase);Files.createDirectories(badSource);Path badManifest=badSource.resolve("import-paths.json");String badId="fixture-"+invalidCase;
+                JsonObject fixture=Json.obj("id",badId,"projectId",pid,"kind","asset_import","status","failed","stage","done","operation","asset_import","createdAt",Json.now(),"updatedAt",Json.now(),"parameters",Json.obj("mode","copy"),"progress",Json.obj("phase","done","completed",0,"total",1));
+                e.store.tx(c->{Store.update(c,"INSERT INTO media_jobs(id,project_id,kind,status,data) VALUES(?,?,?,?,?)",badId,pid,"asset_import","failed",fixture);return null;});
+                if(invalidCase.equals("damaged"))Files.writeString(badManifest,"{broken");long before=Json.number(e.store.read(c->Store.one(c,"SELECT COUNT(*) AS n FROM media_jobs")),"n",0);
+                rejects(invalidCase.equals("missing")?"media_import_paths_missing":"media_import_paths_invalid",()->cmd(e,"media.job.retry",Json.obj("jobId",badId)));
+                long after=Json.number(e.store.read(c->Store.one(c,"SELECT COUNT(*) AS n FROM media_jobs")),"n",0);check(before==after,"invalid "+invalidCase+" manifest does not insert a queued job");
+            }
+        }
+    }
+    private static Path createValidImage(Path path)throws Exception{java.awt.image.BufferedImage image=new java.awt.image.BufferedImage(32,32,java.awt.image.BufferedImage.TYPE_INT_RGB);java.awt.Graphics2D graphics=image.createGraphics();graphics.setColor(java.awt.Color.GREEN);graphics.fillRect(0,0,32,32);graphics.dispose();javax.imageio.ImageIO.write(image,"png",path.toFile());image.flush();return path;}
     private static JsonObject awaitLong(Engine e,String id,int seconds)throws Exception{long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(seconds);while(System.nanoTime()<end){JsonObject job=cmd(e,"media.job.get",Json.obj("jobId",id));if(!Set.of("queued","running","cancelling").contains(Json.required(job,"status")))return job;Thread.sleep(50);}throw new AssertionError("bulk import timeout "+id);}
     private static void artifactRecovery()throws Exception{
         Path data=root.resolve("artifact-recovery");String id,pid;

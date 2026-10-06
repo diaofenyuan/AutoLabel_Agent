@@ -22,7 +22,7 @@ final class LocalAuthorizationTest {
         boolean windows = System.getProperty("os.name", "").startsWith("Windows");
         try (Engine direct = new Engine(root.resolve("direct"), Json.obj("localModelAuthorizations", Json.arr(Json.obj("path", model.toString(), "modelHash", modelHash))))) {
             check(direct.localRuntime.authorizationMatches(Json.obj("modelPath", model.toString(), "modelHash", modelHash)), "启动参数里的精确路径与摘要取得授权");
-            check(direct.localRuntime.authorizationMatches(Json.obj("modelPath", root.resolve("authorized.pt").toString(), "modelHash", modelHash)) == windows, "路径键按平台归一，与桌面持久化口径一致");
+            check(direct.localRuntime.authorizationMatches(Json.obj("modelPath", model.getParent().resolve("AUTH-FIXTURE.PT").toString(), "modelHash", modelHash)) == windows, "路径键按平台归一，与桌面持久化口径一致");
             check(!direct.localRuntime.authorizationMatches(Json.obj("modelPath", model.toString(), "modelHash", "0".repeat(64))), "摘要不同不继承同一路径的授权");
         }
         try (Engine relative = new Engine(root.resolve("relative"), Json.obj("localModelAuthorizations", Json.arr(Json.obj("path", "relative.pt", "modelHash", modelHash))))) {

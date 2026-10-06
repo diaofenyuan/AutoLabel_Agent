@@ -110,11 +110,37 @@ final class MediaJobs implements AutoCloseable {
     JsonObject list(JsonObject p){FlowPlans.keys(p,"projectId","kind","limit","offset");int limit=Json.bounded(p,"limit",100,1,100),offset=Json.bounded(p,"offset",0,0,Integer.MAX_VALUE);return store.read(c->{List<Object> arguments=new ArrayList<>();String condition=" WHERE 1=1";for(String field:List.of("projectId","kind"))if(p.has(field)){condition+=" AND "+(field.equals("projectId")?"project_id":"kind")+"=?";arguments.add(Json.required(p,field));}long count=Json.number(Store.one(c,"SELECT COUNT(*) AS n FROM media_jobs"+condition,arguments.toArray()),"n",0);arguments.add(limit);arguments.add(offset);JsonArray items=new JsonArray();for(JsonElement job:Store.docs(c,"SELECT data FROM media_jobs"+condition+" ORDER BY rowid DESC LIMIT ? OFFSET ?",arguments.toArray()))items.add(view(job.getAsJsonObject()));return Json.obj("items",items,"total",count);});}
     private static void save(Connection c,JsonObject job,String event)throws Exception{job.addProperty("updatedAt",Json.now());Store.event(c,"media.job."+event,null,null,null,Json.obj("jobId",job.get("id"),"projectId",job.get("projectId"),"kind",job.get("kind"),"status",job.get("status"),"stage",job.get("stage"),"progress",job.get("progress")));job.addProperty("sequence",Store.cursor(c));Store.update(c,"UPDATE media_jobs SET status=?,data=? WHERE id=?",Json.required(job,"status"),job,Json.required(job,"id"));}
     JsonObject cancel(JsonObject p){FlowPlans.keys(p,"jobId");String id=Json.required(p,"jobId");JsonObject result;synchronized(gate){result=store.tx(c->{JsonObject job=Store.document(c,"media_jobs",id);if(!ACTIVE.contains(Json.required(job,"status")))return view(job);if(id.equals(currentId)&&committing)throw error(409,"media_commit_in_progress","素材正在原子提交，请等待明确提交结果。");if(id.equals(currentId))cancelled=true;job.addProperty("status",id.equals(currentId)?"cancelling":"cancelled");if(!id.equals(currentId))job.addProperty("completedAt",Json.now());save(c,job,"cancelled");return view(job);});}if(id.equals(currentId)){VideoFrames helper=bridge;if(helper!=null)helper.cancel(id);}return result;}
-    JsonObject retry(JsonObject p){FlowPlans.keys(p,"jobId");JsonObject original=store.read(c->Store.document(c,"media_jobs",Json.required(p,"jobId")));if(!RETRYABLE.contains(Json.required(original,"status")))throw error(409,"media_retry_invalid","只有失败、取消或中断的媒体任务可以重新运行。");JsonObject job=newJob(Json.required(original,"projectId"),Json.required(original,"kind"),Json.object(original,"parameters").deepCopy());for(String field:List.of("sourcePath","sourceName","expectedSourceHash","privateInputs"))if(original.has(field))job.add(field,original.get(field).deepCopy());job.addProperty("originalJobId",Json.required(original,"id"));JsonObject created=insert(job);
-        if(Json.required(original,"kind").equals("asset_import"))try{Path source=jobDirectory(Json.required(original,"id")).resolve("import-paths.json");
-            if(Files.isRegularFile(source))Files.copy(source,jobDirectory(Json.required(created,"id")).resolve("import-paths.json"),StandardCopyOption.REPLACE_EXISTING);}
-        catch(Exception e){throw error(500,"media_import_paths_failed","导入清单复制失败，重试任务无法继续。");}
-        return created;}
+    JsonObject retry(JsonObject p){
+        FlowPlans.keys(p,"jobId");String originalId=Json.required(p,"jobId");
+        synchronized(gate){
+            JsonObject original=store.read(c->Store.document(c,"media_jobs",originalId));
+            if(!RETRYABLE.contains(Json.required(original,"status")))throw error(409,"media_retry_invalid","只有失败、取消或中断的媒体任务可以重新运行。");
+            boolean assetImport=Json.required(original,"kind").equals("asset_import");
+            Path targetDirectory=null;boolean createdDirectory=false;
+            try{
+                JsonObject job=newJob(Json.required(original,"projectId"),Json.required(original,"kind"),Json.object(original,"parameters").deepCopy());
+                for(String field:List.of("sourcePath","sourceName","expectedSourceHash","privateInputs"))if(original.has(field))job.add(field,original.get(field).deepCopy());
+                job.addProperty("originalJobId",Json.required(original,"id"));
+                if(assetImport){
+                    Path source=confined(jobDirectory(originalId).resolve("import-paths.json"));
+                    if(!Files.isRegularFile(source,LinkOption.NOFOLLOW_LINKS)||Files.isSymbolicLink(source))throw error(422,"media_import_paths_missing","原任务导入清单缺失或不是受管普通文件，无法重试。");
+                    source=source.toRealPath();if(!source.startsWith(store.root.toRealPath()))throw error(422,"media_import_paths_missing","原任务导入清单不在受管目录中，无法重试。");
+                    JsonObject manifest;try{manifest=Json.parse(Files.readString(source,StandardCharsets.UTF_8));if(!manifest.has("paths")||!manifest.get("paths").isJsonArray())throw new IllegalArgumentException();for(JsonElement value:Json.array(manifest,"paths"))if(!value.isJsonPrimitive()||!value.getAsJsonPrimitive().isString())throw new IllegalArgumentException();}catch(Exception invalid){throw error(422,"media_import_paths_invalid","原任务导入清单损坏，必须包含字符串 paths 数组。");}
+                    targetDirectory=jobDirectory(Json.required(job,"id"));Files.createDirectory(targetDirectory);createdDirectory=true;
+                    Path staged=targetDirectory.resolve("import-paths.json.partial"),destination=targetDirectory.resolve("import-paths.json");
+                    Files.copy(source,staged);JsonObject copied;try{copied=Json.parse(Files.readString(staged,StandardCharsets.UTF_8));if(!copied.has("paths")||!copied.get("paths").isJsonArray())throw new IllegalArgumentException();for(JsonElement value:Json.array(copied,"paths"))if(!value.isJsonPrimitive()||!value.getAsJsonPrimitive().isString())throw new IllegalArgumentException();}catch(Exception invalid){throw error(422,"media_import_paths_invalid","复制后的导入清单校验失败，无法重试。");}
+                    if(!manifest.equals(copied))throw error(422,"media_import_paths_invalid","复制后的导入清单内容不一致，无法重试。");Files.move(staged,destination,StandardCopyOption.ATOMIC_MOVE);
+                }
+                JsonObject created=insert(job);
+                return created;
+            }catch(Exception failure){
+                if(createdDirectory&&targetDirectory!=null)try{deleteTree(targetDirectory);}catch(Exception ignored){/* 保留原始错误，失败目录只属于本次重试。 */}
+                if(failure instanceof ApiError api)throw api;
+                throw error(500,"media_import_paths_failed","导入清单暂存失败，未创建重试任务。");
+            }
+        }
+    }
+    private static void deleteTree(Path directory)throws IOException{if(!Files.exists(directory,LinkOption.NOFOLLOW_LINKS))return;try(var paths=Files.walk(directory)){for(Path path:paths.sorted(Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}}
     JsonObject importVideo(JsonObject p){FlowPlans.keys(p,"jobId");String id=Json.required(p,"jobId");synchronized(gate){return store.tx(c->{JsonObject job=Store.document(c,"media_jobs",id);if(!Json.required(job,"kind").equals("video_extract"))throw error(422,"media_job_kind_invalid","该任务不是视频抽帧任务。");if(Json.bool(job,"assetsCommitted",false))return view(job);if(ACTIVE.contains(Json.required(job,"status"))){if(Json.str(job,"operation","").equals("import"))return view(job);throw error(409,"media_job_not_ready","抽帧尚未完成。");}if(!Json.bool(job,"artifactCommitted",false))throw error(409,"media_artifact_incomplete","抽帧产物未完成，不能导入素材。");job.addProperty("status","queued");job.addProperty("stage","importing");job.addProperty("operation","import");job.remove("error");job.remove("completedAt");save(c,job,"import_queued");return view(job);});}}
 
     void tick(){synchronized(gate){if(closed||currentId!=null||!engine.runs.dispatchAllowed())return;JsonObject job=store.tx(c->{JsonObject row=Store.one(c,"SELECT data FROM media_jobs WHERE status='queued' ORDER BY rowid LIMIT 1");if(row==null)return null;JsonObject value=Json.parse(Json.required(row,"data"));value.addProperty("status","running");save(c,value,"started");return value;});if(job==null)return;currentId=Json.required(job,"id");cancelled=false;committing=false;lastProgress=0;worker.execute(()->execute(job));}}

@@ -11,6 +11,8 @@ import { LocalExecutionSettings } from './local-execution';
 import { EngineManager, waitForEngineExit } from './engine';
 import { mediaTargetFromUrl, normalizeMedia, PathGrants, publicInputResult } from './security';
 
+const storedPathKey = (value: string) => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'autolabel-local-desktop-'));
   const preferences = new DesktopPreferences(path.join(root, 'preferences.json')); await preferences.load();
@@ -275,7 +277,7 @@ test('并发授权经串行化后不丢条目，也不残留忙碌状态', async
     }));
     await Promise.all(models.map(file => f.local.authorizeSelectedModel('current', file, () => undefined, f.engine)));
     const scopes = f.preferences.value.localModelGrants as Record<string, Record<string, string>>;
-    assert.deepEqual(Object.keys(scopes.current).sort(), [...models].sort());
+    assert.deepEqual(Object.keys(scopes.current).sort(), models.map(storedPathKey).sort());
     assert.equal(f.calls.length, models.length);
     assert.equal(f.local.busy, false);
   } finally { await f.close(); }
@@ -290,7 +292,7 @@ test('同一模型重复授权只登记一条，引擎拒绝时不落下桌面�
     await f.local.authorizeSelectedModel('current', model, () => undefined, f.engine);
     await f.local.authorizeSelectedModel('current', model, () => undefined, f.engine);
     const grants = (f.preferences.value.localModelGrants as Record<string, Record<string, string>>).current;
-    assert.deepEqual(grants, { [model]: modelHash });
+    assert.deepEqual(grants, { [storedPathKey(model)]: modelHash });
     assert.deepEqual(await f.local.modelAuthorizations('current'), [{ path: model, modelHash }]);
 
     // 引擎授权失败（文件在两次哈希之间被改写、引擎不可用）时不能留下「桌面已授权、引擎不认」的半状态。
