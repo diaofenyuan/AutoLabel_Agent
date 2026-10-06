@@ -85,6 +85,8 @@ export async function authorizeCommandPaths(command: string, payload: Record<str
     if (payload.labelsDir) payload.labelsDir = await grants.require(payload.labelsDir, ['directory']);
     if (payload.items) payload.items = await Promise.all((payload.items as Record<string, unknown>[]).map(async item => ({ ...item, labelPath: await grants.require(item.labelPath, ['labels']) })));
   }
+  // 分类数据集目录必须由用户在选择器里授权，引擎再从中读取类别子文件夹。
+  if (['annotation.importClassify.preflight', 'annotation.importClassify'].includes(command)) payload.rootDir = await grants.require(payload.rootDir, ['directory']);
   if (command === 'annotation.render') {
     payload.outputPath = await grants.requireOutput(payload.outputPath);
     const extensions = payload.format === 'jpeg' ? ['.jpg', '.jpeg'] : ['.png'];

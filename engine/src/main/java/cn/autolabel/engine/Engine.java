@@ -62,6 +62,7 @@ final class Engine implements AutoCloseable {
         case "review.build"->new Reviews(store,projects).build(p);case "review.list"->new Reviews(store,projects).list(p);case "review.resolve"->new Reviews(store,projects).resolve(p);case "review.sample"->new Reviews(store,projects).sample(p);case "review.suggestions"->new Reviews(store,projects).suggestions(p);
         case "annotation.save"->projects.save(p);case "annotation.draft"->projects.draft(p);case "annotation.history"->projects.history(Json.required(p,"assetId"));
         case "annotation.importYolo"->new YoloImporter(store,projects).importLabels(p);case "annotation.render"->new OverlayRenderer(store,projects).render(p);
+        case "annotation.importClassify.preflight"->new ClassifyImporter(store,projects).scan(p);case "annotation.importClassify"->new ClassifyImporter(store,projects).importFolders(p);
         case "annotation.draft.discard"->store.tx(c->{String id=Json.required(p,"assetId");Store.update(c,"DELETE FROM drafts WHERE asset_id=?",id);Store.event(c,"annotation.draft_discarded",null,id,null,new JsonObject());return Json.obj("discarded",true);});
         case "export.preflight"->exporter.preflight(p);case "export.create"->exporter.create(p);case "export.list"->exporter.list(Json.required(p,"projectId"));
         case "export.format.list"->exportFormats.list(p);case "export.format.get"->exportFormats.get(p);case "export.format.save"->exportFormats.save(p);case "export.format.delete"->exportFormats.delete(p);
