@@ -15,6 +15,7 @@ import { writeFile } from 'node:fs/promises';
 export async function checkDesktopSidebar(window: BrowserWindow, output: string): Promise<void> {
   const js = <T = unknown>(code: string): Promise<T> => window.webContents.executeJavaScript(code);
   const json = JSON.stringify;
+  const navigationChecks: Record<string, unknown>[] = [];
   async function waitFor(expression: string, timeout = 30000) {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
@@ -36,6 +37,21 @@ export async function checkDesktopSidebar(window: BrowserWindow, output: string)
     assert.deepEqual(initialSidebar.actions, ['新建项目', '试用示例项目'], '空状态提供新建和试用两条清晰入口');
     assert.equal(initialSidebar.recentLabel, '最近对话', '最近对话分组在空项目时仍可见');
     assert.equal(initialSidebar.projectButton, true, '项目列表标题仍提供常驻的新建入口');
+    const navigationStates = await js<Record<string, boolean>>(`(()=>Object.fromEntries([...document.querySelectorAll('#app-sidebar .nav-item')].map(node=>[node.innerText.trim(),node.classList.contains('selected')])))()`);
+    assert.equal(navigationStates['新对话'], true, `当前新对话入口必须显示选中态：${JSON.stringify(navigationStates)}`);
+    assert.equal(navigationStates['任务'], false, '未打开的任务入口不应显示选中态');
+    assert.equal(navigationStates['设置'], false, '未打开的设置入口不应显示选中态');
+    navigationChecks.push({ check: 'sidebar-navigation-selected-state', navigationStates });
+    await js(`([...document.querySelectorAll('#app-sidebar .nav-item')].find(node=>node.innerText.trim()==='任务')).click()`);
+    await waitFor(`!!document.querySelector('.tasks-page')`);
+    assert.equal(await js<boolean>(`[...document.querySelectorAll('#app-sidebar .nav-item')].find(node=>node.innerText.trim()==='任务')?.classList.contains('selected')`), true, '进入任务页后任务入口必须显示选中态');
+    await js(`([...document.querySelectorAll('#app-sidebar .nav-item')].find(node=>node.innerText.trim()==='设置')).click()`);
+    await waitFor(`!!document.querySelector('.settings-page')`);
+    assert.equal(await js<boolean>(`[...document.querySelectorAll('#app-sidebar .nav-item')].find(node=>node.innerText.trim()==='设置')?.classList.contains('selected')`), true, '进入设置页后设置入口必须显示选中态');
+    await js(`([...document.querySelectorAll('#app-sidebar .nav-item')].find(node=>node.innerText.trim()==='新对话')).click()`);
+    await waitFor(`!!document.querySelector('.onboarding-lanes')`);
+    assert.equal(await js<boolean>(`[...document.querySelectorAll('#app-sidebar .nav-item')].find(node=>node.innerText.trim()==='新对话')?.classList.contains('selected')`), true, '返回新对话后新对话入口必须显示选中态');
+    navigationChecks.push({ check: 'sidebar-navigation-selected-state-after-clicks', task: true, settings: true, chat: true });
     await writeFile(output.replace(/\.json$/, '-empty.png'), (await window.webContents.capturePage()).toPNG());
     await js(`document.querySelector('.sidebar-empty-primary').click()`);
     await waitFor(`!!document.querySelector('dialog[open] input[placeholder="给项目起个名字"]')`);
@@ -184,7 +200,7 @@ export async function checkDesktopSidebar(window: BrowserWindow, output: string)
       if (!debuggerWasAttached && window.webContents.debugger.isAttached()) window.webContents.debugger.detach();
       window.setSize(originalSize[0], originalSize[1]);
     }
-    await writeFile(output, json({ checks: [
+    await writeFile(output, json({ checks: [...navigationChecks,
       { check: 'sidebar-name-readable', ...resting, actionButtons: padding.buttons, padding },
       { check: 'project-actions-in-more-menu', items: projectMenuItems },
       { check: 'sidebar-search-and-page-jump-are-distinct', projectSearch, jumpSearch },

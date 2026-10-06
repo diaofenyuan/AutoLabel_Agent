@@ -206,7 +206,7 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
       {isMobileDrawer && <IconButton label="关闭侧栏" onClick={onClose}><X size={16} /></IconButton>}
     </div>
     <div className="sidebar-scroll">
-      <nav aria-label="主导航">{mainEntries.map(entry => <button key={entry.key} className="nav-item" aria-current={page === 'chat' && !activeSessionId ? 'page' : undefined} title={entry.label} onClick={() => void startProjectChat()}><entry.icon size={18} strokeWidth={1.65} /><span>{entry.label}</span></button>)}</nav>
+      <nav aria-label="主导航">{mainEntries.map(entry => <button key={entry.key} className={`nav-item ${page === 'chat' && !activeSessionId ? 'selected' : ''}`} aria-current={page === 'chat' && !activeSessionId ? 'page' : undefined} title={entry.label} onClick={() => void startProjectChat()}><entry.icon size={18} strokeWidth={1.65} /><span>{entry.label}</span></button>)}</nav>
       {pinned.length > 0 && <div className="sidebar-group sidebar-pinned"><div className="sidebar-group-head"><span className="sidebar-group-title">置顶</span><span className="sidebar-section-count">{pinned.length}</span></div>{pinned.map(session => sessionRow(session, projectNameOf.get(session.projectId ?? '') ?? '历史项目'))}</div>}
       <div className="sidebar-group sidebar-projects">
         {/* 「＋」弹出命名框：项目必须由用户命名，不再自动取名也不再只跳欢迎页。 */}
@@ -264,8 +264,8 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
         ? <button className="sidebar-status" title={engine.message || '打开诊断'} onClick={() => void navigate('settings', 'diagnostics')}><span className={`status-dot ${engine.state}`} /><span className="truncate">{engineLabel}</span><ArrowRight size={12} /></button>
         : <div className="sidebar-status" title={isDemo ? '浏览器演示' : engine.message || '本地引擎状态'}><span className={`status-dot ${engine.state}`} /><span className="truncate">{engineLabel}</span></div>}
       {/* 任务不再是主导航项：长任务在对话里发起，看板留在底部次要入口，进行中的数量仍以徽标提示。 */}
-      <button className="nav-item" aria-current={page === 'tasks' ? 'page' : undefined} title="任务" onClick={() => void navigate('tasks')}><ListTodo size={18} strokeWidth={1.65} /><span>任务</span>{activeTasks > 0 && <span className="nav-badge" aria-label={`进行中的任务 ${activeTasks} 个`}>{activeTasks}</span>}</button>
-      <button className="nav-item" aria-current={page === 'settings' ? 'page' : undefined} title="设置" onClick={() => void navigate('settings')}><SettingsIcon size={18} strokeWidth={1.65} /><span>设置</span></button>
+      <button className={`nav-item ${page === 'tasks' ? 'selected' : ''}`} aria-current={page === 'tasks' ? 'page' : undefined} title="任务" onClick={() => void navigate('tasks')}><ListTodo size={18} strokeWidth={1.65} /><span>任务</span>{activeTasks > 0 && <span className="nav-badge" aria-label={`进行中的任务 ${activeTasks} 个`}>{activeTasks}</span>}</button>
+      <button className={`nav-item ${page === 'settings' ? 'selected' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} title="设置" onClick={() => void navigate('settings')}><SettingsIcon size={18} strokeWidth={1.65} /><span>设置</span></button>
     </div>
     {creatingProject && <ProjectResolveDialog title="新建项目" confirmLabel="创建项目" projects={projects} allowExisting={false}
       onClose={() => setCreatingProject(false)}
