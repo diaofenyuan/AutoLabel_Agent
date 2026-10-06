@@ -56,6 +56,7 @@ public final class EngineTest {
         if(!scope.isEmpty()&&!SCOPES.contains(scope))throw new AssertionError("未知的引擎验证作用域："+scope+"；可用作用域见 EngineTest.SCOPES。");
         if(args.length>0&&args[0].equals("training-datasets")){TrainingDatasetsTest.run(root);System.out.println("PASS "+assertions+" training dataset assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("materials-root")){MaterialsRootTest.run(root);System.out.println("PASS "+assertions+" materials root assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
+        if(args.length>0&&args[0].equals("local-authorization")){LocalAuthorizationTest.run(root);System.out.println("PASS "+assertions+" local authorization assertions; local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("training-root")){TrainingRootTest.run(root);System.out.println("PASS "+assertions+" training root assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("dataset-versions")){DatasetVersionsTest.run(root);System.out.println("PASS "+assertions+" dataset version assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}
         if(args.length>0&&args[0].equals("asset-overview")){AssetOverviewTest.run(root);System.out.println("PASS "+assertions+" asset overview assertions; synthetic fixtures and local files only.\nVERIFICATION_DIR="+root);return;}

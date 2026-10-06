@@ -65,9 +65,12 @@ export class LocalExecutionSettings {
       guard();
       const selected = await regularFile(await this.grants.require(filename, ['model']), ['.pt', '.onnx']);
       const modelHash = await hashFile(selected);
-      const scopes = this.authorizedScopes();
-      await this.preferences.update({ localModelGrants: { ...scopes, [scope]: { ...scopes[scope], [pathIdentity(selected)]: modelHash } } });
+      // 先让引擎按实测摘要建立授权，再持久化桌面记录，避免引擎拒绝时留下半状态。
       if (engine) await engine.request('local.model.authorize', { path: selected, modelHash });
+      const scopes = this.authorizedScopes();
+      try {
+        await this.preferences.update({ localModelGrants: { ...scopes, [scope]: { ...scopes[scope], [pathIdentity(selected)]: modelHash } } });
+      } catch { throw new DesktopError('LOCAL_CONFIGURATION_NOT_SAVED', '模型授权未能保存，请重新选择模型文件'); }
       return selected;
     });
   }
@@ -86,9 +89,11 @@ export class LocalExecutionSettings {
         throw new DesktopError('LOCAL_MODEL_NOT_IN_LIBRARY', '只能授权模型库目录内的文件');
       }
       const modelHash = await hashFile(selected);
-      const scopes = this.authorizedScopes();
-      await this.preferences.update({ localModelGrants: { ...scopes, [scope]: { ...scopes[scope], [key]: modelHash } } });
       if (engine) await engine.request('local.model.authorize', { path: selected, modelHash });
+      const scopes = this.authorizedScopes();
+      try {
+        await this.preferences.update({ localModelGrants: { ...scopes, [scope]: { ...scopes[scope], [key]: modelHash } } });
+      } catch { throw new DesktopError('LOCAL_CONFIGURATION_NOT_SAVED', '模型授权未能保存，请重新选择模型文件'); }
       return { path: selected, modelHash };
     });
   }
