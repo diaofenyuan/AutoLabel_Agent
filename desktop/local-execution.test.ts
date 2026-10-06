@@ -252,6 +252,20 @@ test('损坏或旧版的模型授权配置按空处理，重新授权后写回�
   } finally { await f.close(); }
 });
 
+test('并发授权经串行化后不丢条目，也不残留忙碌状态', async () => {
+  const f = await fixture();
+  try {
+    const models = await Promise.all([1, 2, 3, 4, 5].map(async index => {
+      const file = path.join(f.root, `model-${index}.pt`); await writeFile(file, `weights-${index}`); await f.grants.add(file, 'model'); return file;
+    }));
+    await Promise.all(models.map(file => f.local.authorizeSelectedModel('current', file, () => undefined, f.engine)));
+    const scopes = f.preferences.value.localModelGrants as Record<string, Record<string, string>>;
+    assert.deepEqual(Object.keys(scopes.current).sort(), [...models].sort());
+    assert.equal(f.calls.length, models.length);
+    assert.equal(f.local.busy, false);
+  } finally { await f.close(); }
+});
+
 test('固定输入媒体只读取受管 PNG，拒绝错绑、查询、外部文件和目录连接', async () => {
   const f = await fixture();
   try {

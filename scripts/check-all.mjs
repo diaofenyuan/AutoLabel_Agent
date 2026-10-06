@@ -14,6 +14,7 @@ const steps = [
   ['类型检查（桌面）', npm, ['run', 'check:desktop']],
   ['类型检查（界面）', npm, ['run', 'check:renderer']],
   ['类型检查（助手）', npm, ['run', 'check:agent']],
+  ['跨层契约检查', npm, ['run', 'check:contract']],
   ['桌面单测', npm, ['run', 'test:desktop']],
   ['助手单测', npm, ['run', 'test:agent']],
   ['引擎测试', 'powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/engine-build.ps1', '-Test']],

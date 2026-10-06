@@ -1,6 +1,6 @@
 const eventNames: Record<string, string> = {
   'media.job.created': '素材任务已创建', 'media.job.started': '素材任务开始', 'media.job.progress': '素材任务进度更新', 'media.job.inspected': '视频检查完成', 'media.job.artifact_committed': '抽帧结果已封存', 'media.job.import_queued': '素材导入已排队', 'media.job.assets_committed': '视频素材已入库', 'media.job.screening_completed': '素材分析已完成', 'media.job.cancelled': '素材任务已取消', 'media.job.interrupted': '素材任务已中断', 'media.job.finished': '素材任务结束',
-  'project.created': '项目已创建', 'project.updated': '项目已更新',
+  'project.created': '项目已创建', 'project.updated': '项目已更新', 'project.deleted': '项目已删除',
   'asset.imported': '素材已导入', 'asset.relocated': '素材位置已更新',
   'annotation.candidate': '候选标注已保存', 'annotation.saved': '标注已保存', 'annotation.rendered': '标注预览已生成', 'annotation.draft_saved': '标注草稿已保存', 'annotation.draft_discarded': '标注草稿已放弃',
   'run.created': '标注任务已创建', 'run.queued': '标注任务排队中', 'run.running': '标注任务执行中', 'run.paused': '标注任务已暂停', 'run.resumed': '标注任务已恢复', 'run.retry': '标注任务准备重试', 'run.cancelled': '标注任务已取消', 'run.completed': '标注任务已完成', 'run.completed_with_errors': '标注任务完成，有需处理项', 'run.failed': '标注任务失败', 'run.needs_attention': '标注任务需要处理',
@@ -8,11 +8,18 @@ const eventNames: Record<string, string> = {
   'call.queued': '请求排队中', 'call.sent': '请求已发送', 'call.delta': '正在接收响应', 'call.not_sent': '请求未发送', 'call.completed': '请求已完成', 'call.failed': '请求失败', 'call.unknown': '请求结果未知',
   'flow.created': '流程已创建', 'flow.running': '流程执行中', 'flow.pausing': '流程正在暂停', 'flow.paused': '流程已暂停', 'flow.resumed': '流程已恢复', 'flow.recovered': '流程已从中断恢复', 'flow.needs_attention': '流程需要处理', 'flow.cancelling': '流程正在停止', 'flow.cancelled': '流程已停止', 'flow.completed': '流程已完成', 'flow.completed_with_errors': '流程完成，有需处理项', 'flow.failed': '流程失败',
   'flow.step.started': '流程步骤开始', 'flow.step.progress': '流程步骤进度更新', 'flow.step.completed': '流程步骤已完成', 'flow.step.completed_with_errors': '流程步骤完成，有需处理项', 'flow.step.failed': '流程步骤失败', 'flow.step.needs_attention': '流程步骤等待处理', 'flow.step.paused': '流程步骤已暂停', 'flow.step.cancelled': '流程步骤已停止', 'flow.step.skipped': '流程步骤已跳过',
-  'budget.updated': '请求预算已更新', 'budget.cost_updated': '费用记录已更新',
-  'provider.saved': '接口配置已保存', 'resource.saved': '资源已保存', 'evaluation.completed': '评测已完成',
+  'budget.updated': '请求预算已更新', 'budget.cost_updated': '费用记录已更新', 'settings.saved': '全局设置已保存',
+  'provider.saved': '接口配置已保存', 'provider.deleted': '接口配置已删除', 'resource.saved': '资源已保存', 'evaluation.completed': '评测已完成',
+  'evaluation_rerun.created': '评测重跑已创建', 'evaluation_set.created': '评测集已创建', 'evaluation_set.published': '评测集已发布', 'evaluation_truth.saved': '评测真值已保存',
   'review.built': '复核清单已建立', 'review.resolved': '复核问题已处理', 'review.sampled': '抽查样本已建立',
-  'export.started': '数据集导出开始', 'export.completed': '数据集导出完成', 'export.failed': '数据集导出失败', 'backup.progress': '工作空间备份进度更新',
-  'engine.recovered': '引擎已恢复', 'engine.resumed': '引擎已继续工作', 'engine.suspended': '引擎已暂停工作', 'engine.shutdown': '引擎已关闭',
+  'export.started': '数据集导出开始', 'export.completed': '数据集导出完成', 'export.failed': '数据集导出失败', 'export.format.saved': '导出格式已保存', 'export.format.deleted': '导出格式已删除', 'media.recipe.saved': '抽帧方案已保存', 'media.recipe.deleted': '抽帧方案已删除', 'backup.progress': '工作空间备份进度更新',
+  'engine.recovered': '引擎已恢复', 'engine.resumed': '引擎已继续工作', 'engine.suspended': '引擎已暂停工作',
+  'local.progress': '本地推理进度更新', 'training.dataset.ready': '训练数据集已就绪',
+  'dataset.version.created': '数据集版本已创建', 'dataset.version.ready': '数据集版本已就绪', 'dataset.version.deleted': '数据集版本已删除', 'dataset.version.cancelled': '数据集版本构建已取消', 'dataset.version.failed': '数据集版本构建失败',
+  'training.job.created': '训练任务已创建', 'training.job.preparing': '训练任务准备环境', 'training.job.started': '训练任务开始', 'training.job.progress': '训练进度更新', 'training.job.epoch': '训练轮次完成', 'training.job.cancelling': '训练任务正在停止', 'training.job.cancelled': '训练任务已取消', 'training.job.interrupted': '训练任务已中断', 'training.job.stalled': '训练任务长时间无进展', 'training.job.finished': '训练任务已完成', 'training.job.failed': '训练任务失败', 'training.job.deleted': '训练任务已删除',
+  'track.timeline.created': '跟踪时间轴已创建', 'track.timeline.updated': '跟踪时间轴已更新', 'track.created': '轨迹已创建', 'track.updated': '轨迹已更新', 'track.deleted': '轨迹已删除', 'track.merged': '轨迹已合并', 'track.split': '轨迹已拆分', 'track.keyframe.saved': '轨迹关键帧已保存', 'track.keyframe.deleted': '轨迹关键帧已删除',
+  'track.local.candidate_saved': '本地跟踪候选已保存', 'track.local.candidate_confirmed': '本地跟踪候选已确认', 'track.local.candidate_promoted': '本地跟踪候选已转正式',
+  'track.generation.queued': '轨迹生成已排队', 'track.generation.started': '轨迹生成开始', 'track.generation.progress': '轨迹生成进度更新', 'track.generation.completed': '轨迹生成已完成', 'track.generation.completed_with_errors': '轨迹生成完成，有需处理项', 'track.generation.cancelled': '轨迹生成已取消', 'track.generation.failed': '轨迹生成失败', 'track.generation.interrupted': '轨迹生成已中断', 'track.generation.cancel_requested': '轨迹生成正在停止',
 };
 
 export function eventName(type: string): string { return eventNames[type] ?? '其他事件'; }

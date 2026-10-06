@@ -103,9 +103,16 @@ export class LocalExecutionSettings {
     }
     return result;
   }
+  /** 返回与当前真实文件路径等价的授权摘要，兼容历史路径键。 */
+  private grantedHash(scope: string, selected: string): string | undefined {
+    const entries = (this.preferences.value.localModelGrants as Record<string, Record<string, string>> | undefined)?.[scope];
+    for (const [filename, modelHash] of Object.entries(entries ?? {})) if (samePath(filename, selected)) return modelHash;
+    return undefined;
+  }
   async requireModel(scope: string, filename: unknown, expectedHash: unknown): Promise<string> {
     const selected = await regularFile(filename, ['.pt', '.onnx']);
-    if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/i.test(expectedHash) || this.authorizedScopes()[scope]?.[pathIdentity(selected)] !== expectedHash.toLowerCase()) {
+    const granted = this.grantedHash(scope, selected);
+    if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/i.test(expectedHash) || typeof granted !== 'string' || granted.toLowerCase() !== expectedHash.toLowerCase()) {
       throw new DesktopError('LOCAL_MODEL_NOT_AUTHORIZED', '请为当前数据目录重新选择此模型文件，历史记录或恢复备份不能授权模型执行');
     }
     // Java 在加载和推理时核对实际文件摘要；此处只核对用户曾明确授权的文件身份。
