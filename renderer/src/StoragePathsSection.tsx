@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { FolderOpen, RefreshCw, Save, Undo2, Database, AlertTriangle, CheckCircle2, ArrowRight } from 'lucide-react';
 import type {
   StoragePathEntry, StoragePathKind, StoragePathMigrationPlan, StoragePathMigrationResult, StoragePathProbe, StoragePathsState,
@@ -27,31 +27,39 @@ export default function StoragePathsSection({ onBusyChange }: { onBusyChange: (b
   const [error, setError] = useState('');
   const [plan, setPlan] = useState<StoragePathMigrationPlan | null>(null);
   const [migrated, setMigrated] = useState<StoragePathMigrationResult | null>(null);
-  const [mounted, setMounted] = useState(true);
+  // 挂载标记用 ref 而非 state：它只是「异步回调能否写 state」的判据，不该触发重渲染。
+  // 早前用 state 时它会重建依赖它的 load，并让下面的挂载 effect 跟着重跑；
+  // 更关键的是它曾被用来拦 setBusy(false)，导致组件在 load 期间被替换时 busy 永远归不了位。
+  const mountedRef = useRef(true);
   useEffect(() => { onBusyChange(busy); }, [busy, onBusyChange]);
-  useEffect(() => () => { setMounted(false); }, []);
+  // 卸载时复位 busy：切到别的设置标签后本区块整体卸载，不复位会让 pathsBusy 永久为 true，
+  // 把设置页的保存按钮和所有输入框一起锁死（与训练产物区块同一个成因）。
+  useEffect(() => () => { mountedRef.current = false; onBusyChange(false); }, [onBusyChange]);
 
   const load = useCallback(async () => {
     try {
       const next = await request<StoragePathsState>('storage.paths.get');
-      if (!mounted) return;
+      if (!mountedRef.current) return;
       setState(next);
       setDrafts(Object.fromEntries(next.entries.map(entry => [entry.kind, entry.custom ? entry.path : ''])) as Partial<Record<StoragePathKind, string>>);
       setRootDraft(next.rootSource === 'custom' ? next.root : '');
-    } catch (e) { if (mounted) setError(errorMessage(e)); }
-  }, [mounted]);
+    } catch (e) { if (mountedRef.current) setError(errorMessage(e)); }
+  }, []);
 
   useEffect(() => {
     if (isDemo) return;
-    void (async () => { setBusy(true); await load(); if (mounted) setBusy(false); })();
-  }, [load, mounted]);
+    // 无条件复位 busy：mountedRef 只用来判断还能不能写业务状态。
+    // 曾用 mountedRef 拦 setBusy(false)，组件在 load 期间被替换/重挂载时就永远归不了位，
+    // busy 卡在 true 会连带把设置页的保存按钮锁死。
+    void (async () => { setBusy(true); await load(); setBusy(false); })();
+  }, [load]);
 
   async function run(action: () => Promise<void>) {
     if (busy) return;
     setBusy(true); setError('');
     try { await action(); await load(); await refreshMigration(); }
     catch (e) { setError(errorMessage(e)); }
-    finally { if (mounted) setBusy(false); }
+    finally { setBusy(false); }
   }
   async function refreshMigration() {
     try { setPlan(await request<StoragePathMigrationPlan>('storage.paths.migration')); }

@@ -45,6 +45,9 @@ export default function LocalRuntimeSettings({ onBusyChange, beforeConfigure }: 
     catch (e) { setRuntime(null); setError(errorMessage(e)); } finally { setBusy(false); onBusyChange?.(false); }
   }
   useEffect(() => { if (!isDemo) void execute('local.runtime.get'); }, []);
+  // 卸载时兜底交还 busy：一键准备环境要跑几分钟，中途切走标签时 execute 的 finally 不再执行，
+  // onBusyChange 停在 true 会把设置页保存按钮与其他设置项一起锁死。
+  useEffect(() => () => onBusyChange?.(false), [onBusyChange]);
   // 安装要几分钟，界面按秒轮询进度；离开设置页不会中断安装，回来时状态还在。
   useEffect(() => {
     if (isDemo || !setup || !runtimeSetupBusy(setup.phase)) return;

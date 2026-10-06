@@ -261,6 +261,9 @@ if (settingsUiOnly) {
   // 深链落到低频区块时直接可见并选中，不需要任何展开动作。
   assert.equal(byCheck.get('settings-flat-tabs')?.deepLinkSelected, '对话记录');
   assert.equal(byCheck.get('settings-flat-tabs')?.sampleReachable, true);
+  // 回归：切到「执行与预算」后并发输入框仍可编辑。busy 泄漏会让整页锁死、保存按钮常灰，
+  // 而那次故障没有任何报错提示，只表现为「默认并发数改不动」。
+  assert.ok(byCheck.get('settings-concurrency-editable')?.value, `切换区块后并发输入框不可编辑：${output}`);
   console.log(`设置页标签检查通过：${output}`); process.exit(0);
 }
 if (flagIs('--model-library')) {

@@ -164,7 +164,9 @@ export default function App() {
   // 设置页每次进入都会重挂载，落点区块只能由这里记住；`section` 由调用方按需指定，未指定即回到默认区块。
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('appearance');
   const navigate = useCallback(async (next: Page, section?: SettingsSection) => {
-    if (transitionOwner.current) return;
+    // 正在切换素材时不能并发导航，但必须给出提示：原先静默 return，点侧栏任何入口都毫无反应，
+    // 用户只能理解为整个界面卡死。
+    if (transitionOwner.current) { notify('页面正在切换，请稍候。'); return; }
     const token = beginTransition(); setAssetsLoading(true);
     try { await guard.current?.(); clearTimeout(toastTimer.current); setToast(null); setPage(next); setSettingsSection(section ?? 'appearance'); history.replaceState(null, '', `#${next}`); }
     catch (e) { notify(`草稿未保存，已保留当前页面。${errorMessage(e)}`, true); }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { FolderOpen, HardDrive, RefreshCw, Save, Undo2 } from 'lucide-react';
 import type { StoragePathProbe } from '../../shared/storage';
 import type { TrainingRootStatus } from '../../shared/training';
@@ -22,27 +22,38 @@ export default function TrainingStorageSection({ onBusyChange }: { onBusyChange:
   const [probe, setProbe] = useState<StoragePathProbe | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [mounted, setMounted] = useState(true);
+  // 挂载标记放 ref：它只是「异步回调还能不能写 state」的判据，不该参与渲染。
+  // 早前用 state 承载时它会触发重渲染并连带重建依赖它的 load，让挂载 effect 跟着重跑。
+  const mountedRef = useRef(true);
+  // busy 必须无条件交还给设置页，不能只在卸载时交。
+  // 设置页曾把 settingsBusy 算进标签栏的 disabled：任一 busy 卡在 true，所有标签就都被禁用，
+  // 用户连切走都做不到，卸载清理永远不会执行——形成死锁，整页彻底失去响应。
+  // 现在卸载即复位，且挂载时也立刻上报一次 false，保证 busy 一定能落回。
   useEffect(() => { onBusyChange(busy); }, [busy, onBusyChange]);
-  useEffect(() => () => { setMounted(false); }, []);
+  useEffect(() => { onBusyChange(false); return () => { onBusyChange(false); }; }, [onBusyChange]);
 
   const load = useCallback(async () => {
     try {
       const next = await request<TrainingRootStatus>('training.root.status');
-      if (!mounted) return;
+      if (!mountedRef.current) return;
       setStatus(next);
       setDraft(next.savedPath ?? '');
-    } catch (e) { if (mounted) setError(errorMessage(e)); }
-  }, [mounted]);
+    } catch (e) { if (mountedRef.current) setError(errorMessage(e)); }
+  }, []);
 
-  useEffect(() => { if (!isDemo) void (async () => { setBusy(true); await load(); if (mounted) setBusy(false); })(); }, [load, mounted]);
+  // mountedRef 只用来决定「还能不能写 status/draft 这类业务状态」，
+  // 绝不能拿它拦 busy 的复位：load 期间若发生重新挂载，mountedRef 已是 false，
+  // 此时若跳过 setBusy(false)，busy 就永久停在 true，设置页随即整体锁死。
+  useEffect(() => { if (isDemo) return;
+    void (async () => { setBusy(true); await load(); setBusy(false); })(); }, [load]);
 
   async function run(action: () => Promise<void>) {
     if (busy) return;
     setBusy(true); setError('');
     try { await action(); await load(); }
     catch (e) { setError(errorMessage(e)); }
-    finally { if (mounted) setBusy(false); }
+    // finally 里无条件复位：busy 泄漏会连锁锁死整个设置页，不能挂在 mountedRef 判据上。
+    finally { setBusy(false); }
   }
   async function choose() {
     const paths = await (await getBridge()).chooseFiles({ kind: 'directory' });

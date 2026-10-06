@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { FolderOpen, RefreshCw, Trash2, Download, ShieldCheck } from 'lucide-react';
 import type { ChatHistoryStatus, ChatMutationResult, ChatTrashList } from '../../shared/chat';
 import { useApp } from './context';
@@ -18,26 +18,31 @@ export default function ChatHistorySection({ onBusyChange }: { onBusyChange: (bu
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
-  const [mounted, setMounted] = useState(true);
+  // 挂载标记用 ref 而非 state：用 state 会重建下面两个回调，并让挂载 effect 跟着重跑；
+  // 更关键的是它曾被用来拦 setBusy(false)，导致组件在 load 期间被替换时 busy 永远归不了位。
+  const mountedRef = useRef(true);
   useEffect(() => { onBusyChange(busy); }, [busy, onBusyChange]);
-  useEffect(() => () => { setMounted(false); }, []);
+  // 卸载时复位 busy：对话记录区块只在「对话记录」标签下挂载，切走后必须把 busy 交还给设置页，
+  // 否则 chatsBusy 常驻 true 会连带锁死保存按钮与其他设置项的输入。
+  useEffect(() => () => { mountedRef.current = false; onBusyChange(false); }, [onBusyChange]);
 
   const load = useCallback(async () => {
-    try { const next = await request<ChatHistoryStatus>('chat.history.status'); if (mounted) setStatus(next); }
-    catch (e) { if (mounted) setError(errorMessage(e)); }
-  }, [mounted]);
+    try { const next = await request<ChatHistoryStatus>('chat.history.status'); if (mountedRef.current) setStatus(next); }
+    catch (e) { if (mountedRef.current) setError(errorMessage(e)); }
+  }, []);
   const loadTrash = useCallback(async () => {
-    try { const next = await request<ChatTrashList>('chat.history.trash.list'); if (mounted) setTrash(next); }
-    catch (e) { if (mounted) setError(errorMessage(e)); }
-  }, [mounted]);
-  useEffect(() => { if (!isDemo) void (async () => { setBusy(true); await load(); await loadTrash(); if (mounted) setBusy(false); })(); }, [load, loadTrash, mounted]);
+    try { const next = await request<ChatTrashList>('chat.history.trash.list'); if (mountedRef.current) setTrash(next); }
+    catch (e) { if (mountedRef.current) setError(errorMessage(e)); }
+  }, []);
+  // 无条件复位 busy：mountedRef 只用于判断还能不能写业务状态，不该拦 busy 归位。
+  useEffect(() => { if (!isDemo) void (async () => { setBusy(true); await load(); await loadTrash(); setBusy(false); })(); }, [load, loadTrash]);
 
   async function run(action: () => Promise<void>, message?: string) {
     if (busy) return;
     setBusy(true); setError('');
     try { await action(); await load(); if (message) notify(message); }
     catch (e) { setError(errorMessage(e)); }
-    finally { if (mounted) setBusy(false); }
+    finally { setBusy(false); }
   }
   async function exportAll() {
     const target = await (await getBridge()).saveFile({ title: '导出全部对话记录', defaultPath: `对话记录-${new Date().toISOString().slice(0, 10)}.json`, extension: 'json' });
