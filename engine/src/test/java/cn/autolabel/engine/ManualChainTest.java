@@ -12,7 +12,7 @@ final class ManualChainTest {
     static JsonObject cmd(Engine e,String command,JsonObject p)throws Exception{return (JsonObject)e.command(command,p);}
     interface Action{void run()throws Exception;}
     static void rejects(String code,Action action)throws Exception{try{action.run();throw new AssertionError("Expected "+code);}catch(ApiError e){check(e.code.equals(code),"Expected "+code+" got "+e.code);}}
-    static void run(Path target)throws Exception{root=target;maintenance();labels();relocationAndOverlay();exportFormats();System.out.println("Manual 4A additions verified at "+root);}
+    static void run(Path target)throws Exception{root=target;maintenance();labels();classificationLabels();relocationAndOverlay();exportFormats();System.out.println("Manual 4A additions verified at "+root);}
     static void maintenance()throws Exception{
         try(Engine e=new Engine(root.resolve("maintenance"))){JsonObject p=EngineTest.project(e,"detect");String pid=Json.required(p,"id");
             e.store.tx(c->{for(int i=0;i<110;i++){String id="old-run-"+i,status=i==0?"paused":"completed";Store.update(c,"INSERT INTO runs(id,project_id,status,data) VALUES(?,?,?,?)",id,pid,status,Json.obj("id",id,"projectId",pid,"status",status,"total",0));}return null;});
@@ -40,6 +40,60 @@ final class ManualChainTest {
             JsonObject p=EngineTest.project(e,"detect");String pid=Json.required(p,"id"),aid=oneAsset(e,pid,source,"copy");JsonObject missing=cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelSpace","baseline","classMap",Json.obj("0","item"),"labelsDir",root.toString()));check(Json.integer(missing,"imported",1)==0,"missing label not negative");check(Json.required(e.projects.asset(aid),"status").equals("unlabeled"),"missing label stays unlabeled");
             Path empty=root.resolve("orientation-six.txt");Files.writeString(empty,"");JsonObject negative=cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelSpace","baseline","classMap",Json.obj("0","item"),"labelsDir",root.toString()));check(Json.integer(negative,"imported",0)==1&&Json.array(e.projects.asset(aid),"annotations").isEmpty(),"existing empty label is explicit negative");
             rejects("invalid_argument",()->cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",root.toString(),"classMap",Json.obj("0","item"))));
+        }
+    }
+    /** 分类标签导入：类别文件夹按名称/ID 映射，只写未标注素材，缺失/歧义/已标注分别报告且不污染原数据。 */
+    static void classificationLabels()throws Exception{
+        try(Engine e=new Engine(root.resolve("classify-labels-data"))){
+            JsonObject project=EngineTest.project(e,"classify");String pid=Json.required(project,"id");
+            cmd(e,"project.update",Json.obj("projectId",pid,"classes",Json.arr(Json.obj("id","cat","name","猫","color","#3b82f6"),Json.obj("id","dog","name","狗","color","#ef4444"))));
+            Path sources=root.resolve("classify-sources");Files.createDirectories(sources);
+            List<String> names=List.of("cls-a","cls-b","cls-c","cls-d","cls-e","cls-f");Map<String,String> ids=new LinkedHashMap<>();
+            for(int i=0;i<names.size();i++){Path file=sources.resolve(names.get(i)+".png");Media.sample(file,i);ids.put(names.get(i),oneAsset(e,pid,file,"copy"));}
+
+            Path directory=root.resolve("classify-labels");Files.createDirectories(directory.resolve("猫"));Files.createDirectories(directory.resolve("狗"));
+            Files.writeString(directory.resolve("猫").resolve("cls-a.jpg"),"cat-a");Files.writeString(directory.resolve("狗").resolve("cls-b.jpg"),"dog-b");
+            JsonObject positive=cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",directory.toString(),"assetIds",Json.arr(ids.get("cls-a"),ids.get("cls-b"))));
+            check(Json.integer(positive,"imported",0)==2&&Json.array(positive,"folders").size()==2,"classification folders imported: "+positive);
+            JsonObject assetA=e.projects.asset(ids.get("cls-a")),annotationA=Json.array(assetA,"annotations").get(0).getAsJsonObject();
+            check(Json.required(annotationA,"type").equals("classify")&&Json.required(annotationA,"classId").equals("cat")&&!annotationA.has("bbox"),"folder name mapped to class without geometry");
+            check(Json.required(assetA,"source").equals("imported_yolo")&&Json.required(assetA,"status").equals("candidate"),"classification import stays a candidate");
+            check(Json.required(Json.object(Json.object(assetA,"metadata"),"labelImport"),"importKind").equals("classification_folders"),"classification provenance recorded");
+            check(Json.required(Json.array(e.projects.asset(ids.get("cls-b")),"annotations").get(0).getAsJsonObject(),"classId").equals("dog"),"second class folder mapped");
+
+            Path byIdDir=root.resolve("classify-by-id");Files.createDirectories(byIdDir.resolve("dog"));Files.writeString(byIdDir.resolve("dog").resolve("cls-c.jpg"),"dog-c");
+            JsonObject byId=cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",byIdDir.toString(),"assetIds",Json.arr(ids.get("cls-c"))));
+            check(Json.integer(byId,"imported",0)==1&&Json.required(Json.array(e.projects.asset(ids.get("cls-c")),"annotations").get(0).getAsJsonObject(),"classId").equals("dog"),"folder named by class ID also maps");
+
+            Path nestedDir=root.resolve("classify-nested");Files.createDirectories(nestedDir.resolve("猫").resolve("batch"));Files.writeString(nestedDir.resolve("猫").resolve("batch").resolve("cls-f.jpg"),"f");
+            JsonObject nested=cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",nestedDir.toString(),"assetIds",Json.arr(ids.get("cls-f"))));
+            check(Json.integer(nested,"imported",0)==1&&Json.required(Json.array(e.projects.asset(ids.get("cls-f")),"annotations").get(0).getAsJsonObject(),"classId").equals("cat"),"nested split folder keeps top-level class");
+
+            JsonObject missing=cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",directory.toString(),"assetIds",Json.arr(ids.get("cls-d"))));
+            check(Json.integer(missing,"imported",0)==0&&Json.required(Json.array(missing,"errors").get(0).getAsJsonObject(),"code").equals("label_missing"),"missing sample reported, not treated as negative");
+            check(Json.required(e.projects.asset(ids.get("cls-d")),"status").equals("unlabeled"),"missing sample stays unlabeled");
+
+            Path ambiguousDir=root.resolve("classify-ambiguous");Files.createDirectories(ambiguousDir.resolve("猫"));Files.createDirectories(ambiguousDir.resolve("狗"));
+            Files.writeString(ambiguousDir.resolve("猫").resolve("cls-e.jpg"),"e1");Files.writeString(ambiguousDir.resolve("狗").resolve("cls-e.jpg"),"e2");
+            JsonObject ambiguous=cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",ambiguousDir.toString(),"assetIds",Json.arr(ids.get("cls-e"))));
+            check(Json.integer(ambiguous,"imported",0)==0&&Json.required(Json.array(ambiguous,"errors").get(0).getAsJsonObject(),"code").equals("classification_label_ambiguous"),"same stem in two classes rejected");
+            check(Json.required(e.projects.asset(ids.get("cls-e")),"status").equals("unlabeled"),"ambiguous sample stays unlabeled");
+
+            JsonObject existing=cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",directory.toString(),"assetIds",Json.arr(ids.get("cls-a"))));
+            check(Json.integer(existing,"imported",0)==0&&Json.required(Json.array(existing,"errors").get(0).getAsJsonObject(),"code").equals("annotation_existing"),"existing annotation protected");
+            check(Json.integer(e.projects.asset(ids.get("cls-a")),"version",0)==1,"existing annotation version unchanged");
+
+            JsonObject whole=cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",directory.toString()));
+            check(Json.integer(whole,"imported",0)==0&&Json.array(whole,"errors").size()==names.size(),"whole-project mode reports every asset without silent writes");
+
+            Path unmappedDir=root.resolve("classify-unmapped");Files.createDirectories(unmappedDir.resolve("兔子"));Files.writeString(unmappedDir.resolve("兔子").resolve("cls-f.jpg"),"f");
+            rejects("classification_folder_unmapped",()->cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",unmappedDir.toString())));
+            Path emptyDir=root.resolve("classify-empty");Files.createDirectories(emptyDir);
+            rejects("classification_dir_empty",()->cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",emptyDir.toString())));
+            rejects("classification_items_unsupported",()->cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",directory.toString(),
+                "items",Json.arr(Json.obj("assetId",ids.get("cls-d"),"labelPath",directory.resolve("猫").resolve("cls-a.jpg").toString())))));
+            rejects("asset_selection_empty",()->cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",directory.toString(),"assetIds",Json.arr())));
+            rejects("asset_project_mismatch",()->cmd(e,"annotation.importYolo",Json.obj("projectId",pid,"labelsDir",directory.toString(),"assetIds",Json.arr("not-in-project"))));
         }
     }
     static boolean close(JsonObject o,String key,double value){return Math.abs(Json.decimal(o,key,0)-value)<1e-8;}
