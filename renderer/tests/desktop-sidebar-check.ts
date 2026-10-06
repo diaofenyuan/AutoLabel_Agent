@@ -26,7 +26,22 @@ export async function checkDesktopSidebar(window: BrowserWindow, output: string)
   try {
     window.show();
     await waitFor(`!!document.querySelector('.onboarding-lanes')&&!document.querySelector('.connection-banner')`);
-    await js(`([...document.querySelectorAll('.onboarding-lane button')].find(node=>node.innerText.trim()==='载入示例项目')).click()`);
+    const initialSidebar = await js<{ title: string; actions: string[]; recentLabel: string; recentRows: number; projectButton: boolean }>(`(()=>({
+      title:document.querySelector('.sidebar-empty strong')?.innerText.trim()??'',
+      actions:[...document.querySelectorAll('.sidebar-empty button')].map(node=>node.innerText.trim()),
+      recentLabel:document.querySelector('.sidebar-recent .sidebar-group-title')?.innerText.trim()??'',
+      recentRows:document.querySelectorAll('.sidebar-recent .sidebar-session').length,
+      projectButton:!!document.querySelector('.sidebar-group-more[aria-label="新建项目"]')}))()`);
+    assert.equal(initialSidebar.title, '从一个项目开始', '空项目状态应给出明确的起步说明');
+    assert.deepEqual(initialSidebar.actions, ['新建项目', '试用示例项目'], '空状态提供新建和试用两条清晰入口');
+    assert.equal(initialSidebar.recentLabel, '最近对话', '最近对话分组在空项目时仍可见');
+    assert.equal(initialSidebar.projectButton, true, '项目列表标题仍提供常驻的新建入口');
+    await writeFile(output.replace(/\.json$/, '-empty.png'), (await window.webContents.capturePage()).toPNG());
+    await js(`document.querySelector('.sidebar-empty-primary').click()`);
+    await waitFor(`!!document.querySelector('dialog[open] input[placeholder="给项目起个名字"]')`);
+    await js(`([...document.querySelectorAll('dialog[open] button')].find(node=>node.innerText.trim()==='取消')).click()`);
+    await waitFor(`!document.querySelector('dialog[open]')`);
+    await js(`document.querySelector('.sidebar-empty-secondary').click()`);
     await waitFor(`!!document.querySelector('.chat-panel textarea')`);
     await waitFor(`!!document.querySelector('.sidebar-project .sidebar-row-title')`);
     // 选中行常驻显示操作按钮，本来就需要预留宽度；这里量的是平时占多数的未选中行，
@@ -80,25 +95,31 @@ export async function checkDesktopSidebar(window: BrowserWindow, output: string)
     let afterSwitch = { project: '', sessionSelected: false, panel: false };
     await js(`${projectRow('人工示例')}?.querySelector('.sidebar-row')?.click()`);
     await waitFor(`document.querySelector('.sidebar-project.selected .sidebar-row-title')?.innerText.trim().includes('人工示例')`);
-    await waitFor(`!!${projectRow('人工示例')}?.parentElement?.querySelector('.sidebar-sublist .sidebar-session')`);
-    // 先把当前项目切到另一个，再从它的分组外面点开示例项目的会话：这条会话必须把项目一起带过去。
+    await waitFor(`!!document.querySelector('.sidebar-recent .sidebar-session')`);
+    // 先切到另一个项目，再从「最近对话」打开示例项目的会话：上下文必须随会话一起切换。
     await js(`${projectRow('第二批')}?.querySelector('.sidebar-row')?.click()`);
     await waitFor(`document.querySelector('.sidebar-project.selected .sidebar-row-title')?.innerText.trim().includes('第二批')`);
     crossProject = await js<{ before: string; sessionTitle: string; clicked: boolean }>(`(()=>{
-      const group=${projectRow('人工示例')}?.parentElement;
-      const session=group?.querySelector('.sidebar-sublist .sidebar-session');
+      const session=[...document.querySelectorAll('.sidebar-recent .sidebar-session')].find(node=>node.querySelector('.sidebar-session-owner')?.innerText.trim().includes('人工示例'));
       const row=session?.querySelector('.sidebar-row');
       const before=document.querySelector('.sidebar-project.selected .sidebar-row-title')?.innerText.trim()??'';
       row?.click();
       return {before,sessionTitle:session?.querySelector('.sidebar-row-title')?.innerText.trim()??'',clicked:!!row};})()`);
     await waitFor(`document.querySelector('.sidebar-project.selected .sidebar-row-title')?.innerText.trim().includes('人工示例') && !!document.querySelector('.chat-panel')`);
     afterSwitch = await js<{ project: string; sessionSelected: boolean; panel: boolean }>(`(()=>{
-      const group=document.querySelector('.sidebar-project.selected')?.parentElement;
+      const session=document.querySelector('.sidebar-recent .sidebar-session.selected');
       return {project:document.querySelector('.sidebar-project.selected .sidebar-row-title')?.innerText.trim()??'',
-        sessionSelected:!!group?.querySelector('.sidebar-sublist .sidebar-session.selected'),panel:!!document.querySelector('.chat-panel')};})()`);
-    assert.ok(crossProject.clicked, `示例项目分组下应有可点开的会话行：${JSON.stringify(crossProject)}`);
-    assert.ok(afterSwitch.project.includes('人工示例'), `点开别的项目下的会话后，当前项目应切到会话所属项目，实际是「${afterSwitch.project}」`);
+        sessionSelected:!!session,panel:!!document.querySelector('.chat-panel')};})()`);
+    assert.ok(crossProject.clicked, `最近对话里应有属于示例项目的会话：${JSON.stringify(crossProject)}`);
+    assert.ok(afterSwitch.project.includes('人工示例'), `点开别的项目的历史会话后，当前项目应切到会话所属项目，实际是「${afterSwitch.project}」`);
     assert.ok(afterSwitch.sessionSelected && afterSwitch.panel, `被点开的会话应成为当前会话并显示对话页：${JSON.stringify(afterSwitch)}`);
+    const sessionPresentation = await js<{ recent: number; ownerLabels: number; detachedRows: number }>(`(()=>{
+      const rows=[...document.querySelectorAll('.sidebar-recent .sidebar-session')];
+      return {recent:rows.length,ownerLabels:rows.filter(node=>!!node.querySelector('.sidebar-session-owner')?.innerText.trim()).length,
+        detachedRows:rows.filter(node=>!node.closest('.sidebar-project-group')).length};})()`);
+    assert.ok(sessionPresentation.recent > 0, '有历史会话时应在「最近对话」中列出');
+    assert.equal(sessionPresentation.ownerLabels, sessionPresentation.recent, '最近对话应为每条会话显示所属项目');
+    assert.equal(sessionPresentation.detachedRows, sessionPresentation.recent, '会话应独立于项目列表呈现，避免重复显示');
 
     // 侧栏搜索只找项目/会话；顶栏 Ctrl+K 快速跳转只找页面，避免两个入口打开同一个页面列表。
     await js(`document.querySelector('.sidebar-top [aria-label="搜索项目和会话"]').click()`);
@@ -133,6 +154,7 @@ export async function checkDesktopSidebar(window: BrowserWindow, output: string)
       await js(`document.querySelector('.breadcrumb [aria-label="展开侧栏"]').click()`);
       await waitFor(`document.querySelector('#app-sidebar')?.getAttribute('aria-modal')==='true' && document.querySelector('.app-main')?.hasAttribute('inert')`);
       await waitFor(`document.querySelector('#app-sidebar')?.contains(document.activeElement)`);
+      await writeFile(output.replace(/\.json$/, '-mobile.png'), (await window.webContents.capturePage()).toPNG());
       const opened = await js<{ role: string | null; modal: string | null; mainInert: boolean; closeButton: boolean; focusEntered: boolean }>(`(()=>{
         const sidebar=document.querySelector('#app-sidebar');
         return {role:sidebar?.getAttribute('role')??null,modal:sidebar?.getAttribute('aria-modal')??null,
@@ -166,7 +188,7 @@ export async function checkDesktopSidebar(window: BrowserWindow, output: string)
       { check: 'sidebar-name-readable', ...resting, actionButtons: padding.buttons, padding },
       { check: 'project-actions-in-more-menu', items: projectMenuItems },
       { check: 'sidebar-search-and-page-jump-are-distinct', projectSearch, jumpSearch },
-      { check: 'session-opens-its-own-project', ...crossProject, ...afterSwitch },
+      { check: 'session-opens-its-own-project', ...crossProject, ...afterSwitch, ...sessionPresentation },
       { check: 'mobile-drawer-modal-semantics', ...drawerModal! },
     ], passed: true }));
   } catch (error) {
