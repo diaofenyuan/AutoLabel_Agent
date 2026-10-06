@@ -141,7 +141,20 @@ export interface ScreeningCreateRequest {
   parameters: ScreeningParameters;
 }
 
-export type MediaJobKind = 'video_extract' | 'image_screening';
+/**
+ * 媒体任务类型：抽帧、图像筛选，以及大批量导入转成的后台任务。
+ *
+ * 三种任务同库同列表，读列表的一方（桌面校验、助手工具、界面）必须认识全部取值，
+ * 否则一个批量导入任务就能让整页读取失败或显示成别的类型。这里保持唯一真源。
+ */
+export const MEDIA_JOB_KINDS = ['video_extract', 'image_screening', 'asset_import'] as const;
+export type MediaJobKind = (typeof MEDIA_JOB_KINDS)[number];
+
+/** 运行期收窄：引擎返回的类型未知，读列表/详情前必须显式判定。 */
+export function isMediaJobKind(value: unknown): value is MediaJobKind {
+  return typeof value === 'string' && (MEDIA_JOB_KINDS as readonly string[]).includes(value);
+}
+
 export type MediaJobStatus = 'queued' | 'running' | 'cancelling' | 'cancelled'
   | 'completed' | 'failed' | 'interrupted';
 export type MediaJobStage = 'queued' | 'inspecting' | 'extracting' | 'validating'
@@ -155,6 +168,31 @@ export interface MediaProgress {
   decodedFrames?: number;
   sourceTimeSeconds?: number;
   outputBytes?: number;
+  /** 后台批量导入逐个文件统计：跳过（已在项目里）与失败（坏图、读不了）分开记。 */
+  skipped?: number;
+  errors?: number;
+}
+
+/** 后台批量导入任务的参数：方式与总数；具体文件清单由引擎保管，不进任务行也不外露。 */
+export interface AssetImportParameters {
+  mode: 'copy' | 'reference';
+  total: number;
+}
+
+/**
+ * 后台批量导入的结果摘要。
+ *
+ * 与抽帧不同，这类任务边导边分批入库，没有「产物封存」这一步：completed 即表示这批已处理完，
+ * 真实结果看 imported/skipped/errorsTotal。失败/取消时会带 partial 标记，说明已入库的部分保留。
+ */
+export interface AssetImportSummary {
+  imported: number;
+  skipped: number;
+  errorsTotal: number;
+  total: number;
+  /** 完整错误清单在任务目录中的文件名；仅当错误超过 50 条时才有。 */
+  errorsFile?: string;
+  partial?: boolean;
 }
 
 interface MediaJobState {
@@ -182,6 +220,7 @@ interface MediaJobState {
 export type MediaJob = MediaJobState & (
   | { kind: 'video_extract'; parameters: VideoExtractionParameters }
   | { kind: 'image_screening'; parameters: ScreeningParameters }
+  | { kind: 'asset_import'; parameters: AssetImportParameters; summary?: AssetImportSummary }
 );
 
 export interface MediaJobListRequest {

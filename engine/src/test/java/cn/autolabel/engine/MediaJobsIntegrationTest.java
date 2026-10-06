@@ -77,6 +77,16 @@ public final class MediaJobsIntegrationTest {
             check(Json.array(summary,"errors").size()==1&&Json.required(Json.array(summary,"errors").get(0).getAsJsonObject(),"name").equals("corrupt.jpg"),"corrupt jpg reported once with its name");
             check(Json.integer(e.projects.get(pid),"assetCount",-1)==1000,"assets committed incrementally without dirty rows");
             check(Json.integer(Json.object(done,"progress"),"completed",-1)==1001,"progress accounted for every file");
+            // 跨层契约：桌面校验、助手 schema、界面展示都把 asset_import 当成一等媒体任务读取。
+            // 引擎必须给出可辨识的 kind、参数与逐文件结果，否则列表会把它显示成别的类型或直接读取失败。
+            check(Json.required(done,"kind").equals("asset_import"),"bulk import job kind is asset_import, got "+Json.str(done,"kind",""));
+            JsonObject importParameters=Json.object(done,"parameters");check(Json.str(importParameters,"mode","").equals("copy")&&Json.integer(importParameters,"total",-1)==1001,"asset import parameters carry mode and total");
+            check(Json.integer(summary,"errorsTotal",-1)==1&&Json.integer(summary,"total",-1)==1001,"summary totals the whole batch with a separate error count");
+            JsonObject byKind=cmd(e,"media.job.list",Json.obj("projectId",pid,"kind","asset_import"));check(Json.integer(byKind,"total",-1)==1&&Json.required(Json.array(byKind,"items").get(0).getAsJsonObject(),"kind").equals("asset_import"),"list filters asset_import jobs, got "+byKind);
+            check(Json.integer(cmd(e,"media.job.list",Json.obj("projectId",pid,"kind","video_extract")),"total",-1)==0,"kind filter does not mix other media jobs");
+            // 桌面重试先解析任务类型：asset_import 不能带本地视频路径，否则会被误当成抽帧去复核视频授权。
+            JsonObject resolved=cmd(e,"media.job.resolve",Json.obj("jobId",jobId));check(Json.required(resolved,"kind").equals("asset_import")&&!resolved.has("sourcePath"),"asset import retry descriptor has kind and no private source, got "+resolved);
+            check(!byKind.toString().contains(source.toString())&&!resolved.toString().contains(source.toString()),"asset import read paths do not leak the local file list");
             check(elapsed<180,"1000-image import well under the old 120s command timeout budget, took "+elapsed+"s");
             System.out.println("bulk import: 1000 images + 1 corrupt in "+elapsed+"s (submit "+submitMs+"ms)");
         }

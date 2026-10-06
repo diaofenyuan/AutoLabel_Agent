@@ -15,6 +15,15 @@ function video(id = 'video-job'): RecordValue {
     summary: { frameCount: 2, importedAssets: 0, manifestPath: 'D:/private/frames.jsonl', frames: ['内部原文'] },
     error: { code: 'previous_issue', message: 'D:/private/source.mp4: 内部原文' }, sourcePath: 'D:/private/source.mp4' };
 }
+/** 后台批量导入任务（asset_import）：与抽帧/筛选同库同列表，必须能被助手读成同一种契约形状。 */
+function assetImport(id = 'import-job'): RecordValue {
+  return { id, projectId: 'project', kind: 'asset_import', status: 'completed', stage: 'done', sequence: 4,
+    createdAt: '2026-09-10T10:00:00Z', updatedAt: '2026-09-10T10:00:02Z', completedAt: '2026-09-10T10:00:02Z',
+    canCancel: false, canRetry: false, artifactCommitted: false, assetsCommitted: false, canImport: false,
+    progress: { phase: 'done', completed: 1001, total: 1001, skipped: 0, errors: 1, path: 'D:/private/progress' },
+    parameters: { mode: 'copy', total: 1001, sourcePath: 'D:/private/source' },
+    summary: { imported: 1000, skipped: 0, errorsTotal: 1, total: 1001, errors: [{ name: '坏图.jpg', path: 'D:/private', message: '内部原文' }], errorsFile: 'import-errors.json' } };
+}
 function frame(index: number): RecordValue {
   return { frameId: `frame-${String(index).padStart(8, '0')}`, sourceVideoId: 'source-video', sourcePts: String(-90071992547409910n + BigInt(index)),
     originPts: '-90071992547409910', relativePts: String(index), sourcePresentationIndex: index, timeBase: { numerator: 1, denominator: 30 },
@@ -42,7 +51,7 @@ function fixture(context: AgentContext = {}) {
   const engine: EngineClient = { async request<T>(command: string, payload: RecordValue = {}) {
     calls.push({ command, payload: structuredClone(payload) });
     if (state.failure === command) throw Object.assign(new Error('内部命令缺失'), { code: 'unknown_command' });
-    if (command === 'media.job.list') return { total: state.jobs.length, items: state.jobs.slice(payload.offset as number, (payload.offset as number) + (payload.limit as number)) } as T;
+    if (command === 'media.job.list') { const all = state.jobs.filter(item => payload.kind == null || item.kind === payload.kind); return { total: all.length, items: all.slice(payload.offset as number, (payload.offset as number) + (payload.limit as number)) } as T; }
     if (command === 'media.job.get') return structuredClone(payload.jobId === 'screening-job' ? state.screening : state.jobs[0]) as T;
     if (command === 'media.video.frames') return { total: state.frames.length, items: state.pageEmpty ? [] : state.frames.slice(payload.offset as number, (payload.offset as number) + (payload.limit as number)) } as T;
     if (command === 'media.screening.result') return { jobId: state.wrongPage ? 'other-job' : payload.jobId, section: payload.section, offset: payload.offset,
@@ -75,6 +84,27 @@ test('媒体列表真实分页和产物/入库标记分离，路径与错误原�
   for (const args of [{ limit: 101 }, { offset: -1 }, { offset: 0.5 }, { kind: 'video' }, { projectId: 'outside' }, { sourcePath: 'D:/private/video' }])
     await assert.rejects(tool('list_media_jobs').execute(args, f.environment));
   f.state.jobs[1] = f.state.jobs[0]; await assert.rejects(tool('list_media_jobs').execute({}, f.environment), /分页重复/);
+});
+
+test('媒体列表混入后台批量导入任务时不崩，且按类型读取并投影真实导入结果', async () => {
+  const f = fixture(); f.state.jobs = [assetImport('import-job'), video('video-job')];
+  // 不传 kind：引擎会把三种任务一起返回，助手必须能读成同一种契约形状（原先遇 asset_import 直接判为响应不完整而整页失败）。
+  const all = await tool('list_media_jobs').execute({}, f.environment) as RecordValue;
+  assert.deepEqual((all.items as RecordValue[]).map(item => item.kind), ['asset_import', 'video_extract']);
+  const imported = await tool('list_media_jobs').execute({ kind: 'asset_import' }, f.environment) as RecordValue;
+  const row = (imported.items as RecordValue[])[0];
+  assert.equal(imported.total, 1); assert.equal(row.kind, 'asset_import'); assert.equal(row.status, 'completed'); assert.equal(row.stage, 'done');
+  assert.deepEqual(row.parameters, { mode: 'copy', total: 1001 });
+  assert.deepEqual(row.progress, { phase: 'done', completed: 1001, total: 1001, skipped: 0, errors: 1 });
+  assert.deepEqual(row.summary, { imported: 1000, skipped: 0, errorsTotal: 1, total: 1001, errorsFile: 'import-errors.json' });
+  // 逐文件错误与来源路径不进摘要：助手只拿得到计数与错误清单文件名。
+  assert.equal((row.summary as RecordValue).errors, undefined);
+  noPrivate([all, imported]);
+  // 详情同样按类型投影，且不把批量导入当成视频任务。
+  f.state.jobs = [assetImport('import-job')];
+  const detail = await tool('get_media_job').execute({ jobId: 'import-job' }, f.environment) as RecordValue;
+  assert.equal(detail.kind, 'asset_import'); assert.equal((detail.summary as RecordValue).imported, 1000); noPrivate(detail);
+  await assert.rejects(tool('get_video_frames').execute({ jobId: 'import-job' }, f.environment), { code: 'MEDIA_JOB_KIND_INVALID' });
 });
 
 test('媒体任务核项目和真实身份，旧引擎或取消明确失败，不回退为成功', async () => {

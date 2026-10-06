@@ -24,6 +24,7 @@ import { PathGrants, authorizeCommandPaths, mediaTargetFromUrl, isTrustedUrl, no
 import { addProjectClasses } from './project-classes';
 import { DesktopError, validateCommand, assertAgentCommand, fileSelectionSchema, saveFileSchema, windowActionSchema, transcodeSourceSchema, transcodeOutputSchema, directoryScanSchema } from './validation';
 import { DIRECTORY_SCAN_MAX_DEPTH, DIRECTORY_SCAN_MAX_FILES, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, isImagePath, isVideoPath } from '../shared/mediaFormats';
+import { isMediaJobKind } from '../shared/media';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'autolabel-app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
@@ -614,7 +615,8 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
   }
   if (validated.command === 'media.job.retry') {
     const job = await requestEngine.request('media.job.resolve', { jobId: payload.jobId }) as Record<string, unknown>;
-    if (job.jobId !== payload.jobId || !['video_extract', 'image_screening'].includes(String(job.kind))) throw new DesktopError('MEDIA_JOB_MISMATCH', '媒体任务解析结果与请求不一致');
+    // 三种媒体任务都能重跑：抽帧重出产物、筛选重算、后台批量导入按原清单续传。只有抽帧带本地视频路径，需要复核视频授权。
+    if (job.jobId !== payload.jobId || !isMediaJobKind(job.kind)) throw new DesktopError('MEDIA_JOB_MISMATCH', '媒体任务解析结果与请求不一致');
     if (job.kind === 'video_extract') await grants.require(job.sourcePath, ['video']);
   }
   if (['flow.resume', 'flow.retry', 'flow.rerun'].includes(validated.command) && !payload.definition) {
