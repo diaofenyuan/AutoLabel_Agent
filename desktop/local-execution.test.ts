@@ -160,6 +160,40 @@ test('授权键保留真实路径：重启后完整回读，大小写不同的�
   } finally { await f.close(); }
 });
 
+test('模型授权键保存真实路径身份：重建后仍能按真实路径回传引擎', async () => {
+  const f = await fixture();
+  try {
+    const selected = path.join(f.root, 'Case.pt'); await writeFile(selected, 'weights');
+    const real = await realpath(selected);
+    await f.grants.add(selected, 'model');
+    await f.local.authorizeSelectedModel('current', selected, () => undefined, f.engine);
+    // 键是路径身份（Windows 归一为小写），不是「无条件小写」臆造出的字符串：
+    // 后者在大小写敏感卷上取不到文件，重启后授权会被静默丢弃。
+    const scopes = f.preferences.value.localModelGrants as Record<string, Record<string, string>>;
+    assert.deepEqual(Object.keys(scopes.current), [process.platform === 'win32' ? real.toLowerCase() : real]);
+    const reloaded = new DesktopPreferences(f.preferences.filename); await reloaded.load();
+    const restarted = new LocalExecutionSettings(reloaded, new PathGrants());
+    const modelHash = createHash('sha256').update('weights').digest('hex');
+    assert.deepEqual(await restarted.modelAuthorizations('current'), [{ path: real, modelHash }]);
+  } finally { await f.close(); }
+});
+
+test('大小写敏感卷上仅大小写不同的两个模型文件互不授权', { skip: process.platform === 'win32' }, async () => {
+  const f = await fixture();
+  try {
+    const lower = path.join(f.root, 'model.pt'), upper = path.join(f.root, 'MODEL.pt');
+    await writeFile(lower, 'lower'); await writeFile(upper, 'upper');
+    // 文件授权按真实身份判定：对 lower 的授权不能顺带放行另一个真实文件 upper。
+    await f.grants.add(lower, 'model');
+    await assert.rejects(f.grants.require(upper, ['model']), /尚未通过/);
+    await f.local.authorizeSelectedModel('current', lower, () => undefined);
+    const lowerHash = createHash('sha256').update('lower').digest('hex');
+    const restarted = new LocalExecutionSettings(f.preferences, new PathGrants());
+    assert.deepEqual(await restarted.modelAuthorizations('current'), [{ path: lower, modelHash: lowerHash }]);
+    await assert.rejects(restarted.requireModel('current', upper, createHash('sha256').update('upper').digest('hex')), /重新选择/);
+  } finally { await f.close(); }
+});
+
 test('固定输入媒体只读取受管 PNG，拒绝错绑、查询、外部文件和目录连接', async () => {
   const f = await fixture();
   try {
