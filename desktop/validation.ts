@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { providerCapabilities } from '../shared/protocol';
+import { VIDEO_SCENE_MIN_INTERVAL_RANGE, VIDEO_SCENE_THRESHOLD_RANGE } from '../shared/media';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 /**
@@ -83,7 +84,10 @@ const videoParameters = z.union([
   z.strictObject({ ...videoOptions, mode: z.literal('every_n'), everyNFrames: z.number().int().min(1).max(1000000) }),
   z.strictObject({ ...videoOptions, mode: z.literal('fps'), targetFps: finite.min(.001).max(240) }),
   // 场景变化抽帧：按取样间隔取候选帧，与上一张保留帧的差异达到阈值才留；两者都可缺省（默认 0.15 / 1 秒，与引擎同源）。
-  z.strictObject({ ...videoOptions, mode: z.literal('scene'), sceneThreshold: finite.min(.05).max(1).optional(), minIntervalSeconds: finite.min(.001).max(600).optional() }),
+  // 取值范围取自 shared/media：助手工具用的是同一份常量，避免两层各自维护范围后出现一边放行一边拒绝。
+  z.strictObject({ ...videoOptions, mode: z.literal('scene'),
+    sceneThreshold: finite.min(VIDEO_SCENE_THRESHOLD_RANGE.min).max(VIDEO_SCENE_THRESHOLD_RANGE.max).optional(),
+    minIntervalSeconds: finite.min(VIDEO_SCENE_MIN_INTERVAL_RANGE.min).max(VIDEO_SCENE_MIN_INTERVAL_RANGE.max).optional() }),
 ]);
 const screening = z.strictObject({ deduplicate: z.boolean().optional(), nearEnabled: z.boolean().optional(), blurEnabled: z.boolean().optional(),
   nearMaxDistance: z.number().int().min(0).max(64).optional(), aspectRatioTolerance: finite.min(0).max(1).optional(),

@@ -1,4 +1,4 @@
-import type { MediaJob, ScreeningParameters, ScreeningSection } from '../shared/media.ts';
+import { VIDEO_SCENE_MIN_INTERVAL_RANGE, VIDEO_SCENE_THRESHOLD_RANGE, type MediaJob, type ScreeningParameters, type ScreeningSection } from '../shared/media.ts';
 import type { ToolDefinition, ToolEnvironment } from './tools.ts';
 import { AgentError, fields, id, ids, integer, object, text } from './validation.ts';
 
@@ -120,12 +120,15 @@ function jobSummary(value: MediaJob) {
     'canCancel', 'canRetry', 'artifactCommitted', 'assetsCommitted', 'canImport', 'originalJobId', 'sourceVideoId', 'sourceName']);
   result.progress = pick(progress, ['phase', 'completed', 'total', 'completedFrames', 'decodedFrames', 'sourceTimeSeconds', 'outputBytes']);
   // ready 只描述产物阶段；素材是否入库始终读取独立的提交标记。
-  if (raw.summary != null) result.summary = pick(object(raw.summary), ['status', 'frameCount', 'importedAssets', 'inputCount', 'distinctContentCount', 'completedFrames', 'decodedFrames', 'outputBytes']);
+  // 场景抽帧的阈值/取样间隔与去重帧数也在这里回传：助手读任务状态时必须能看到真实抽样口径，
+  // 否则「场景变化抽帧」在助手侧只剩一个 mode 字符串，无法回答「为什么只留了这么几帧」。
+  if (raw.summary != null) result.summary = pick(object(raw.summary), ['status', 'frameCount', 'importedAssets', 'inputCount', 'distinctContentCount', 'completedFrames', 'decodedFrames', 'outputBytes',
+    'sceneThreshold', 'minIntervalSeconds', 'deduplicatedFrames']);
   if (raw.error != null) result.error = pick(object(raw.error), ['code']);
   if (value.kind === 'image_screening') result.parameters = screeningParameters(value.parameters);
   else {
     const parameters = object(raw.parameters);
-    result.parameters = { ...pick(parameters, ['mode', 'intervalSeconds', 'everyNFrames', 'targetFps', 'format', 'jpegQuality', 'streamIndex', 'maxFrames', 'maxOutputBytes', 'timeoutMs']),
+    result.parameters = { ...pick(parameters, ['mode', 'intervalSeconds', 'everyNFrames', 'targetFps', 'sceneThreshold', 'minIntervalSeconds', 'format', 'jpegQuality', 'streamIndex', 'maxFrames', 'maxOutputBytes', 'timeoutMs']),
       ...(parameters.outputSize == null ? {} : { outputSize: pick(object(parameters.outputSize), ['width', 'height', 'fit']) }),
       ...(Array.isArray(parameters.ranges) ? { rangeCount: parameters.ranges.length, ranges: parameters.ranges.slice(0, 32).map(value => pick(object(value), ['start', 'end'])) } : {}) };
   }
@@ -214,23 +217,34 @@ export const MEDIA_TOOL_DEFINITIONS: ToolDefinition[] = [
       if (new Set(records.map(value => value.id)).size !== records.length || args.kind != null && records.some(value => value.kind !== args.kind)) invalid('媒体任务分页重复或类型不匹配');
       return { ...pagination(result.total, offset, limit, records.length), items: records.map(jobSummary) };
     } },
-  { name: 'create_video_job', description: '为一个已授权的视频提交抽帧任务，返回真实 job，需后续查询帧结果。sourcePath 必须是用户授权过的本地视频路径：可以是用户通过「选择视频抽帧」或拖拽选择的，也可以是用户消息「随消息添加素材」括注里列出的视频路径（那是用户随消息显式添加的素材）。助手不能自行指定任意本地文件，也不能凭已读到的任务信息反推路径；用户既没拖视频、括注里也没有视频路径时应提示其先选择，不要把路径猜测出来提交。',
-    parameters: schema({ sourcePath: { type: 'string', minLength: 1, maxLength: 32767 }, mode: { type: 'string', enum: ['interval', 'every_n', 'fps'] },
+  { name: 'create_video_job', description: '为一个已授权的视频提交抽帧任务，返回真实 job，需后续查询帧结果。sourcePath 必须是用户授权过的本地视频路径：可以是用户通过「选择视频抽帧」或拖拽选择的，也可以是用户消息「随消息添加素材」括注里列出的视频路径（那是用户随消息显式添加的素材）。助手不能自行指定任意本地文件，也不能凭已读到的任务信息反推路径；用户既没拖视频、括注里也没有视频路径时应提示其先选择，不要把路径猜测出来提交。默认推荐 mode=scene（场景变化采样，界面同款默认）：按 minIntervalSeconds 取候选帧、与上一张保留帧的差异达到 sceneThreshold 才留，帧数比等间隔采样更少；两个参数可省略，省略即用引擎默认 0.15 / 1 秒。',
+    parameters: schema({ sourcePath: { type: 'string', minLength: 1, maxLength: 32767 }, mode: { type: 'string', enum: ['interval', 'every_n', 'fps', 'scene'] },
       intervalSeconds: { type: ['number', 'null'], minimum: 0.001, maximum: 604800 }, everyNFrames: int(1, 1000000),
       targetFps: { type: ['number', 'null'], minimum: 0.001, maximum: 240 },
+      sceneThreshold: { type: ['number', 'null'], minimum: VIDEO_SCENE_THRESHOLD_RANGE.min, maximum: VIDEO_SCENE_THRESHOLD_RANGE.max },
+      minIntervalSeconds: { type: ['number', 'null'], minimum: VIDEO_SCENE_MIN_INTERVAL_RANGE.min, maximum: VIDEO_SCENE_MIN_INTERVAL_RANGE.max },
       ranges: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'object', properties: { start: { type: 'number', minimum: 0 }, end: { type: 'number', minimum: 0 } },
         required: ['start', 'end'], additionalProperties: false } },
       streamIndex: int(0, 65535), format: { type: ['string', 'null'], enum: ['png', 'jpg', null] }, jpegQuality: int(2, 31),
       maxFrames: int(1, 10000), timeoutMs: int(1, 86400000) }), mutation: true,
     async execute(args, env) {
-      fields(args, ['sourcePath', 'mode', 'intervalSeconds', 'everyNFrames', 'targetFps', 'ranges', 'streamIndex', 'format', 'jpegQuality', 'maxFrames', 'timeoutMs']);
+      fields(args, ['sourcePath', 'mode', 'intervalSeconds', 'everyNFrames', 'targetFps', 'sceneThreshold', 'minIntervalSeconds', 'ranges', 'streamIndex', 'format', 'jpegQuality', 'maxFrames', 'timeoutMs']);
       const sourcePath = text(args.sourcePath, '视频路径', 32767);
-      // 抽帧模式三选一，与桌面校验保持一致：混用会被引擎拒绝，这里提前给出可读原因。
-      const mode = args.mode as string, parameters: Record<string, unknown> = { mode };
+      // 抽帧模式与其专属参数必须一一对应：引擎按「不同抽样方式的专属参数不能混用」硬拒，桌面校验用 strictObject
+      // 联合体同样拒绝，这里必须提前拦下，不能把模型多给的字段静默丢弃后提交一个并非它本意的抽样方式。
+      const mode = args.mode as string;
+      if (!['interval', 'every_n', 'fps', 'scene'].includes(mode)) throw new AgentError('INVALID_ARGUMENT', '抽帧模式只支持 interval、every_n、fps 或 scene');
+      const parameters: Record<string, unknown> = { mode };
+      const exclusive: Record<string, string> = { intervalSeconds: 'interval', everyNFrames: 'every_n', targetFps: 'fps', sceneThreshold: 'scene', minIntervalSeconds: 'scene' };
+      for (const [key, owner] of Object.entries(exclusive)) if (args[key] != null && mode !== owner)
+        throw new AgentError('INVALID_ARGUMENT', `${key} 只属于 ${owner} 抽帧方式，不能与其他抽帧方式混用`);
       if (mode === 'interval') parameters.intervalSeconds = finite(args.intervalSeconds, '抽帧间隔', 0.001, 604800);
       else if (mode === 'every_n') parameters.everyNFrames = integer(args.everyNFrames, '抽帧帧间隔', 1, 1000000);
       else if (mode === 'fps') parameters.targetFps = finite(args.targetFps, '目标帧率', 0.001, 240);
-      else throw new AgentError('INVALID_ARGUMENT', '抽帧模式只支持 interval、every_n 或 fps');
+      else {
+        if (args.sceneThreshold != null) parameters.sceneThreshold = finite(args.sceneThreshold, '场景差异阈值', VIDEO_SCENE_THRESHOLD_RANGE.min, VIDEO_SCENE_THRESHOLD_RANGE.max);
+        if (args.minIntervalSeconds != null) parameters.minIntervalSeconds = finite(args.minIntervalSeconds, '场景取样间隔', VIDEO_SCENE_MIN_INTERVAL_RANGE.min, VIDEO_SCENE_MIN_INTERVAL_RANGE.max);
+      }
       if (args.ranges != null) parameters.ranges = videoRanges(args.ranges);
       for (const [key, maximum] of [['streamIndex', 65535], ['jpegQuality', 31], ['maxFrames', 10000], ['timeoutMs', 86400000]] as const)
         if (args[key] != null) parameters[key] = integer(args[key], key, key === 'jpegQuality' ? 2 : 1, maximum);

@@ -33,6 +33,14 @@ export const VIDEO_DENSITY_LABELS: Record<VideoDensity, string> = { scene: '场�
 /** 场景变化档的推荐值：候选帧与上一张保留帧的灰度差异（0～1）达到阈值才留下；minIntervalSeconds 是取样间隔，也保证保留帧的最小间隔（首帧必留）。 */
 export const VIDEO_SCENE_THRESHOLD = 0.15;
 export const VIDEO_SCENE_MIN_INTERVAL_SECONDS = 1;
+/**
+ * 场景抽帧两个参数的允许范围。
+ *
+ * 桌面校验与助手工具共用同一份口径：引擎 VideoFrames/MediaJobs 里这两个范围是硬约束，
+ * 若 TS 两层各写一份字面量，任何一边改了范围就会出现「界面能提交、助手被拒」或反向的假失败。
+ */
+export const VIDEO_SCENE_THRESHOLD_RANGE = { min: 0.05, max: 1 } as const;
+export const VIDEO_SCENE_MIN_INTERVAL_RANGE = { min: 0.001, max: 600 } as const;
 
 /** 引擎单次抽帧上限，与 VideoFrames.java 的 maxFrames 默认值一致；超过就整单失败，所以在 UI 侧提前拦截。 */
 export const VIDEO_MAX_FRAMES = 10000;
