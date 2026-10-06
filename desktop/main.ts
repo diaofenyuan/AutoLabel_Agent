@@ -21,6 +21,7 @@ import { ROOT_SUBDIRECTORY, StoragePathSettings, resolveStoragePaths, storagePat
 import { ChatStore } from './chat-store';
 import type { StoragePathsState } from '../shared/storage';
 import { PathGrants, authorizeCommandPaths, mediaTargetFromUrl, isTrustedUrl, normalizeMedia, publicInputResult, redact } from './security';
+import { createGrantStore, grantStorePath } from './grant-store';
 import { addProjectClasses } from './project-classes';
 import { DesktopError, validateCommand, assertAgentCommand, fileSelectionSchema, saveFileSchema, windowActionSchema, transcodeSourceSchema, transcodeOutputSchema, directoryScanSchema } from './validation';
 import { DIRECTORY_SCAN_MAX_DEPTH, DIRECTORY_SCAN_MAX_FILES, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, isImagePath, isVideoPath } from '../shared/mediaFormats';
@@ -58,12 +59,21 @@ const storagePathSettings = new StoragePathSettings(preferenceStore, () => insta
 let storagePaths: ResolvedPaths | undefined;
 // 对话记录目录取自解析后的三类路径，改路径后无需重启即可生效。
 const chatStore = new ChatStore(() => storagePaths?.entries.find(entry => entry.kind === 'chats')?.path ?? '');
-const iconPath = path.join(root, 'build', 'icon.png');
+/**
+ * 窗口图标取已入版本库的 packaging/icon.png，不取 build/icon.png。
+ *
+ * build/ 是 electron-builder 的输出目录，开发态（npm run dev）根本不产出该文件，
+ * 图标加载失败会让 BrowserWindow 的渲染进程直接崩溃，表现为「启动 4 秒后静默退出、
+ * 没有任何报错」。packaging/ 是随仓库走的源文件，开发与打包两种形态都稳定存在。
+ */
+const iconPath = path.join(root, 'packaging', 'icon.png');
 /** 视频候选清单的上限：界面上是一份让用户逐个点「抽帧」的列表，不需要把上万条路径送回渲染层。 */
 const MEDIA_LIST_LIMIT = 500;
 /** 单次拖入的文件数上限：超量时把「上限」和「本次数量」一起回给界面，而不是抛错误码。 */
 const DROP_FILE_LIMIT = 500;
-const grants = new PathGrants();
+// 授权带持久化存储：用户亲手选过的文件在重启后依然有效，抽帧失败重试不必重新选择。
+// 只记文件级授权，目录授权仍限本次会话，见 PathGrants 构造函数注释。
+const grants = new PathGrants(createGrantStore(grantStorePath(userData)));
 const localExecution = new LocalExecutionSettings(preferenceStore, grants);
 const mediaExecution = new MediaExecutionSettings(preferenceStore, grants, path.join(app.isPackaged ? process.resourcesPath : path.join(root, 'build'), 'media-tools'));
 // 模型库：内置权重随安装包（resources/models），下载的权重落在 <存储根>/models。
@@ -963,7 +973,12 @@ async function createWindow(): Promise<void> {
   window.webContents.on('will-navigate', (event, url) => { if (!isTrustedUrl(url, devOrigin)) event.preventDefault(); });
   window.webContents.on('will-redirect', (event, url) => { if (!isTrustedUrl(url, devOrigin)) event.preventDefault(); });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
-  window.webContents.on('render-process-gone', (_event, details) => { engine.log(`界面进程退出：${details.reason}`); });
+  // 渲染进程崩溃是本机沙箱冲突的另一个表现（GPU 修好后界面仍崩），必须留痕：
+// 只写引擎日志在启动早期会因引擎未就绪而丢失，用户侧就只剩「双击没反应」。
+window.webContents.on('render-process-gone', (_event, details) => {
+    try { engine.log(`界面进程退出：${details.reason}`); } catch { /* 引擎未就绪时忽略。 */ }
+    void appendStartupLog(`界面进程退出：${details.reason}`);
+  });
   window.on('close', event => {
     if (quitting) return;
     event.preventDefault();
@@ -1140,8 +1155,71 @@ async function smoke(): Promise<void> {
   app.quit();
 }
 
+/**
+ * GPU 进程退出监控与自动降级。
+ *
+ * 无显卡通道的机器上 Chromium 的 GPU 进程会直接挂掉。更麻烦的是「GPU 进程反复崩溃但主进程活着」
+ * 这种形态（本机实测：RTX 5070 Ti 正常，却因 GPU 沙箱与本机虚拟显示器驱动 / Hyper-V 冲突，
+ * GPU 进程连续崩溃，窗口照样建好）——此时外部脚本按退出码降级完全不会触发，
+ * 用户只能看到一个界面卡顿、软件渲染的窗口，没有任何提示。
+ *
+ * 这里做三件事：把原因写进启动日志；崩溃后自动带降级开关重启一次；把降级状态落盘，
+ * 让以后每次启动直接带参数，不再重走崩溃与重启。
+ *
+ * 重启只做一次：GPU_RESTART_FLAG 同时充当幂等标记，第二次崩溃时该标记已在 argv 里，
+ * 直接走提示分支，不会和外部脚本的降级叠加成重启循环。
+ */
+const GPU_RESTART_FLAG = '--autolabel-gpu-sandbox-off';
+/** 降级开关组合：关全部沙箱并退回软件渲染，是本机实测唯一能稳定启动的组合。 */
+const GPU_FALLBACK_ARGS = ['--no-sandbox', '--in-process-gpu', '--disable-gpu-sandbox', '--disable-gpu', GPU_RESTART_FLAG];
+/**
+ * 降级状态标记文件：记录「本机已确认需要关闭沙箱」。
+ *
+ * 为什么必须落盘：降级参数只能靠命令行传递，而用户下次双击启动时不会带这些参数。
+ * 不落盘就意味着每一次启动都要重走「崩溃 → 自动重启」这一遍，用户看到的是每次开机都闪一下、
+ * 窗口延迟几秒才出现；更糟的是中途若用户正好在标注，会被打断。
+ * 落盘后只有第一次付这个代价，之后直接带参数启动。
+ *
+ * 用独立小文件而不是塞进 desktop-settings.json：这份状态描述的是运行环境而非用户偏好，
+ * 卸载重装、迁移数据目录时都应随之作废，混进偏好文件容易被 restoreLegacyUserData 一起搬走。
+ */
+const gpuFallbackMarker = path.join(userData, 'gpu-fallback.json');
+/**
+ * 自动重启前的等待时长：必须让旧实例真正退出、把单实例锁释放掉。
+ * 实测（Windows，本机）：不等待时新实例约 1 秒后即因拿不到锁而自行退出，
+ * 用户侧表现为「双击后什么都没发生」。1.5 秒足够覆盖进程退出与锁释放。
+ */
+const GPU_RESTART_DELAY_MS = 1500;
+/** 读取上次记录的降级级别，0 表示没有降级过。 */
+async function readGpuFallbackTier(): Promise<number> {
+  try {
+    const data = JSON.parse(await readFile(gpuFallbackMarker, 'utf8')) as { tier?: unknown };
+    return Number.isInteger(data.tier) && Number(data.tier) > 0 ? Number(data.tier) : 0;
+  } catch { return 0; }
+}
+
+/**
+ * 启动即应用已记录的降级。
+ *
+ * GPU 崩溃后自动重启只解决当次启动；用户下次双击时命令行里没有那些开关，会再崩一次。
+ * 所以这里读标记文件，若本机已确认需要降级，就补上参数再重启一次——
+ * 只在「标记存在且当前启动没带参数」时触发，稳定机器读不到标记，完全不受影响。
+ *
+ * 与崩溃后的自动重启共用同一个标记参数，两者不会互相触发第二次重启。
+ */
+async function applyRecordedGpuFallback(): Promise<void> {
+  if (process.argv.includes(GPU_RESTART_FLAG)) return;
+  // 验收与开发态由各自的脚本控制降级参数，这里不插手，否则会与验收脚本的降级阶梯互相触发。
+  if (!app.isPackaged || process.argv.includes('--desktop-smoke')) return;
+  if (!(await readGpuFallbackTier())) return;
+  await appendStartupLog('检测到本机已记录图形加速降级状态，自动带上降级开关重启。');
+  app.relaunch({ args: [...process.argv.slice(1), ...GPU_FALLBACK_ARGS] });
+  setTimeout(() => app.exit(0), GPU_RESTART_DELAY_MS);
+}
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
+  void applyRecordedGpuFallback();
   app.on('second-instance', () => { window?.restore(); window?.show(); window?.focus(); });
   app.on('before-quit', event => {
     if (quitting) return;
@@ -1150,41 +1228,70 @@ else {
     shutdownStarted = true;
     agent.stop();
     transcoder.stop();
+    // 退出前把授权落盘：schedulePersist 是 500ms 合并写入，用户在这期间退出就会丢授权，
+    // 下次抽帧重试又变成「未授权」。flush 幂等，重复调用无副作用。
+    void grants.flush();
     // 排队任务最多等 10 秒收敛，但引擎停止必须无条件执行：
     // 一旦某个 whenIdle 悬挂或拒绝就跳过 engine.stop()，会留下占用 autolabel.db 的 Java 孤儿进程，
     // 用户下次打开软件时数据目录被占用，表现为「引擎起不来」。
+    // 授权落盘并入排空链：fire-and-forget 的 flush 可能在 app.quit() 时被硬中断，
+    // 写一半的临时文件又不会被 rename，授权等于没保存。
     const drain = (storage?.whenIdle(10000) ?? Promise.resolve()).then(() => credentialPending)
-      .then(() => localExecution.whenIdle()).then(() => mediaExecution.whenIdle()).then(() => updates.shutdown());
+      .then(() => localExecution.whenIdle()).then(() => mediaExecution.whenIdle())
+      .then(() => grants.flush()).then(() => updates.shutdown());
     void Promise.race([drain.catch(() => undefined), new Promise(resolve => setTimeout(resolve, 10000))])
       .then(() => engine?.stop().catch(() => undefined))
       .finally(() => { quitting = true; tray?.destroy(); app.quit(); });
   });
   app.on('window-all-closed', () => { if (!quitting && !tray) app.quit(); });
-/**
- * GPU 进程退出监控。
- *
- * 无显卡通道的机器上 Chromium 的 GPU 进程会直接挂掉，应用可能连窗口都没建好就退出，
- * 用户侧只看到「双击没反应」。这里把原因写进启动日志，并在窗口还没建好时明确提示，
- * 引导用降级开关启动——比静默退出强，也不假装启动成功了。
- */
-let windowCreated = false;
+
+  let windowCreated = false;
 let gpuFailureNotified = false;
+let gpuCrashes = 0;
 app.on('child-process-gone', async (_event, details) => {
   if (details.type !== 'GPU') return;
+  gpuCrashes += 1;
   const reason = `${details.reason}${details.exitCode !== undefined ? `（退出码 ${details.exitCode}）` : ''}`;
-  engine.log(`GPU 进程退出：${reason}`);
+  // engine 要到存储初始化后才创建，而 GPU 崩溃恰恰发生在那之前；这里直接 engine.log 会抛
+  // TypeError，把整个处理器打断，结果是既没记日志也没重启。启动早期的崩溃只写文件。
+  try { engine?.log(`GPU 进程退出：${reason}`); } catch { /* 引擎未就绪时忽略。 */ }
   await appendStartupLog(`GPU 进程退出：${reason}；窗口已创建：${windowCreated}`);
+  const alreadyRetried = process.argv.includes(GPU_RESTART_FLAG);
+  // 验收脚本自带降级阶梯，由它决定重试参数；这里不插手，避免和验收脚本互相触发重启。
+  const smoke = process.argv.includes('--desktop-smoke');
+  // 开发态不自动重启：界面来自 npm run dev 拉起的 Vite 服务，父进程一退服务就没了，
+  // 重启出来的实例只会白屏。开发入口 scripts/desktop-dev.mjs 会在同一次会话内带着开关重连。
+  const devRun = !app.isPackaged && !!process.env.AUTOLABEL_RENDERER_URL;
+  if (!alreadyRetried && !smoke && !devRun) {
+    // 先落盘再退出：app.exit 不会等待挂起的异步写盘，顺序反了这次崩溃记录就丢了，
+    // 而这份日志正是「为什么重启」的唯一现场。
+    await appendStartupLog('GPU 进程崩溃，自动追加降级开关重启一次以恢复硬件加速。');
+    // 记录降级状态，下一次启动直接带参数，不再重走崩溃与重启。
+    try { await writeFile(gpuFallbackMarker, JSON.stringify({ tier: 2, reason, at: new Date().toISOString() })); } catch { /* 写不进去只是下次多闪一次，不该拦住重启。 */ }
+    app.relaunch({ args: [...process.argv.slice(1).filter(arg => arg !== GPU_RESTART_FLAG), ...GPU_FALLBACK_ARGS] });
+    // app.exit 不会等待 before-quit，也无法给单实例锁留出释放时间：新实例若抢在旧实例退出前启动，
+    // 会因拿不到单实例锁而立刻退出（实测仅存活约 1 秒）。这里主动等锁释放再重启。
+    setTimeout(() => { app.exit(0); }, GPU_RESTART_DELAY_MS);
+    return;
+  }
   // GPU 进程会连着重启几次，每次都弹窗会把用户埋在对话框里；只提示一次，日志保留全部。
-  if (windowCreated || gpuFailureNotified || process.argv.includes('--desktop-smoke')) return;
+  if (gpuFailureNotified) return;
   gpuFailureNotified = true;
-  dialog.showErrorBox('图形加速不可用', `本机无法启动图形加速（${reason}），窗口未能创建。\n\n`
-    + '请用管理员权限运行，或追加启动参数：--no-sandbox --in-process-gpu --disable-gpu\n\n'
+  // 文案要跟实际走过的路径一致：开发态没有自动重启，说成「已自动尝试」会让人一直等一个不会发生的重启。
+  const tried = devRun ? '开发模式下不自动重启（重启会断开本地界面服务）。'
+    : '已自动尝试关闭 GPU 沙箱仍未成功，说明确实没有可用显卡通道。';
+  dialog.showErrorBox('图形加速不可用', `本机无法启动图形加速（${reason}，累计 ${gpuCrashes} 次）。\n\n`
+    + `${tried}\n`
+    + '可追加启动参数强制软件渲染：--no-sandbox --in-process-gpu --disable-gpu-sandbox --disable-gpu\n\n'
     + `启动日志：${path.join(userData, 'startup.log')}`);
 });
 
   void app.whenReady().then(async () => {
     await mkdir(userData, { recursive: true });
     await restoreLegacyUserData();
+    // 恢复历史文件授权：抽帧失败后重试要复核视频路径，没有这一步就会把用户选过的视频
+    // 判成未授权，逼他重新选一遍。逐条 realpath 复核已失效的会被丢弃。
+    await grants.restore();
     // 上次会话留下的转码副本已经失去授权、也无法再被任何任务引用，开机即清。
     void transcoder.sweep();
     preferences = await preferenceStore.load();

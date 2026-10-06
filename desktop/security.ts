@@ -21,10 +21,62 @@ function normalize(value: string): string { return pathIdentity(value); }
 export class PathGrants {
   private grants = new Map<string, { kind: string; directory: boolean }>();
   private outputParents = new Map<string, string>();
+  /**
+   * 授权持久化：把「用户亲手选过的文件」记到用户数据目录，应用重启后仍认。
+   *
+   * 为什么需要：抽帧失败后重试要复核视频路径（media.job.retry 会grants.require(sourcePath)），
+   * 而授权原先只存在内存里。重启应用或换个会话再来一次「继续抽帧」，同一个视频就被判成
+   * 「未授权」，用户被迫重新走一遍文件选择器——正是「发送过的数据没有记住」的由来。
+   *
+   * 只持久化文件级授权（video/images/model 之类的具体文件），目录授权一律不落盘：
+   * 目录授权是「当时点开那个文件夹」的临时范围，持久化等于把一次点选放大成长期权限，
+   * 会破坏 security.test 里「目录授权不扩大到视频」的边界。视频仍逐文件登记，与既有口径一致。
+   */
+  private readonly persisted: { file: string; kind: string }[] = [];
+  constructor(private readonly store?: { load(): Promise<{ file: string; kind: string }[]>; save(entries: { file: string; kind: string }[]): Promise<void> }) {}
+  /** 载入历史授权；逐条 realpath 复核，路径已失效或被替换的直接丢弃，不因为历史记录就放行。 */
+  async restore(): Promise<void> {
+    if (!this.store) return;
+    let saved: { file: string; kind: string }[];
+    try { saved = await this.store.load(); } catch { return; }
+    for (const entry of saved) {
+      if (!entry || typeof entry.file !== 'string' || typeof entry.kind !== 'string') continue;
+      // 逐条独立处理：单条失效不能连带丢掉其余仍然有效的授权。
+      try {
+        const resolved = await realpath(entry.file);
+        if (!(await stat(resolved)).isDirectory()) this.grants.set(normalize(resolved), { kind: entry.kind, directory: false });
+      } catch { /* 路径已删除或不可达：不再授权 */ }
+    }
+  }
   async add(value: string, kind: string): Promise<string> {
     const resolved = await realpath(value);
-    this.grants.set(normalize(resolved), { kind, directory: (await stat(resolved)).isDirectory() });
+    const directory = (await stat(resolved)).isDirectory();
+    this.grants.set(normalize(resolved), { kind, directory });
+    // 只有具体文件才落盘；目录授权仅本次会话有效，见构造函数注释。
+    if (!directory) this.schedulePersist({ file: resolved, kind });
     return resolved;
+  }
+  /**
+   * 合并待写记录后异步落盘。多步导入（一次选十几个视频）会连续触发 add，
+   * 用定时器合并成一次写，避免每个文件一次磁盘写入。
+   */
+  private schedulePersist(entry: { file: string; kind: string }): void {
+    if (!this.store) return;
+    if (!this.persisted.some(item => normalize(item.file) === normalize(entry.file))) this.persisted.push(entry);
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined;
+      // 写失败不阻断当前操作：授权在本次会话内已生效，只是下次启动要再选一次。
+      void this.store!.save(this.persisted.slice()).catch(() => undefined);
+    }, 500);
+    this.persistTimer.unref?.();
+  }
+  private persistTimer: NodeJS.Timeout | undefined;
+  /** 立即落盘：应用退出前调用，避免定时器未触发导致授权丢失。 */
+  async flush(): Promise<void> {
+    if (this.persistTimer) { clearTimeout(this.persistTimer); this.persistTimer = undefined; }
+    if (!this.store) return;
+    await this.store.save(this.persisted.slice()).catch(() => undefined);
   }
   async require(value: unknown, kinds: string[], exact = true): Promise<string> {
     if (typeof value !== 'string' || !path.isAbsolute(value) || value.includes('\0')) throw new DesktopError('PATH_DENIED', '请先使用文件选择器选择路径');

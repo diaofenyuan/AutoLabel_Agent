@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { assertAgentCommand, validateCommand } from './validation';
 import { PathGrants, authorizeCommandPaths, assetIdFromUrl, mediaTargetFromUrl, isTrustedUrl, normalizeMedia, redact } from './security';
+import { createGrantStore } from './grant-store';
 import { SseDecoder } from './sse';
 import { DIRECTORY_SCAN_MAX_DEPTH, DIRECTORY_SCAN_MAX_FILES, IMAGE_EXTENSIONS, isImagePath, isVideoPath } from '../shared/mediaFormats';
 import { MEDIA_JOB_KINDS, isMediaJobKind } from '../shared/media';
@@ -72,6 +73,78 @@ test('4C 人工真值需要显式来源和基线，Agent 只开放查询与既�
   assert.throws(() => assertAgentCommand('evaluationSet.get', { setId: 's', versionId: 'v' }), /真值清单/);
   assert.doesNotThrow(() => validateCommand('evaluationSet.get', { setId: 's', versionId: 'v' }));
 });
+test('授权持久化后跨会话仍有效，但不扩大到目录与未授权路径', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'autolabel-grant-'));
+  try {
+    const video = path.join(root, 'clip.mp4'); const other = path.join(root, 'other.mp4');
+    const folder = path.join(root, 'folder'); const inside = path.join(folder, 'nested.mp4');
+    await writeFile(video, 'v'); await writeFile(other, 'o'); await mkdir(folder); await writeFile(inside, 'n');
+    const filename = path.join(root, 'grants.json');
+    const first = new PathGrants(createGrantStore(filename));
+    await first.add(video, 'video');
+    // 目录授权不得落盘：持久化目录等于把一次点选放大成长期权限。
+    await first.add(folder, 'directory');
+    await first.flush();
+    const saved = JSON.parse(await readFile(filename, 'utf8')) as { entries: { file: string; kind: string }[] };
+    assert.deepEqual(saved.entries.map(entry => entry.file), [video]);
+
+    // 新会话：只有那个文件被记住。
+    const second = new PathGrants(createGrantStore(filename));
+    await second.restore();
+    assert.equal(await second.require(video, ['video']), video);
+    await assert.rejects(second.require(other, ['video']));
+    await assert.rejects(second.require(inside, ['video']));
+    // 目录授权不跨会话保留，目录内的视频也不因为父目录被授权而放行。
+    await assert.rejects(second.require(folder, ['directory']));
+  } finally {
+    assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep + 'autolabel-grant-'));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('授权记录里的路径已失效或被目录顶替时不再放行', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'autolabel-grant-'));
+  try {
+    const gone = path.join(root, 'gone.mp4'); const replaced = path.join(root, 'replaced.mp4');
+    await writeFile(gone, 'v'); await writeFile(replaced, 'v');
+    const filename = path.join(root, 'grants.json');
+    await writeFile(filename, JSON.stringify({ entries: [
+      { file: gone, kind: 'video' }, { file: replaced, kind: 'video' },
+      // 结构错误的记录必须被忽略，不能让整个授权表退化成空壳。
+      { file: 123, kind: 'video' }, { nope: true },
+    ] }));
+    await rm(gone); await rm(replaced); await mkdir(replaced); // 文件被目录顶替
+    const grants = new PathGrants(createGrantStore(filename));
+    await grants.restore();
+    await assert.rejects(grants.require(gone, ['video']));
+    // realpath 能解析，但已不是文件：不得凭历史记录放行。
+    await assert.rejects(grants.require(replaced, ['video']));
+  } finally {
+    assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep + 'autolabel-grant-'));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('损坏的授权文件不阻断启动，等同于没有历史授权', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'autolabel-grant-'));
+  try {
+    const video = path.join(root, 'clip.mp4'); await writeFile(video, 'v');
+    const filename = path.join(root, 'grants.json');
+    await writeFile(filename, '{ 这不是合法 JSON');
+    const grants = new PathGrants(createGrantStore(filename));
+    await grants.restore();
+    await assert.rejects(grants.require(video, ['video']));
+    // 损坏之后重新选择要能正常写入并生效。
+    await grants.add(video, 'video'); await grants.flush();
+    const reopened = new PathGrants(createGrantStore(filename));
+    await reopened.restore();
+    assert.equal(await reopened.require(video, ['video']), video);
+  } finally {
+    assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep + 'autolabel-grant-'));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('文件路径权限仅来自用户选择，目录连接不能越界', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'autolabel-grant-'));
   try {

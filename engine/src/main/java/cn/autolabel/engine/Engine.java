@@ -99,9 +99,14 @@ final class Engine implements AutoCloseable {
         case "resource.list"->new ResourceLibrary(store,projects).list(p);case "resource.save"->new ResourceLibrary(store,projects).save(p);
         case "resource.get"->new ResourceLibrary(store,projects).get(p);case "resource.apply"->new ResourceLibrary(store,projects).apply(p);case "resource.reference"->new ResourceLibrary(store,projects).addReference(p);case "resource.image"->resourceImage(p);
         case "settings.get"->settings();
-        case "settings.save"->{JsonObject settings=Json.object(p,"settings");Providers.rejectSecrets(settings);Json.bounded(settings,"globalConcurrency",8,1,Runs.CONCURRENCY_CEILING);JsonObject saved=store.tx(c->{JsonObject r=Store.one(c,"SELECT data FROM settings WHERE id='global'");JsonObject current=r==null?new JsonObject():Json.parse(r.get("data").getAsString());for(var e:settings.entrySet())current.add(e.getKey(),e.getValue());Store.update(c,"INSERT INTO settings(id,data) VALUES('global',?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",current);Store.event(c,"settings.saved",null,null,null,Json.obj("globalConcurrencyAppliedImmediately",settings.has("globalConcurrency")));return current;});
+        // 并发设置只有一个事实来源：界面提交的是 concurrency（类型里就这一个字段），
+        // 引擎内部读的是 globalConcurrency。此前两者各存一份且互不同步，用户在设置里改完并发、
+        // 界面也显示新值，实际放行的却仍是旧的 globalConcurrency，表现为「改不了默认并发数」。
+        // 这里在落库时把 concurrency 归一化成 globalConcurrency，读回时再反向同步，
+        // 兼容历史库里已经分叉的两份数据，并让「保存即生效」与「重新打开仍一致」同时成立。
+        case "settings.save"->{JsonObject settings=Json.object(p,"settings");Providers.rejectSecrets(settings);int concurrency=resolveConcurrency(settings);JsonObject saved=store.tx(c->{JsonObject r=Store.one(c,"SELECT data FROM settings WHERE id='global'");JsonObject current=r==null?new JsonObject():Json.parse(r.get("data").getAsString());for(var e:settings.entrySet())current.add(e.getKey(),e.getValue());current.addProperty("concurrency",concurrency);current.addProperty("globalConcurrency",concurrency);Store.update(c,"INSERT INTO settings(id,data) VALUES('global',?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",current);Store.event(c,"settings.saved",null,null,null,Json.obj("globalConcurrencyAppliedImmediately",true,"globalConcurrency",concurrency));return current;});
             // 全局并发上限热更新：设置保存后立即生效，不必重启引擎去打断运行中的任务。
-            if(settings.has("globalConcurrency"))runs.applyGlobalConcurrency(Json.bounded(saved,"globalConcurrency",8,1,Runs.CONCURRENCY_CEILING));yield saved;}
+            runs.applyGlobalConcurrency(concurrency);yield saved;}
         case "diagnostics.get"->Json.obj("engineVersion","0.1.0","protocolVersion",1,"javaVersion",System.getProperty("java.version"),"os",System.getProperty("os.name"),"architecture",System.getProperty("os.arch"),"databaseMode","WAL","databaseVersion",Store.SCHEMA_VERSION,"writeFailed",store.writeFailed,"queue",runs.diagnostics(),"training",trainingJobs.diagnostics(),"datasetVersions",datasetVersions.diagnostics(),"timestamp",Json.now());
         default->throw new ApiError(501,"command_not_implemented","此功能尚未实现："+command);
     };}
@@ -260,7 +265,26 @@ final class Engine implements AutoCloseable {
         });
     }
     static boolean trackingReviewRequired(JsonObject raw){return Json.bool(raw,"requiresTrackingReview",false);}
-    JsonObject settings(){return store.read(c->{JsonObject r=Store.one(c,"SELECT data FROM settings WHERE id='global'");return r==null?Json.obj("theme","light","globalConcurrency",8,"closeBehavior","ask"):Json.parse(r.get("data").getAsString());});}
+    /**
+     * 归一化并发设置，返回最终生效值。
+     *
+     * 以 concurrency 为准：它是界面唯一提交的字段。globalConcurrency 只在本次提交没带
+     * concurrency 时才读（旧版本或直接调接口的调用方），并且以「库里已存的值为准」而不是
+     * 固定默认值 8——否则每次只改其他设置项，都会把用户早先调好的并发重置回 8。
+     */
+    private int resolveConcurrency(JsonObject submitted){
+        if(submitted.has("concurrency"))return Json.bounded(submitted,"concurrency",8,1,Runs.CONCURRENCY_CEILING);
+        if(submitted.has("globalConcurrency"))return Json.bounded(submitted,"globalConcurrency",8,1,Runs.CONCURRENCY_CEILING);
+        return store.read(c->{JsonObject r=Store.one(c,"SELECT data FROM settings WHERE id='global'");
+            if(r==null)return 8;JsonObject current=Json.parse(r.get("data").getAsString());
+            return current.has("concurrency")?Json.bounded(current,"concurrency",8,1,Runs.CONCURRENCY_CEILING)
+                :Json.bounded(current,"globalConcurrency",8,1,Runs.CONCURRENCY_CEILING);});
+    }
+    JsonObject settings(){return store.read(c->{JsonObject r=Store.one(c,"SELECT data FROM settings WHERE id='global'");JsonObject result=r==null?Json.obj("theme","light","globalConcurrency",8,"closeBehavior","ask"):Json.parse(r.get("data").getAsString());
+        // 读回时反向同步：历史库里 concurrency 与 globalConcurrency 可能已经分叉，
+        // 统一以 globalConcurrency（引擎真正在用的那个）为准回填，界面显示与实际行为才一致。
+        int effective=r==null?8:Json.bounded(result,"globalConcurrency",8,1,Runs.CONCURRENCY_CEILING);
+        result.addProperty("globalConcurrency",effective);result.addProperty("concurrency",effective);return result;});}
     JsonObject resourceImage(JsonObject p){ResourceLibrary library=new ResourceLibrary(store,projects);JsonObject resource=library.get(p);if(!Json.required(resource,"kind").equals("reference"))throw new ApiError(422,"reference_invalid","只有人工参考资源包含固定图片。");JsonObject content=Json.object(resource,"content");return Json.obj("resourceId",resource.get("id"),"resourceVersion",resource.get("version"),"path",library.referencePath(content).toString(),"contentHash",content.get("contentHash"),"width",content.get("width"),"height",content.get("height"));}
     /**
      * 后台调度与关停的分步兜底。
