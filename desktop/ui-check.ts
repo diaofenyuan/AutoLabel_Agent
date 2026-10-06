@@ -85,12 +85,8 @@ export async function checkDesktopUi(window: BrowserWindow, output: string): Pro
     await window.webContents.executeJavaScript(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');
       if(!item)throw new Error('缺少设置导航项');item.click();})()`);
     await waitFor(`!!document.querySelector('.settings-tabs')`);
-    // 「示例」在高级设置折叠层里：先进设置时它是收起的，必须先展开再点，和真实用户路径一致。
-    await window.webContents.executeJavaScript(`(()=>{
-      const tabs=[...document.querySelectorAll('.settings-tabs button')];
-      if(!tabs.some(node=>node.innerText.trim()==='示例'))tabs.find(node=>node.innerText.includes('高级设置'))?.click();})()`);
-    await waitFor(`[...document.querySelectorAll('.settings-tabs button')].some(node=>node.innerText.trim()==='示例')`);
-    await window.webContents.executeJavaScript(`[...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()==='示例').click()`);
+    await waitFor(`(()=>{const node=[...document.querySelectorAll('.settings-tabs button')].find(n=>n.innerText.trim()==='示例'&&!n.disabled);
+      if(!node)return false;node.click();return true;})()`);
     await waitFor(`!!document.querySelector('[aria-label="载入示例"]')`);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="载入示例"]').click()`);
     // 载入示例自己会把界面带到该项目的会话：必须等它落定再导航，否则后面的跳转会被它覆盖。
@@ -459,12 +455,8 @@ export async function checkPackagedRelease(window: BrowserWindow, output: string
   await window.webContents.executeJavaScript(`(()=>{const item=[...document.querySelectorAll('.nav-item')].find(node=>node.innerText.trim()==='设置');
     if(!item)throw new Error('缺少设置导航项');item.click();})()`);
   await waitFor(`!!document.querySelector('.settings-tabs')`);
-  // 同 loadExample：「示例」页签折叠在高级设置里，先展开再点。
-  await window.webContents.executeJavaScript(`(()=>{
-    const tabs=[...document.querySelectorAll('.settings-tabs button')];
-    if(!tabs.some(node=>node.innerText.trim()==='示例'))tabs.find(node=>node.innerText.includes('高级设置'))?.click();})()`);
-  await waitFor(`[...document.querySelectorAll('.settings-tabs button')].some(node=>node.innerText.trim()==='示例')`);
-  await window.webContents.executeJavaScript(`[...document.querySelectorAll('.settings-tabs button')].find(node=>node.innerText.trim()==='示例').click()`);
+  await waitFor(`(()=>{const node=[...document.querySelectorAll('.settings-tabs button')].find(n=>n.innerText.trim()==='示例'&&!n.disabled);
+    if(!node)return false;node.click();return true;})()`);
   await waitFor(`!!document.querySelector('[aria-label="载入示例"]')`);
   await window.webContents.executeJavaScript(`document.querySelector('[aria-label="载入示例"]').click()`);
   await waitFor(`!!document.querySelector('.chat-panel') && !document.querySelector('.page-loading')`);

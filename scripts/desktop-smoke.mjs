@@ -256,15 +256,12 @@ if (errorActionOnly) {
 if (settingsUiOnly) {
   assert.equal(result.passed, true);
   const byCheck = new Map(result.checks.map(check => [check.check, check]));
-  // 默认六个常用区块，展开后十二个。
-  assert.equal(byCheck.get('settings-layered-tabs')?.basic, 6);
-  assert.equal(byCheck.get('settings-layered-tabs')?.all, 12);
-  // 深链落到高级区块时自动展开并选中它。
-  assert.ok(byCheck.get('settings-layered-tabs')?.deepLinkTabs >= 12);
-  assert.equal(byCheck.get('settings-layered-tabs')?.deepLinkSelected, '对话记录');
-  // 收起时不停在藏起来的区块上。
-  assert.ok(['外观', '软件 AI 配置', '存储位置', '本地推理', '快捷键', '应用更新'].includes(String(byCheck.get('settings-layered-tabs')?.afterCollapse)));
-  console.log(`设置页分层检查通过：${output}`); process.exit(0);
+  // 取消折叠后十二个区块常显，标签栏末尾不再有开关。
+  assert.equal(byCheck.get('settings-flat-tabs')?.all, 12);
+  // 深链落到低频区块时直接可见并选中，不需要任何展开动作。
+  assert.equal(byCheck.get('settings-flat-tabs')?.deepLinkSelected, '对话记录');
+  assert.equal(byCheck.get('settings-flat-tabs')?.sampleReachable, true);
+  console.log(`设置页标签检查通过：${output}`); process.exit(0);
 }
 if (flagIs('--model-library')) {
   assert.equal(result.passed, true); assert.equal(result.mode, 'model-library-ui');

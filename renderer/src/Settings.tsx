@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Save, RefreshCw, Monitor, Sun, Moon, Check, Clipboard, ShieldCheck, ChevronDown } from 'lucide-react';
+import { Save, RefreshCw, Monitor, Sun, Moon, Check, Clipboard, ShieldCheck } from 'lucide-react';
 import { useApp, type SettingsSection } from './context';
 import { request, getBridge, isDemo, errorMessage } from './bridge';
 import { Button, PageHeader, Notice } from './ui';
@@ -19,18 +19,13 @@ import AiSettings from './AiSettings';
  * 设置页区块清单。显式标注为 `SettingsSection` 的元组表，让标签栏与深链落点共用同一份键：
  * 少写一个键、或键名拼错，这里就会直接报类型错误，而不是让深链悄悄落到默认区块。
  *
- * 常用区块是第一次进来就要能找到的六项；其余六项按频率低得多，收在「高级设置」后面，
- * 不是藏起来——点一下就展开，深链落到高级区块时也会自动展开。
+ * 常用项排在前面是为了扫读顺序，不做折叠：折叠开关会把「工作空间」「诊断」这类低频但必要的
+ * 区块藏起来，深链进来时用户还要多点一次才能确认自己被送到了哪里，平白增加一步。
  */
-const BASIC_TABS: ReadonlyArray<readonly [SettingsSection, string]> = [
-  ['appearance','外观'],['ai','软件 AI 配置'],['storage','存储位置'],['local','本地推理'],['shortcuts','快捷键'],['updates','应用更新']
-];
-const ADVANCED_TABS: ReadonlyArray<readonly [SettingsSection, string]> = [
+const TABS: ReadonlyArray<readonly [SettingsSection, string]> = [
+  ['appearance','外观'],['ai','软件 AI 配置'],['storage','存储位置'],['local','本地推理'],['shortcuts','快捷键'],['updates','应用更新'],
   ['workspace','工作空间'],['chats','对话记录'],['execution','执行与预算'],['media','视频工具'],['samples','示例'],['diagnostics','诊断']
 ];
-const ADVANCED_KEYS = new Set<SettingsSection>(ADVANCED_TABS.map(([key]) => key));
-const ADVANCED_STORAGE_KEY = 'autolabel.settingsAdvanced';
-function readAdvancedOpen(): boolean { try { return localStorage.getItem(ADVANCED_STORAGE_KEY) === '1'; } catch { return false; } }
 export default function Settings(){
   const {prefs,setPrefs,savePrefs,engine,notify,guard,syncWindowDirtySource,settingsSection}=useApp();
   const [storageBusy,setStorageBusy]=useState(false);
@@ -44,10 +39,6 @@ export default function Settings(){
   const syncUpdateDirty=useCallback((value:boolean)=>syncDirty(value,'update'),[syncDirty]);
   // 初值来自应用层的落点：从媒体错误点「打开媒体运行时设置」直接落到视频工具，而不是让用户再找一层。
   const [section,setSection]=useState<SettingsSection>(settingsSection);const [busy,setBusy]=useState(false);const [diagnostics,setDiagnostics]=useState<Record<string,unknown>|null>(null);
-  // 深链直接落到高级区块（例如媒体错误的「打开媒体运行时设置」）时必须已经展开，否则用户看不到自己被送到了哪里。
-  const [advancedTabs,setAdvancedTabs]=useState(()=>ADVANCED_KEYS.has(settingsSection)||readAdvancedOpen());
-  const visibleTabs=advancedTabs?[...BASIC_TABS,...ADVANCED_TABS]:BASIC_TABS;
-  function toggleAdvanced(next:boolean){setAdvancedTabs(next);try{localStorage.setItem(ADVANCED_STORAGE_KEY,next?'1':'0');}catch{/* 存不下只影响下次进来是否展开 */}if(!next&&ADVANCED_KEYS.has(section))setSection('appearance');}
   const set=<K extends keyof Preferences>(key:K,value:Preferences[K])=>{if(busy||settingsBusy)return;syncDirty(true);setPrefs(p=>({...p,[key]:value}));};
   useEffect(()=>{const beforeLeave=async()=>{if(settingsBusy)throw new Error('设置操作正在进行，请等待完成。');if(dirty.current||updateDirty.current)throw new Error('设置尚未保存，请先点击“保存设置”。');};guard.current=beforeLeave;return()=>{if(guard.current===beforeLeave)guard.current=null;};},[guard,settingsBusy]);
   useEffect(()=>()=>{syncDirty(false);syncDirty(false,'update');},[syncDirty]);
@@ -76,7 +67,7 @@ export default function Settings(){
       这里只负责把界面显示拉回合法区间，避免用户改完一直看着非法值却不知为何没生效。
     */}
     <div className="setting-row"><div><h3>训练默认设备</h3><p>新建训练的默认执行设备；自动会在启动前优先选择 GPU，不可用时回退 CPU 并如实记录</p></div><div className="segmented">{([['gpu-auto','自动（优先 GPU）'],['cpu','CPU']] as const).map(([key,label])=><button disabled={busy} key={key} className={prefs.trainingDevice===key?'selected':''} aria-pressed={prefs.trainingDevice===key} onClick={()=>set('trainingDevice',key)}>{label}</button>)}</div></div></section>;
-  return <div className="content settings-page"><div className="settings-head"><PageHeader title="设置" actions={<Button disabled={settingsBusy} busy={busy} className="primary" onClick={()=>void save()}><Save size={14}/>保存设置</Button>}/><div className="tabs settings-tabs">{visibleTabs.map(([key,label])=><button disabled={busy||settingsBusy} key={key} className={section===key||key==='ai'&&section==='ai-library'?'selected':''} onClick={()=>setSection(key)}>{label}</button>)}<button className={`settings-advanced-toggle ${advancedTabs?'selected':''}`} aria-pressed={advancedTabs} aria-expanded={advancedTabs} disabled={busy||settingsBusy} onClick={()=>toggleAdvanced(!advancedTabs)}>{advancedTabs?'收起高级设置':'高级设置'}<ChevronDown size={14} className={advancedTabs?'rotated':''}/></button></div></div>
+  return <div className="content settings-page"><div className="settings-head"><PageHeader title="设置" actions={<Button disabled={settingsBusy} busy={busy} className="primary" onClick={()=>void save()}><Save size={14}/>保存设置</Button>}/><div className="tabs settings-tabs">{TABS.map(([key,label])=><button disabled={busy||settingsBusy} key={key} className={section===key||key==='ai'&&section==='ai-library'?'selected':''} onClick={()=>setSection(key)}>{label}</button>)}</div></div>
     <div className="settings-body" key={section}>{section==='updates'?<UpdateSettings onDirtyChange={syncUpdateDirty}/>:section==='ai-library'?<AiSettings initialKind="library"/>:section==='ai'?<AiSettings/>:section==='appearance'?<>{appearance}</>:section==='execution'?<>{execution}<TrainingStorageSection onBusyChange={setTrainingBusy}/></>:section==='storage'?<StoragePathsSection onBusyChange={setPathsBusy}/>:section==='chats'?<ChatHistorySection onBusyChange={setChatsBusy}/>:section==='workspace'?<StorageSettings onBusyChange={setStorageBusy}/>:section==='local'?<LocalRuntimeSettings onBusyChange={setStorageBusy} beforeConfigure={()=>{if(dirty.current)throw new Error('设置尚未保存，请先点击“保存设置”后再配置本地解释器。');}}/>:section==='media'?<MediaRuntimeSettings onBusyChange={setStorageBusy} beforeConfigure={()=>{if(dirty.current)throw new Error('请先保存设置，再配置视频工具。');}}/>:section==='samples'?<SamplesSection/>:section==='shortcuts'?<section className="settings-section"><h2>人工标注与操作快捷键</h2><p className="muted">人工标注入口：打开项目概览或对话结果里的素材，点「编辑标注」进入画布。画布与全局实际可用的键如下。</p>{[['完成当前多边形','Enter'],['取消当前绘制','Escape'],['删除选中的多边形顶点','Delete'],['发送对话消息','Ctrl + Enter'],['打开快速跳转','Ctrl + K'],['切换到前九个对话','Ctrl + 1…9']].map(([label,key])=><div className="setting-row" key={label}><h3>{label}</h3><kbd>{key}</kbd></div>)}<p className="muted">输入框或对话框获得焦点时，不触发画布快捷键。</p></section>:<section className="settings-section"><div className="section-toolbar"><h2>诊断</h2><div className="actions"><Button disabled={isDemo} busy={busy} onClick={()=>{setBusy(true);void request<{saved:boolean}>('diagnostics.save').then(result=>{if(result.saved)notify('脱敏诊断已保存。');}).catch(e=>notify(errorMessage(e),true)).finally(()=>setBusy(false));}}><Save size={14}/>保存脱敏诊断</Button><Button disabled={settingsBusy} busy={busy} onClick={()=>void diagnose()}><RefreshCw size={14}/>刷新诊断</Button></div></div><Notice><ShieldCheck size={16}/>诊断只做<Term name="desensitize" />：仅展示本地返回的信息，不自动上传。</Notice>{diagnostics?<pre className="diagnostic-output">{JSON.stringify(diagnostics,null,2)}</pre>:<p className="quiet-empty">点击“刷新诊断”读取当前状态。</p>}{diagnostics&&<Button onClick={()=>void navigator.clipboard.writeText(JSON.stringify(diagnostics,null,2)).then(()=>notify('诊断信息已复制。')).catch(e=>notify(errorMessage(e),true))}><Clipboard size={14}/>复制诊断</Button>}</section>}
     <div className="setting-row engine-setting"><div><h3>本地引擎</h3><p>{isDemo?'浏览器演示不连接执行引擎':engine.message??'用于执行模型调用、媒体处理与保存项目'}</p></div><div className="actions"><span className="muted"><span className={`status-dot ${engine.state}`}/>{engine.state==='ready'?'已连接':engine.state==='starting'?'启动中':'未连接'}</span><Button disabled={settingsBusy} busy={busy} onClick={()=>{setBusy(true);void getBridge().then(b=>b.restartEngine()).then(status=>notify(status.message??(status.state==='ready'?'引擎已连接。':'引擎尚未就绪。'),status.state!=='ready')).catch(e=>notify(errorMessage(e),true)).finally(()=>setBusy(false));}}><RefreshCw size={13}/>重新连接</Button></div></div>
     </div>
