@@ -97,7 +97,7 @@ export function Composer({ value, onChange, onSend, placeholder, busy, onCancel,
     <div className="composer-toolbar">
       <div className="composer-tools">{children}</div>
       {/* 拖拽之外的一等输入路径：点选与粘贴（Ctrl+V）都直接进附件条。 */}
-      {onAttachFiles && <button type="button" className="composer-pick icon-button" title="选择文件作为附件" aria-label="选择文件作为附件" onClick={() => { const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'image/*,video/*'; input.onchange = () => onAttachFiles([...(input.files ?? [])]); input.click(); }}><Paperclip size={13} /></button>}
+      {onAttachFiles && <button type="button" className="composer-pick" title="添加图片或视频" aria-label="添加图片或视频" onClick={() => { const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'image/*,video/*'; input.onchange = () => onAttachFiles([...(input.files ?? [])]); input.click(); }}><Paperclip size={13} /><span>添加图片</span></button>}
       <kbd className="composer-kbd">Ctrl + Enter</kbd>
       <button className="send-button" aria-label={canCancel ? '停止对话' : busy ? '处理中' : '发送'} disabled={busy ? !canCancel : !value.trim() && !hasAttachments} onClick={canCancel ? onCancel : onSend}>{canCancel ? <Square size={13} /> : busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <ArrowUp size={17} />}<span className="send-button-label">{canCancel ? '停止' : busy ? '处理中' : '发送'}</span></button>
     </div>

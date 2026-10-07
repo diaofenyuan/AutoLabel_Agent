@@ -29,5 +29,8 @@ test('拖入拒绝按原因分组，给出可执行下一步且不出现内部�
   assert.ok(many.includes('等 7 个文件'), many);
 
   assert.equal(dropRejectionNotice(files({})), null, '没有问题时不产生提示');
-  assert.equal(dropRejectionNotice(files({ unresolved: ['a.png', 'b.png'] }))?.includes('没有拿到磁盘路径'), true);
+  const pasted = dropRejectionNotice(files({ unresolved: ['a.png', 'b.png'] }))!;
+  assert.ok(pasted.includes('没有拿到文件路径'), pasted);
+  assert.ok(pasted.includes('保存为 PNG/JPG'), pasted);
+  assert.ok(pasted.includes('添加图片'), pasted);
 });

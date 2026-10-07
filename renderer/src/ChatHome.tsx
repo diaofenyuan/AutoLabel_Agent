@@ -239,9 +239,9 @@ export default function ChatHome() {
           attachments={attachments} onRemoveAttachment={id => setAttachments(list => list.filter(item => item.id !== id))}
           onAttachFiles={files => void filesToAttachments(files).then(list => { if (list.length) setAttachments(previous => [...previous, ...list]); }).catch(e => notify(errorMessage(e), true))}
           // 把落点写在发送之前：用户先知道这句话会落到哪个项目，而不是发完才发现又多了一个项目。
-          hint={pendingName
-            ? pendingExisting ? `将并入已有项目「${pendingExisting.name}」` : `将新建项目「${pendingName}」（发送时可改名）`
-            : '发送时确认项目名称'}>
+          hint={`${pendingName
+             ? pendingExisting ? `将并入已有项目「${pendingExisting.name}」` : `将新建项目「${pendingName}」（发送时可改名）`
+             : '发送时确认项目名称'} · ${attachments.length ? `已添加 ${attachments.length} 个文件` : '可拖入、粘贴图片，或点击「添加图片」'}`}>
           <div className="chat-options">
             <FlowPicker disabled={busy} onPick={prompt => { setInput(prompt); document.querySelector<HTMLTextAreaElement>('.chat-home textarea')?.focus(); }} />
             {/* 本机模型与云端接口并列在工具行：不配 API Key 也能开始标注。 */}

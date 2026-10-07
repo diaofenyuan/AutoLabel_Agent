@@ -55,6 +55,14 @@ export async function checkDesktopComposer(window: BrowserWindow, output: string
     assert.ok(collapsed.summary.includes('直接执行'), `摘要应写出当前执行方式，实际：${collapsed.summary}`);
     checks.push({ check: 'composer-collapsed-to-one-line', ...collapsed });
 
+    const imageGuide = await js<{ label: string; hint: string }>(`(()=>({
+      label: document.querySelector('.chat-panel .composer-pick')?.innerText.trim() ?? '',
+      hint: document.querySelector('.chat-panel .composer-hint')?.innerText.trim() ?? ''
+    }))()`);
+    assert.ok(imageGuide.label.includes('添加图片'), `输入卡应明确显示添加图片入口，实际：${json(imageGuide)}`);
+    assert.ok(/拖入|粘贴/.test(imageGuide.hint), `输入卡应说明图片添加方式，实际：${json(imageGuide)}`);
+    checks.push({ check: 'composer-image-guidance', ...imageGuide });
+
     // ===== 展开态：范围、执行方式、任务流程都在 =====
     await js(`document.querySelector('.chat-panel .composer-summary').click()`);
     await waitFor(`!!document.querySelector('.chat-panel .composer-popover')`);

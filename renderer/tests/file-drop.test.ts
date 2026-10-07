@@ -24,3 +24,19 @@ test('classifyDrop 每次拖入拿到全新分类，同一次内的重复路径�
   assert.deepEqual(second.unresolved, []);
   assert.deepEqual(second.rejected, []);
 });
+
+test('没有本地路径的剪贴板文件不应被误报为超量拖入', async () => {
+  (globalThis as unknown as { window: unknown }).window = {
+    autoLabel: {
+      pathForFile: () => '',
+      grantDroppedFiles: async (paths: string[]) => {
+        assert.deepEqual(paths, []);
+        return { granted: [], rejected: [], overLimit: { limit: 500, received: 0 } };
+      },
+    },
+  };
+  const { classifyDrop } = await import('../src/fileDrop');
+  const result = await classifyDrop([{ name: 'clipboard.png' } as File]);
+  assert.deepEqual(result.unresolved, ['clipboard.png']);
+  assert.equal(result.overLimit, null);
+});

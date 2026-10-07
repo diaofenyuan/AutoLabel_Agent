@@ -23,7 +23,8 @@ export async function classifyDrop(files: File[]): Promise<DroppedFiles> {
     if (path) paths.push(path); else unresolved.push(file.name);
   }
   // 授权由主进程按扩展名判定：拖入和文件选择器一样是用户动作，但类型不能被渲染层说了算。
-  const approved = bridge.grantDroppedFiles ? await bridge.grantDroppedFiles(paths)
+  // 剪贴板截图等文件可能拿不到磁盘路径；空数组不能送进授权接口，否则桌面端会把它误报成「超量拖入 0 个」。
+  const approved = paths.length > 0 && bridge.grantDroppedFiles ? await bridge.grantDroppedFiles(paths)
     : { granted: paths, rejected: [] as DropRejection[], overLimit: undefined };
   // 数组每次全新，不能从共享对象上展开引用；同一次拖入里系统重复交来的同一路径也在这里归并成一条。
   const result = emptyDroppedFiles();

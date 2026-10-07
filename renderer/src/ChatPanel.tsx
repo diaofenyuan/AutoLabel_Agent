@@ -240,7 +240,7 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
   }
   return <div className={`chat-panel ${compact ? 'compact' : ''} ${dropActive ? 'drop-active' : ''}`} {...(compact ? {} : drop.handlers)}>
     {!compact && <DropOverlay visible={dropActive} />}
-    <div className="chat-messages" role="log" aria-label="对话消息">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><Button onClick={() => void navigate('settings', 'ai')}><Settings2 size={14} />配置对话模型</Button><div className="chat-examples">{sampleRequests.map(text => <button key={text} type="button" onClick={() => editComposer(text)}>{text}</button>)}</div></Empty> : <>{session.messages.length > MESSAGE_FOLD && <button type="button" className="text-button chat-history-fold" onClick={() => setShowAllHistory(true)}>更早的 {session.messages.length - MESSAGE_FOLD} 条历史已折叠 · 展开</button>}{session.messages.slice(showAllHistory ? 0 : -MESSAGE_FOLD).map((message, i, folded) => {
+    <div className="chat-messages" role="log" aria-label="对话消息">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><p className="chat-image-guide">需要让助手处理图片时，可拖入、粘贴图片，或点击输入框下方的「添加图片」。图片会先加入当前项目；云端自动标注还需要验证标注模型的图片输入能力。</p><Button onClick={() => void navigate('settings', 'ai')}><Settings2 size={14} />配置对话模型</Button><div className="chat-examples">{sampleRequests.map(text => <button key={text} type="button" onClick={() => editComposer(text)}>{text}</button>)}</div></Empty> : <>{session.messages.length > MESSAGE_FOLD && <button type="button" className="text-button chat-history-fold" onClick={() => setShowAllHistory(true)}>更早的 {session.messages.length - MESSAGE_FOLD} 条历史已折叠 · 展开</button>}{session.messages.slice(showAllHistory ? 0 : -MESSAGE_FOLD).map((message, i, folded) => {
       const previousUser = [...folded.slice(0, i)].reverse().find(item => item.role === 'user')?.content;
       // key 用消息在整段历史里的绝对位置：折叠展开或新消息追加时都不会换身份。
       // 用切片内的下标当 key，展开历史会把最多 200 条消息重新挂载到别的消息上（复制/重试这类行内状态跟错人）。
@@ -270,7 +270,9 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
         attachments={session.attachments} onRemoveAttachment={id => update({ attachments: (session.attachments ?? []).filter(item => item.id !== id) })}
         onCancel={() => { if (session.cancelRequested) return; update({ cancelRequested: true }); void request('agent.cancel', { sessionId: session.id }).catch(e => { update({ cancelRequested: false }); notify(errorMessage(e), true); }); }}
         // Ctrl+Enter 已在发送键旁的 kbd 上，这里只补「Enter 换行」，不再重复一遍同样的快捷键。
-        hint={`Enter 换行${session.attachments?.length ? ` · 已添加 ${session.attachments.length} 个文件` : ''}`}>
+        hint={session.attachments?.length
+           ? `已添加 ${session.attachments.length} 个文件 · 发送后先导入当前项目`
+           : 'Enter 换行 · 可拖入、粘贴图片，或点击「添加图片」'}>
         <div className="chat-options">
           <div className="composer-scope" ref={scopeRoot}>
             <button type="button" className="composer-summary" disabled={session.busy} title={session.busy ? '任务执行中不能改处理范围与执行方式' : undefined} aria-haspopup="dialog" aria-expanded={toolsOpen} onClick={() => setToolsOpen(value => !value)}>
