@@ -83,7 +83,25 @@ export async function checkDesktopRunControls(window: BrowserWindow, output: str
     const beforeRetry = calls; await button('重试失败样本', "document.querySelector('.run-detail')"); await waitForServerCalls(beforeRetry);
     const afterRetry = await runStatus(failedRun.id, ['failed', 'completed_with_errors']);
     assert.ok(calls > beforeRetry);
-    await writeFile(output, JSON.stringify({ passed: true, taskKinds, taskFilters, searchByName: true, failureReasonVisible: true, paused: { runId: pausedRun.id, resumeStayedPaused: true, cancelled: cancelled.status === 'cancelled', controls }, failedRetry: { runId: failedRun.id, callsBefore: beforeRetry, callsAfter: calls, status: afterRetry.status, retryDispatched: true } }, null, 2));
+    // 连续切换两条任务，确认详情最终跟随最后一次点击，且行级加载态正常收敛。
+    const pausedRow = `[...document.querySelectorAll('.run-list .run-row')].find(e=>e.innerText.includes('fixture-paused'))`;
+    const failedRow = `[...document.querySelectorAll('.run-list .run-row')].find(e=>e.innerText.includes('fixture-failed'))`;
+    await js(`${pausedRow}.click();${failedRow}.click()`);
+    await wait(`document.querySelector('.run-detail')?.getAttribute('data-status')==='failed'||document.querySelector('.run-detail')?.getAttribute('data-status')==='completed_with_errors'`);
+    await new Promise(resolve => setTimeout(resolve, 600));
+    const latestSelectionWon = await js<boolean>(`['failed','completed_with_errors'].includes(document.querySelector('.run-detail')?.getAttribute('data-status')??'')`);
+    assert.equal(latestSelectionWon, true, '较早返回的任务详情不能覆盖最近一次点击');
+    await wait(`!document.querySelector('.run-row[aria-busy="true"]')`);
+    await writeFile(output.replace(/\.json$/, '-desktop.png'), (await window.webContents.capturePage()).toPNG());
+    window.webContents.debugger.attach('1.3');
+    await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await new Promise(resolve => setTimeout(resolve, 250));
+    await writeFile(output.replace(/\.json$/, '-mobile.png'), (await window.webContents.capturePage()).toPNG());
+    await window.webContents.debugger.sendCommand('Emulation.clearDeviceMetricsOverride');
+    window.webContents.debugger.detach();
+    await js(`document.querySelector('[aria-label="关闭任务详情"]')?.click()`);
+    await wait(`!document.querySelector('.run-detail')`);
+    await writeFile(output, JSON.stringify({ passed: true, taskKinds, taskFilters, searchByName: true, failureReasonVisible: true, latestTaskSelectionWins: latestSelectionWon, paused: { runId: pausedRun.id, resumeStayedPaused: true, cancelled: cancelled.status === 'cancelled', controls }, failedRetry: { runId: failedRun.id, callsBefore: beforeRetry, callsAfter: calls, status: afterRetry.status, retryDispatched: true } }, null, 2));
   } catch (error) {
     await writeFile(output, JSON.stringify({ passed: false, calls, error: error instanceof Error ? error.message : String(error), body: await js('document.body.innerText') }, null, 2));
     throw error;
