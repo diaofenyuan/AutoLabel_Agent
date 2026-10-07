@@ -12,7 +12,7 @@ export interface VideoPicks { projectId: string; files: string[] }
 
 /**
  * 多视频候选清单：拖入多个视频、或选中一个视频文件夹时都用它。
- * 逐个点「抽帧」进入单个面板调参数；`onChooseAll` 走一键抽帧——按默认参数整批排队，
+ * 逐个点「抽帧」进入单个面板调参数；`onChooseAll` 走一键抽帧——先选整批共用的采样策略，再排队处理，
  * 由 VideoBatchImport 承接。引擎本就逐个执行媒体任务，批量建任务不会并发抢 FFmpeg。
  */
 export function VideoPickList({ picks, onChoose, onChooseAll, onClose }: { picks: VideoPicks | null; onChoose: (path: string) => void; onChooseAll?: (files: string[]) => void; onClose: () => void }) {
@@ -23,7 +23,7 @@ export function VideoPickList({ picks, onChoose, onChooseAll, onClose }: { picks
   const visible = showAll ? matched : matched.slice(0, 20);
   return <Modal title="选择要抽帧的视频" onClose={onClose}>
     <div className="form-stack">
-      <p className="muted tiny">共 {picks.files.length} 个候选{matched.length !== picks.files.length ? `（筛选出 ${matched.length} 个）` : ''}。可以逐个点「抽帧」调好参数再抽，也可以一键抽帧：整批按默认参数排队处理。</p>
+      <p className="muted tiny">共 {picks.files.length} 个候选{matched.length !== picks.files.length ? `（筛选出 ${matched.length} 个）` : ''}。可以逐个点「抽帧」分别设置，也可以一键抽帧为整批视频设置统一采样策略。</p>
       {matched.length > 1 && onChooseAll && <div className="actions"><Button className="primary" onClick={() => onChooseAll(matched)}>一键抽帧（{matched.length} 个）</Button></div>}
       {picks.files.length > 8 && <SearchField value={query} onChange={setQuery} placeholder="按文件名搜索" />}
       <div className="board-list video-pick-list">{visible.map(file => <article className="board-row" key={file}>

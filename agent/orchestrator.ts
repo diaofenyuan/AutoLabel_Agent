@@ -12,7 +12,7 @@ const SYSTEM = `你是“自动标注小助手”的中文操作助手。帮助�
 训练按「已生成的数据集版本 → 不可变训练快照 → 预检 → 提交」推进：只从版本建立快照，不接受目录或文件路径；参数只填用户明确给出的部分，其余交给引擎默认值。提交只代表进入队列，必须用查询工具报告真实进度与逐轮指标，指标缺失就说缺失。训练与本地推理设备互斥、不占标注请求预算，进程中断或显存不足不会自动重跑，重试与否由用户决定。
 兼容的历史候选可以复用，成功数量中的 reused 不是新增请求，也不代表人工确认。用户要求重新调用或重新标注时明确设置 forceRerun，复用来源以引擎记录的运行与版本为准。
 本地模型从已登记列表选择，执行前固定真实版本和完整类别映射；缺少环境或文件授权时请用户在设置里处理，不猜测路径。请求设备不代表实际后端，使用 observedBackend 记录说明设备事实。本地推理不消耗标注 API 请求，但助手聊天仍计入共享预算。图像处理后的输入与原图分别计数，几何待复核、缺片或覆盖不全不能称为可采用完成；流程放行不会解除几何复核，当前视图结果复用能力以引擎为准。
-视频来源必须由用户在界面选择，不能猜测路径或把读到的任务信息还原成路径。用户要以视频抽帧开始时：可请其点击欢迎页的「选择视频抽帧」或「选择视频文件夹」按钮（进入项目后也可以直接把视频拖进对话区）；用户消息里「随消息添加素材」括注列出的视频文件路径（含文件夹附件带出的清单）就是用户随消息显式添加的，可直接用 create_video_job 逐个提交，不必再让用户重新选择；括注之外仍然只允许消费已授权路径，未授权路径会被桌面侧拒绝。素材任务面板只查看已有任务，没有创建入口，不要让用户去那里找。抽帧产物就绪与素材入库完成分开报告：只有 assetsCommitted 才表示已入库，既有完整媒体产物可经流程导入。素材处理任务的未知总量保持未知，任务中断后不自动重抽。筛选预览不会删除素材，近重复距离与模糊分数仅供检查，不能当作准确率；明确未完成的分析范围，只有明确的排除清单或去重选项才可改变后续素材范围，保护人工标注和草稿。同一视频的帧保留各自实际时间与身份，即使图片内容相同也不能宣称它们是同一帧。
+视频来源必须由用户在界面选择，不能猜测路径或把读到的任务信息还原成路径。只有当前用户消息明确要求抽帧、选择视频或处理随消息添加的视频时，才调用 create_video_job；普通的「开始标注」「标注这些图片」不得因为历史消息里出现过视频路径而再次抽帧。用户要以视频抽帧开始时：可请其点击欢迎页的「选择视频抽帧」或「选择视频文件夹」按钮（进入项目后也可以直接把视频拖进对话区）；用户消息里「随消息添加素材」括注列出的视频文件路径（含文件夹附件带出的清单）就是用户随消息显式添加的，可直接用 create_video_job 逐个提交，不必再让用户重新选择；括注之外仍然只允许消费已授权路径，未授权路径会被桌面侧拒绝。素材任务面板只查看已有任务，没有创建入口，不要让用户去那里找。抽帧产物就绪与素材入库完成分开报告：只有 assetsCommitted 才表示已入库，既有完整媒体产物可经流程导入。素材处理任务的未知总量保持未知，任务中断后不自动重抽。筛选预览不会删除素材，近重复距离与模糊分数仅供检查，不能当作准确率；明确未完成的分析范围，只有明确的排除清单或去重选项才可改变后续素材范围，保护人工标注和草稿。同一视频的帧保留各自实际时间与身份，即使图片内容相同也不能宣称它们是同一帧。
 质量评测只使用用户独立建立并发布的人工真值，不把已确认标签或模型候选自动当作真值。报告指标时保留实际分母、失败/未知样本与适用范围，不把待复核问题说成已由人工确认。复核队列可以按评测或运行批量建立（含难例优先队列），只排队、不改标注与真值；逐条复核结论、随机抽查与独立真值仍由用户在界面处理，队列条目不能说成已确认错误或已修复。两张建议卡只读回显：建议阈值不能说成已设置生效，送训清单不能说成已导出或已训练，两者都由用户确认后手动执行。
 用户要求比较方案时，默认预检并真实重跑固定评测图片，使用 run_evaluation；用户明确要求利用已有结果时才用 compare_results。方案接口和模型来自已有配置，未知状态不自动重发，比较提交后通过查询确认完成再固定指标。
 视频轨迹只操作当前项目已有时间轴；关键帧和场景由用户在工作台明确编辑，不能猜测对象身份或自动写入几何。生成前读取真实轨迹版本与计划，只提交范围内的候选并查询实际进度；默认只重算受影响区间，人工保护、缺属性和待复核问题不能跳过。轨迹插值不是已验证的模型跟踪，不把轨迹标识写入标准 YOLO 标签。停止中不等于已结束，也不意味着之前已保存的候选回滚。
@@ -24,6 +24,19 @@ const SYSTEM = `你是“自动标注小助手”的中文操作助手。帮助�
  * （原「思考深度」三档已取消，统一按标准档执行。）
  */
 const MAX_ROUNDS = 8, MAX_ACTIONS = 12;
+
+/** 只按本轮最后一条用户消息决定是否向模型展示视频创建工具，避免历史路径触发重复抽帧。 */
+function allowsVideoCreation(messages: ChatMessage[]) {
+  const latest = ([...messages].reverse().find(message => message.role === 'user')?.content ?? '')
+    .replace(/\n?（随消息添加素材：[\s\S]*）\s*$/u, '');
+  if (!latest.trim()) return false;
+  if (/开始标注|标注这些图片|对这些图片标注/.test(latest) && !/视频|抽帧/.test(latest)) return false;
+  return /抽帧|选择视频|拖入视频|视频文件|视频路径|逐帧|视频素材|\.mp4\b|\.mov\b|\.avi\b|\.mkv\b|\.webm\b/i.test(latest);
+}
+
+function videoCreationCallBlocked(name: string, allowVideoCreation: boolean) {
+  return !allowVideoCreation && name === 'create_video_job';
+}
 
 interface ModelResult { content: string; toolCalls?: ToolCall[]; usage?: unknown }
 type Emit = (event: AgentNotification) => void;
@@ -156,6 +169,7 @@ export class AgentController {
       } catch { /* 未验证能力只开放对话，不能因查询失败默认放开工具。 */ }
       if (controller.signal.aborted) return cancelled();
       let toolCount = 0;
+      const allowVideoCreation = allowsVideoCreation(request.messages);
       for (let round = 0; round < MAX_ROUNDS; round++) {
         if (controller.signal.aborted) return cancelled();
         // 写操作去重只在单轮内成立（见下方「单轮内重复的写操作」）：放到循环外会让第二轮
@@ -166,7 +180,7 @@ export class AgentController {
           projectId: request.projectId, providerId: request.providerId, model: request.model,
           sessionId: request.sessionId, budgetScopeId, messages, stream: true,
           ...(request.context?.maxRequests ? { maxRequests: request.context.maxRequests } : {}),
-          ...(toolsVerified ? { tools: modelTools() } : {}),
+          ...(toolsVerified ? { tools: modelTools({ allowVideoCreation }) } : {}),
         }); } catch (error) {
           if (controller.signal.aborted) return cancelled();
           if (error instanceof AgentError && error.code.toLowerCase() === 'budget_exhausted')
@@ -183,7 +197,8 @@ export class AgentController {
           return finish(content, 'completed');
         }
         if (!toolsVerified) return finish('当前模型的工具调用能力尚未验证。请在设置 · 软件 AI 配置里完成工具测试后再执行项目操作。', 'needs_input');
-        if (calls.length > MAX_ACTIONS - toolCount) return finish('已达到本轮操作数量上限，请检查已完成操作后继续。', 'limited');
+        const actionableCalls = calls.filter(call => !videoCreationCallBlocked(call.name, allowVideoCreation));
+        if (actionableCalls.length > MAX_ACTIONS - toolCount) return finish('已达到本轮操作数量上限，请检查已完成操作后继续。', 'limited');
         const callIds = new Set<string>();
         for (const call of calls) {
           if (!call || typeof call.id !== 'string' || !call.id || call.id.length > 200 || callIds.has(call.id) ||
@@ -199,11 +214,21 @@ export class AgentController {
         let hasPlans = false;
         for (const call of calls) {
           if (controller.signal.aborted) return cancelled();
-          toolCount++;
           let action: AgentAction;
           try {
             const tool = findTool(call.name);
             const args = parseArguments(call.arguments);
+            if (videoCreationCallBlocked(call.name, allowVideoCreation)) {
+              // 模型可能忽略工具清单，不能让历史视频路径触发新抽帧；这类调用不消耗本轮额度，
+              // 并把结构化原因回传给模型，使它继续执行当前消息真正要求的标注。
+              action = { id: call.id, name: call.name, status: 'failed', result: {
+                code: 'VIDEO_ACTION_NOT_REQUESTED', message: '当前消息没有要求视频抽帧，不能创建视频抽帧任务；请继续处理当前图片标注。',
+              } };
+              actions.push(action); notify('agent.tool', { action: modelSafe(action) });
+              messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(modelSafe(action)) });
+              continue;
+            }
+            toolCount++;
             // 单轮内重复的写操作复用已返回结果，避免模型误发造成重复任务。
             const signature = `${call.name}:${JSON.stringify(canonicalArguments(args))}`;
             const previous = tool.mutation ? completedCalls.get(signature) : undefined;

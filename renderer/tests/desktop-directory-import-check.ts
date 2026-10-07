@@ -12,7 +12,7 @@ import path from 'node:path';
  * 1. 欢迎页有「导入图片文件夹」与「导入视频文件夹」两个入口，且都走真实授权链路；
  * 2. 图片文件夹一次导入完成，文件夹里的 webp 与 txt 不会入库；
  * 3. 目录扫描把「有多少文件用不上」如实算出来（界面据此说明，不是猜）；
- * 4. 视频文件夹先列候选清单再逐个发起抽帧，不一次起一堆任务。
+ * 4. 视频文件夹先列候选清单；一键入口可配置整批采样方式，再逐个排队创建任务。
  *
  * 拖入白名单的收紧由 desktop/security.test.ts 的一致性断言守住：那里比较的是同一份常量与引擎正则，
  * 比在这里模拟拖放事件更直接，也不依赖合成指针事件的活性。
@@ -110,9 +110,25 @@ export async function checkDesktopDirectoryImport(window: BrowserWindow, output:
     const rows = await js<number>(`${dialog}.querySelectorAll('.board-row').length`);
     assert.equal(rows, 2, `视频文件夹应列出 2 个候选，实际 ${rows}`);
     const pickerText = await js<string>(`${dialog}.innerText`);
-    // 清单上必须同时说清两条路径：逐个点「抽帧」进单个面板调参数，或一键抽帧按默认参数整批排队。
+    // 清单同时提供单视频设置与整批统一策略两种入口。
     assert.ok(pickerText.includes('逐个点「抽帧」'), `候选清单应说明逐个处理，实际：${pickerText.slice(0, 300)}`);
     assert.ok(pickerText.includes(`一键抽帧（${rows} 个）`), `候选清单应给出整批入口与真实数量，实际：${pickerText.slice(0, 300)}`);
+    await button(`一键抽帧（${rows} 个）`, dialog);
+    await waitFor(`!!document.querySelector('[aria-label="批量视频采样密度"]')`);
+    assert.equal(await js<string>(`document.querySelector('[aria-label="批量视频采样密度"]').value`), 'standard', '一键抽帧默认应为每秒一帧');
+    await js(`(()=>{const e=document.querySelector('[aria-label="批量视频采样密度"]');e.value='custom';e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await waitFor(`!!document.querySelector('[aria-label="批量视频采样方式"]')`);
+    await js(`(()=>{const e=document.querySelector('[aria-label="批量视频采样方式"]');e.value='every_n';e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await waitFor(`!!document.querySelector('[aria-label="批量视频采样值"]')`);
+    assert.equal(await js<string>(`document.querySelector('[aria-label="批量视频采样值"]').value`), '10', '每 N 个源帧应提供可编辑数值');
+    checks.push({ check: 'batch-video-custom-sampling', defaultDensity: 'standard', everyNFramesInput: true });
+    await button('取消', dialog);
+    await js(`[...document.querySelectorAll('.sidebar-scroll .nav-item')].find(b=>b.innerText.trim()==='新对话').click()`);
+    await waitFor(`!!document.querySelector('.onboarding-lanes')`);
+    await writeFile(path.join(userData, 'dialog-fixtures.json'), json([{ kind: 'directory', paths: [videoFolder] }]));
+    await button('导入视频文件夹');
+    await button('继续');
+    await waitFor(`!!${dialog}&&${dialog}.innerText.includes('选择要抽帧的视频')`);
     await button('抽帧', dialog);
     // 抽帧面板必须真的打开，而不是点完没反应。
     await waitFor(`!!${dialog}&&${dialog}.innerText.includes('1920 × 1080')`, 60000);

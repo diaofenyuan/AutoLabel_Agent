@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { providerCapabilities } from '../shared/protocol';
-import { MEDIA_JOB_KINDS, VIDEO_SCENE_MIN_INTERVAL_RANGE, VIDEO_SCENE_THRESHOLD_RANGE } from '../shared/media';
+import { MEDIA_JOB_KINDS, VIDEO_MAX_RANGE_SECONDS, VIDEO_SCENE_MIN_INTERVAL_RANGE, VIDEO_SCENE_THRESHOLD_RANGE } from '../shared/media';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 /**
@@ -71,7 +71,7 @@ const mediaJob = z.strictObject({ jobId: id });
 const mediaStream = z.number().int().min(0).max(65535);
 // 配方标识与导出格式标识同形，共用内置前缀规则。
 const recipeId = builtinId;
-const videoRanges = z.array(z.strictObject({ start: finite.min(0).max(604800), end: finite.min(0).max(604800) })
+const videoRanges = z.array(z.strictObject({ start: finite.min(0).max(VIDEO_MAX_RANGE_SECONDS), end: finite.min(0).max(VIDEO_MAX_RANGE_SECONDS) })
   .refine(value => value.start < value.end, '时间段结束值须大于开始值')).min(1).max(32)
   .refine(values => values.every((value, index) => index === 0 || value.start >= values[index - 1].end), '时间段须按时间排序且不能重叠');
 const videoOptions = { ranges: videoRanges, streamIndex: mediaStream.optional(), format: z.enum(['png', 'jpg']).optional(),
@@ -80,7 +80,7 @@ const videoOptions = { ranges: videoRanges, streamIndex: mediaStream.optional(),
   outputSize: z.strictObject({ width: z.number().int().min(1).max(20000), height: z.number().int().min(1).max(20000), fit: z.enum(['contain', 'stretch']).optional() })
     .refine(value => value.width * value.height <= 40000000, '输出不能超过 4000 万像素').optional() };
 const videoParameters = z.union([
-  z.strictObject({ ...videoOptions, mode: z.literal('interval'), intervalSeconds: finite.min(.001).max(604800) }),
+  z.strictObject({ ...videoOptions, mode: z.literal('interval'), intervalSeconds: finite.min(.001).max(VIDEO_MAX_RANGE_SECONDS) }),
   z.strictObject({ ...videoOptions, mode: z.literal('every_n'), everyNFrames: z.number().int().min(1).max(1000000) }),
   z.strictObject({ ...videoOptions, mode: z.literal('fps'), targetFps: finite.min(.001).max(240) }),
   // 场景变化抽帧：按取样间隔取候选帧，与上一张保留帧的差异达到阈值才留；两者都可缺省（默认 0.15 / 1 秒，与引擎同源）。

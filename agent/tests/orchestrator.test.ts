@@ -30,6 +30,24 @@ test('未验证的工具能力不会开放项目操作', async () => {
   assert.deepEqual(commands, ['provider.capabilities', 'chat.send']);
 });
 
+test('普通开始标注消息不会因素材备注重新开放视频抽帧工具', async () => {
+  let sentTools: Array<{ function?: { name?: string } }> = [];
+  const agent = new AgentController(client((command, payload) => {
+    if (command === 'provider.capabilities') return { tools: 'verified' };
+    if (command === 'chat.send') {
+      sentTools = (payload.tools ?? []) as Array<{ function?: { name?: string } }>;
+      return { content: '可以开始标注。' };
+    }
+    throw new Error(command);
+  }));
+  await agent.run({ ...request, messages: [
+    { role: 'user', content: '先处理视频\n（随消息添加素材：data（文件夹 · 11 个视频）。视频文件：C:\\clips\\a.mp4）' },
+    { role: 'assistant', content: '视频已准备。' },
+    { role: 'user', content: '开始标注圆形引导灯' },
+  ] });
+  assert.equal(sentTools.some(tool => tool.function?.name === 'create_video_job'), false);
+});
+
 test('重复原生写工具不会提交两个标注任务，回复读取真实工具结果', async () => {
   let turns = 0, submitted = 0;
   const agent = new AgentController(client((command, payload) => {
@@ -50,6 +68,30 @@ test('重复原生写工具不会提交两个标注任务，回复读取真实�
   assert.equal(submitted, 1);
   assert.equal(result.content, '任务已排队。');
   assert.equal(result.actions.length, 2);
+});
+
+test('重复的抽帧失败不会耗尽操作额度，后续标注仍会执行', async () => {
+  let turn = 0, submitted = 0, added = 0;
+  const preparation = Array.from({ length: 11 }, (_, index) => ({ id: `prepare-${index}`, name: 'create_video_job', arguments: { sourcePath: 'C:\\chosen.mp4', mode: 'scene' } }));
+  const agent = new AgentController(client((command, payload) => {
+    if (command === 'provider.capabilities') return { tools: 'verified' };
+    if (command === 'project.open') return project;
+    if (command === 'asset.get') return { id: 'asset-1', projectId: 'project-1' };
+    if (command === 'project.classes.add') { added++; return { ...project, classes: [{ id: 'cup' }, { id: 'lamp' }] }; }
+    if (command === 'media.video.create') throw new AgentError('INVALID_ARGUMENT', '未授权视频路径');
+    if (command === 'run.create') { submitted++; return { id: 'run-after-preparation', status: 'queued' }; }
+    if (command === 'chat.send') {
+      if (++turn === 1) return { content: '', toolCalls: [{ id: 'add-class', name: 'set_project_classes', arguments: { names: ['lamp'] } }] };
+      if (turn === 2) return { content: '', toolCalls: preparation };
+      if (turn === 3) return { content: '', toolCalls: [call('annotation-after-preparation')] };
+      return { content: '标注任务已排队。' };
+    }
+    throw new Error(command);
+  }));
+  const result = await agent.run(request);
+  assert.equal(added, 1);
+  assert.equal(submitted, 1);
+  assert.equal(result.content, '标注任务已排队。');
 });
 
 test('跨项目素材在任务提交前被拒绝', async () => {

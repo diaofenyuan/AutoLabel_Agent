@@ -246,17 +246,21 @@ test('媒体任务重试只接受可重试任务，返回指向原任务的新 j
 test('抽帧任务只提交已授权路径与单一模式，参数范围在提交前校验', async () => {
   const f = fixture();
   // 四种模式各自只带上自己的参数，不把无关字段混进 payload。
-  for (const [args, expected] of [[{ sourcePath: 'C:\\chosen.mp4', mode: 'interval', intervalSeconds: 1.5 }, { mode: 'interval', intervalSeconds: 1.5 }],
-    [{ sourcePath: 'C:\\chosen.mp4', mode: 'every_n', everyNFrames: 30 }, { mode: 'every_n', everyNFrames: 30 }],
-    [{ sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 2 }, { mode: 'fps', targetFps: 2 }],
-    [{ sourcePath: 'C:\\chosen.mp4', mode: 'scene' }, { mode: 'scene' }],
-    [{ sourcePath: 'C:\\chosen.mp4', mode: 'scene', sceneThreshold: 0.2, minIntervalSeconds: 2 }, { mode: 'scene', sceneThreshold: 0.2, minIntervalSeconds: 2 }]] as const) {
+  for (const [args, expected] of [[{ sourcePath: 'C:\\chosen.mp4', mode: 'interval', intervalSeconds: 1.5 }, { mode: 'interval', intervalSeconds: 1.5, ranges: [{ start: 0, end: 604800 }] }],
+    [{ sourcePath: 'C:\\chosen.mp4', mode: 'every_n', everyNFrames: 30 }, { mode: 'every_n', everyNFrames: 30, ranges: [{ start: 0, end: 604800 }] }],
+    [{ sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 2 }, { mode: 'fps', targetFps: 2, ranges: [{ start: 0, end: 604800 }] }],
+    [{ sourcePath: 'C:\\chosen.mp4', mode: 'scene' }, { mode: 'scene', ranges: [{ start: 0, end: 604800 }] }],
+    [{ sourcePath: 'C:\\chosen.mp4', mode: 'scene', sceneThreshold: 0.2, minIntervalSeconds: 2 }, { mode: 'scene', sceneThreshold: 0.2, minIntervalSeconds: 2, ranges: [{ start: 0, end: 604800 }] }]] as const) {
     f.calls.length = 0;
     const created = await tool('create_video_job').execute(args, f.environment) as RecordValue;
     assert.equal(created.submitted, true);
     assert.equal(f.calls[0].command, 'media.video.create');
     assert.deepEqual(f.calls[0].payload, { projectId: 'project', sourcePath: args.sourcePath, parameters: expected });
   }
+  // ranges 对调用方可选，但引擎协议要求有合法时间段；省略时应使用完整的安全默认范围。
+  f.calls.length = 0;
+  await tool('create_video_job').execute({ sourcePath: 'C:\\chosen.mp4', mode: 'scene' }, f.environment);
+  assert.deepEqual(f.calls[0].payload.parameters, { mode: 'scene', ranges: [{ start: 0, end: 604800 }] });
   // 时间段必须有序、不重叠，且与其余输出选项一起透传。
   f.calls.length = 0;
   await tool('create_video_job').execute({ sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1,
@@ -273,6 +277,7 @@ test('抽帧任务只提交已授权路径与单一模式，参数范围在提�
     { sourcePath: 'C:\\chosen.mp4', mode: 'scene', sceneThreshold: 0.04 }, { sourcePath: 'C:\\chosen.mp4', mode: 'scene', sceneThreshold: 1.5 },
     { sourcePath: 'C:\\chosen.mp4', mode: 'scene', minIntervalSeconds: 0 }, { sourcePath: 'C:\\chosen.mp4', mode: 'scene', minIntervalSeconds: 601 },
     { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, ranges: [{ start: 2, end: 1 }] },
+    { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, ranges: [{ start: 0, end: 604801 }] },
     { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, ranges: [{ start: 0, end: 3 }, { start: 2, end: 4 }] },
     { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, format: 'webp' },
     { sourcePath: 'C:\\chosen.mp4', mode: 'fps', targetFps: 1, maxFrames: 0 },

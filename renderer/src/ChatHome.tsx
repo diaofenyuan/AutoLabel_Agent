@@ -145,7 +145,7 @@ export default function ChatHome() {
       setProjectPrompt({
         title: '选择视频抽帧', confirmLabel: '继续', suggest: folderName(paths[0]),
         run: async target => {
-          // 多个视频先给清单：逐个调参数，或一键按默认参数整批排队，都在清单里选。
+          // 多个视频先给清单：逐个调参数，或一键为整批设置统一采样策略，都在清单里选。
           if (paths.length === 1) setVideoStart({ projectId: target.id, path: paths[0] });
           else drop.openPicks({ projectId: target.id, files: paths });
         }
@@ -270,7 +270,7 @@ export default function ChatHome() {
     {/* 多选视频或视频文件夹选出来的候选清单：与拖入多个视频共用同一个组件。 */}
     <VideoPickList picks={drop.picks} onChoose={path => { const target = drop.picks?.projectId; drop.closePicks(); if (target) setVideoStart({ projectId: target, path }); }}
       onChooseAll={drop.chooseAll} onClose={drop.closePicks} />
-    {/* 一键抽帧：整批按默认参数建任务，首个任务交给进度条跟踪，其余排在其后逐个推进。 */}
+    {/* 一键抽帧：整批共用采样策略逐个建任务，首个任务交给进度条跟踪，其余排在其后逐个推进。 */}
     {drop.batch && (() => {
       const batch = drop.batch;
       return <VideoBatchImport key={batch.projectId} projectId={batch.projectId} files={batch.files}

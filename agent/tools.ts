@@ -685,8 +685,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
 ];
 
-export function modelTools() {
-  return TOOL_DEFINITIONS.map(tool => ({ type: 'function', function: {
+export function modelTools(options: { allowVideoCreation?: boolean } = {}) {
+  const tools = options.allowVideoCreation === false ? TOOL_DEFINITIONS.filter(tool => tool.name !== 'create_video_job') : TOOL_DEFINITIONS;
+  return tools.map(tool => ({ type: 'function', function: {
     name: tool.name, description: tool.description, parameters: tool.parameters, strict: true,
   } }));
 }

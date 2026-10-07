@@ -306,7 +306,7 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     </footer>
     {/* 拖入多个视频时先给候选清单：逐个调参数或一键整批排队都在这里选。 */}
     <VideoPickList picks={drop.picks} onChoose={drop.chooseVideo} onChooseAll={drop.chooseAll} onClose={drop.closePicks} />
-    {/* 一键抽帧：整批按默认参数建任务，首个任务交给进度条跟踪，其余排在其后逐个推进。 */}
+    {/* 一键抽帧：整批共用采样策略逐个建任务，首个任务交给进度条跟踪，其余排在其后逐个推进。 */}
     {drop.batch && (() => {
       const batch = drop.batch;
       return <VideoBatchImport key={batch.projectId} projectId={batch.projectId} files={batch.files}

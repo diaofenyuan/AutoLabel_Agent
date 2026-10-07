@@ -1,5 +1,8 @@
 export interface VideoTimeRange { start: number; end: number }
 
+/** 引擎接受的时间段终点上限；超过该值的长视频需要在界面中分段处理。 */
+export const VIDEO_MAX_RANGE_SECONDS = 604800;
+
 export interface VideoOutputSize {
   width: number;
   height: number;

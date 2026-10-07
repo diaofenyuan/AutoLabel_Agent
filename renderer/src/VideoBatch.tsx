@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
-import { VIDEO_DOWNSAMPLE_LONG_EDGE, type MediaJob, type VideoInspection } from '../../shared/media';
+import { VIDEO_DENSITY_LABELS, VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_MAX_RANGE_SECONDS, VIDEO_SCENE_MIN_INTERVAL_SECONDS, type MediaJob, type VideoDensity, type VideoInspection } from '../../shared/media';
 import { request, errorMessage, isDemo } from './bridge';
-import { Button, Modal } from './ui';
+import { Button, Field, Modal } from './ui';
 import { baseName } from './projectNaming';
 import { batchExtractionPlan, batchFailures, batchOutcome, remainingBatchItems, retryWhileMediaBusy, type BatchFailure } from './videoBatchPlan';
 
@@ -16,7 +16,7 @@ interface BatchItem { path: string; name: string; state: BatchItemState }
 export interface BatchVideoResult { jobs: MediaJob[]; failed: number; stopped: boolean; failedItems: BatchFailure[]; unfinished: string[] }
 
 /**
- * 一键抽帧：对整批候选视频逐个「检查 → 按默认参数建任务」（参数计算见 videoBatchPlan）。
+ * 一键抽帧：整批共用同一采样策略，逐个「检查 → 建任务」（参数计算见 videoBatchPlan）。
  * 引擎的媒体任务本就是单线程排队执行（一次跑一个），这里也逐个串行发请求，
  * 检查或建任务失败只跳过该视频并如实记录，不中断其余视频。
  *
@@ -30,6 +30,9 @@ export default function VideoBatchImport({ projectId, files, onClose, onCreated 
 }) {
   const [items, setItems] = useState<BatchItem[]>(() => files.map(path => ({ path, name: baseName(path), state: { kind: 'pending' } })));
   const [running, setRunning] = useState(false), [stopped, setStopped] = useState(false);
+  const [density, setDensity] = useState<VideoDensity>('standard');
+  const [customMode, setCustomMode] = useState<'interval' | 'every_n' | 'fps'>('interval');
+  const [customValue, setCustomValue] = useState('1');
   const cancelled = useRef(false);
   // 面板可能跑多轮（先失败、后重试），已建成的任务必须累计，不能只留最后一轮。
   const created = useRef<MediaJob[]>([]);
@@ -49,7 +52,7 @@ export default function VideoBatchImport({ projectId, files, onClose, onCreated 
           { shouldStop: () => cancelled.current, onBusy: () => patch(item.path, { kind: 'working', label: '等待当前媒体任务结束，随后自动继续…' }) }
         );
         if (!inspection || cancelled.current) break;
-        const plan = batchExtractionPlan(inspection);
+        const plan = batchExtractionPlan(inspection, { density, customMode, customValue: Number(customValue) });
         if ('error' in plan) { patch(item.path, { kind: 'failed', error: plan.error }); failures.push({ path: item.path, name: item.name, error: plan.error }); continue; }
         patch(item.path, { kind: 'working', label: '正在创建任务…' });
         const job = await request<MediaJob>('media.video.create', { projectId, sourcePath: item.path, expectedSourceHash: inspection.sourceHash, parameters: plan.parameters });
@@ -84,7 +87,13 @@ export default function VideoBatchImport({ projectId, files, onClose, onCreated 
     : '';
   return <Modal title={`一键抽帧（${items.length} 个视频）`} onClose={close}>
     <div className="form-stack">
-      <p className="muted tiny">全部按默认参数抽帧：每 1 秒固定抽取一帧、输出 PNG、超高清自动缩到长边 {VIDEO_DOWNSAMPLE_LONG_EDGE} 像素。任务在引擎里排队逐个执行，素材就绪后自动导入项目；想单独调某个视频的参数，回到清单逐个点「抽帧」。个别视频建不成任务不会中断整批，失败原因就地列出，可只重试它们。</p>
+      <p className="muted tiny">整批视频共用同一采样策略；超过单视频帧数上限的条目会显示失败原因。输出 PNG，超高清自动缩到长边 {VIDEO_DOWNSAMPLE_LONG_EDGE} 像素。任务在引擎里排队逐个执行，素材就绪后自动导入项目。</p>
+      <div className="field-grid">
+        <Field label="采样密度"><select aria-label="批量视频采样密度" disabled={running} value={density} onChange={e => setDensity(e.target.value as VideoDensity)}>{(Object.keys(VIDEO_DENSITY_LABELS) as VideoDensity[]).map(key => <option key={key} value={key}>{VIDEO_DENSITY_LABELS[key]}</option>)}</select></Field>
+        {density === 'custom' && <Field label="采样方式"><select aria-label="批量视频采样方式" disabled={running} value={customMode} onChange={e => { const next = e.target.value as typeof customMode; setCustomMode(next); setCustomValue(next === 'every_n' ? '10' : '1'); }}><option value="interval">每隔指定秒数</option><option value="every_n">每 N 个源帧</option><option value="fps">按目标帧率</option></select></Field>}
+      </div>
+      {density === 'custom' && <Field label={customMode === 'interval' ? '间隔（秒）' : customMode === 'every_n' ? '源帧间隔 N' : '目标帧率（帧/秒）'}><input aria-label="批量视频采样值" type="number" min={customMode === 'every_n' ? 1 : 0.001} max={customMode === 'every_n' ? 1000000 : customMode === 'fps' ? 240 : VIDEO_MAX_RANGE_SECONDS} step={customMode === 'every_n' ? 1 : 'any'} disabled={running} value={customValue} onChange={e => setCustomValue(e.target.value)} /></Field>}
+      {density === 'scene' && <p className="muted tiny">每 {VIDEO_SCENE_MIN_INTERVAL_SECONDS} 秒检查一个候选帧，仅保留与上一张保留帧差异明显的画面；静止或相似画面可能被跳过。</p>}
       <div className="board-list video-pick-list">{items.map(item => <article className="board-row" key={item.path}>
         <div className="board-main">
           <strong>{item.name}</strong>

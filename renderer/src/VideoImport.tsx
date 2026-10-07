@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Plus, Trash2 } from 'lucide-react';
-import { VIDEO_DENSITY_LABELS, VIDEO_DENSITY_SECONDS, VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_DOWNSAMPLE_THRESHOLD, VIDEO_MAX_FRAMES, VIDEO_SCENE_MIN_INTERVAL_SECONDS, VIDEO_SCENE_THRESHOLD, type MediaJob, type VideoCreateRequest, type VideoDensity, type VideoExtractionParameters, type VideoExtractionRecipe, type VideoInspection, type VideoRecipeDraft, type VideoTimeRange } from '../../shared/media';
+import { VIDEO_DENSITY_LABELS, VIDEO_DENSITY_SECONDS, VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_DOWNSAMPLE_THRESHOLD, VIDEO_MAX_FRAMES, VIDEO_MAX_RANGE_SECONDS, VIDEO_SCENE_MIN_INTERVAL_SECONDS, VIDEO_SCENE_THRESHOLD, type MediaJob, type VideoCreateRequest, type VideoDensity, type VideoExtractionParameters, type VideoExtractionRecipe, type VideoInspection, type VideoRecipeDraft, type VideoTimeRange } from '../../shared/media';
 import { getBridge, request, errorMessage, isDemo } from './bridge';
 import { useApp } from './context';
 import { Button, Field, IconButton, Modal, Notice } from './ui';
@@ -133,7 +133,7 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
     let previousEnd = -1;
     const lengths: number[] = [];
     for (const range of selected) {
-      if (!Number.isFinite(range.start) || !Number.isFinite(range.end) || range.start < 0 || range.end <= range.start || range.end > 604800 || (duration !== null && range.end > duration) || range.start < previousEnd) return null;
+      if (!Number.isFinite(range.start) || !Number.isFinite(range.end) || range.start < 0 || range.end <= range.start || range.end > VIDEO_MAX_RANGE_SECONDS || (duration !== null && range.end > duration) || range.start < previousEnd) return null;
       lengths.push(range.end - range.start);
       previousEnd = range.end;
     }
@@ -205,8 +205,8 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
   function parameters(): VideoExtractionParameters {
     if (!inspection) throw new Error('请先选择并成功检查视频。');
     const selectedRanges = whole && inspection.durationSeconds !== null ? [{ start: 0, end: inspection.durationSeconds }] : ranges;
-    if (!selectedRanges.length || selectedRanges.length > 32 || selectedRanges.some((r, i) => !Number.isFinite(r.start) || !Number.isFinite(r.end) || r.start < 0 || r.end > 604800 || r.end <= r.start || (inspection.durationSeconds !== null && r.end > inspection.durationSeconds) || (i > 0 && r.start < selectedRanges[i - 1].end))) throw new Error('时间段需按先后顺序填写：起点非负、终点大于起点、范围互不重叠，且不超过已知视频时长。');
-    const value = Number(sampling); if (mode !== 'scene' && (!Number.isFinite(value) || (mode === 'every_n' ? !Number.isSafeInteger(value) || value < 1 || value > 1000000 : value < .001 || value > (mode === 'fps' ? 240 : 604800)))) throw new Error('间隔范围为 0.001～604800 秒；源帧间隔为 1～1000000 整数；目标帧率为 0.001～240。');
+    if (!selectedRanges.length || selectedRanges.length > 32 || selectedRanges.some((r, i) => !Number.isFinite(r.start) || !Number.isFinite(r.end) || r.start < 0 || r.end > VIDEO_MAX_RANGE_SECONDS || r.end <= r.start || (inspection.durationSeconds !== null && r.end > inspection.durationSeconds) || (i > 0 && r.start < selectedRanges[i - 1].end))) throw new Error(`时间段需按先后顺序填写：起点非负、终点大于起点、范围互不重叠，且终点不超过 ${VIDEO_MAX_RANGE_SECONDS} 秒和已知视频时长。`);
+    const value = Number(sampling); if (mode !== 'scene' && (!Number.isFinite(value) || (mode === 'every_n' ? !Number.isSafeInteger(value) || value < 1 || value > 1000000 : value < .001 || value > (mode === 'fps' ? 240 : VIDEO_MAX_RANGE_SECONDS)))) throw new Error(`间隔范围为 0.001～${VIDEO_MAX_RANGE_SECONDS} 秒；源帧间隔为 1～1000000 整数；目标帧率为 0.001～240。`);
     const size = { width: Number(width), height: Number(height), fit };
     if (resize && (!Number.isSafeInteger(size.width) || !Number.isSafeInteger(size.height) || size.width < 1 || size.height < 1 || size.width > 20000 || size.height > 20000 || size.width * size.height > 40000000)) throw new Error('输出宽高需为 1～20000 的整数，且不超过 4000 万像素。');
     const jpegQuality = Number(quality); if (format === 'jpg' && (!Number.isInteger(jpegQuality) || jpegQuality < 2 || jpegQuality > 31)) throw new Error('JPEG 质量参数需为 2～31 的整数。');
@@ -292,6 +292,7 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
     ...(sourcePath ? { copyCommand: () => void copyTranscodeCommand(), transcode: () => void transcode() } : {})
   };
   const fileName = sourcePath ? sourcePath.split(/[\\/]/).pop() : '';
+  const durationOutOfRange = duration !== null && duration > VIDEO_MAX_RANGE_SECONDS;
   const blocked = busy || inspecting || transcoding || recipeBusy;
   return <Modal title="从视频抽取素材" onClose={() => { if (!blocked) onClose(); }}><div className="form-stack video-import">
     {!inspection
@@ -304,6 +305,7 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
       : <>
         <div className="video-inspection"><div className="video-inspection-head"><strong title={sourcePath}>{inspection.sourceName}</strong><button className="text-button" onClick={() => void choose()} disabled={blocked}>重新选择</button></div><p>{inspection.width} × {inspection.height} · {durationLabel(duration)}</p><p className="muted tiny">报告帧率：{inspection.reportedFrameRate ?? '未知'} · 报告帧数：{inspection.reportedFrameCount ?? '未知'}</p>{transcodePath && <p className="muted tiny">来源为本机转码副本（临时文件，导入素材后自动删除）。</p>}</div>
         {inspection.geometryNotice && <Notice>{inspection.geometryNotice}</Notice>}
+        {durationOutOfRange && <Notice>视频时长超过单个时间段上限 {VIDEO_MAX_RANGE_SECONDS} 秒，请取消「使用整段已知时长」并填写分段范围，或先裁剪视频后再抽帧。</Notice>}
         {downsampled && <Notice>源视频长边 {Math.max(inspection.width, inspection.height)} 像素，已默认把输出缩到长边 {VIDEO_DOWNSAMPLE_LONG_EDGE} 像素（保持宽高比）：原尺寸送模型会明显更容易超时。需要全分辨率时在下面取消「指定输出尺寸」。</Notice>}
         <div className="video-recipe"><Field label="抽帧配方"><select aria-label="抽帧配方" disabled={blocked} value={recipeId} onChange={e => { const picked = available.find(item => item.id === e.target.value); if (picked) applyRecipe(picked); else { setRecipeId(''); setRecipeNotice(''); } }}><option value="">自定义（不使用配方）</option><optgroup label="推荐配方">{available.filter(item => item.builtin).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup>{available.some(item => !item.builtin) && <optgroup label="我的配方">{available.filter(item => !item.builtin).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup>}</select></Field><div className="video-recipe-actions"><Button disabled={blocked} onClick={() => { setSavingRecipe(true); setRecipeName(''); }}>保存当前为配方</Button>{available.some(item => item.id === recipeId && !item.builtin) && <Button disabled={blocked} onClick={() => void dropRecipe(recipeId)}>删除配方</Button>}</div></div>
         {savingRecipe && <div className="video-recipe-save"><input aria-label="配方名称" maxLength={40} placeholder="例如：园区监控夜间" disabled={blocked} value={recipeName} onChange={e => setRecipeName(e.target.value)} /><Button className="primary" busy={recipeBusy} disabled={blocked} onClick={() => void commitRecipe()}>保存</Button><Button disabled={blocked} onClick={() => { setSavingRecipe(false); setRecipeName(''); }}>取消</Button></div>}
@@ -332,6 +334,6 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
     <MediaError error={error} handlers={errorHandlers} busy={blocked} />
     {command && <textarea className="transcode-command" aria-label="转码命令" readOnly value={command} />}
     <FrameAutoImportOption disabled={busy} />
-    <div className="modal-actions"><Button disabled={blocked} onClick={onClose}>取消</Button>{inspection && <Button className="primary" disabled={isDemo} busy={busy} onClick={() => void create()}>开始抽帧</Button>}</div>
+    <div className="modal-actions"><Button disabled={blocked} onClick={onClose}>取消</Button>{inspection && <Button className="primary" disabled={isDemo || (durationOutOfRange && whole)} busy={busy} onClick={() => void create()}>开始抽帧</Button>}</div>
   </div></Modal>;
 }

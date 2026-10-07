@@ -1,4 +1,4 @@
-import { MEDIA_JOB_KINDS, VIDEO_SCENE_MIN_INTERVAL_RANGE, VIDEO_SCENE_THRESHOLD_RANGE, isMediaJobKind, type MediaJob, type ScreeningParameters, type ScreeningSection } from '../shared/media.ts';
+import { MEDIA_JOB_KINDS, VIDEO_MAX_RANGE_SECONDS, VIDEO_SCENE_MIN_INTERVAL_RANGE, VIDEO_SCENE_THRESHOLD_RANGE, isMediaJobKind, type MediaJob, type ScreeningParameters, type ScreeningSection } from '../shared/media.ts';
 import type { ToolDefinition, ToolEnvironment } from './tools.ts';
 import { AgentError, fields, id, ids, integer, object, text } from './validation.ts';
 
@@ -50,7 +50,7 @@ function videoRanges(value: unknown) {
   if (!Array.isArray(value) || !value.length || value.length > 32) throw new AgentError('INVALID_ARGUMENT', '时间段必须为 1～32 段');
   let previousEnd = 0;
   return value.map((item, index) => {
-    const raw = object(item, '时间段'), start = finite(raw.start, '时间段起点', 0, 604800), end = finite(raw.end, '时间段终点', 0, 604800);
+    const raw = object(item, '时间段'), start = finite(raw.start, '时间段起点', 0, VIDEO_MAX_RANGE_SECONDS), end = finite(raw.end, '时间段终点', 0, VIDEO_MAX_RANGE_SECONDS);
     if (start >= end) throw new AgentError('INVALID_ARGUMENT', '时间段结束值须大于开始值');
     if (index && start < previousEnd) throw new AgentError('INVALID_ARGUMENT', '时间段须按时间排序且不能重叠');
     previousEnd = end;
@@ -225,13 +225,13 @@ export const MEDIA_TOOL_DEFINITIONS: ToolDefinition[] = [
       if (new Set(records.map(value => value.id)).size !== records.length || args.kind != null && records.some(value => value.kind !== args.kind)) invalid('媒体任务分页重复或类型不匹配');
       return { ...pagination(result.total, offset, limit, records.length), items: records.map(jobSummary) };
     } },
-  { name: 'create_video_job', description: '为一个已授权的视频提交抽帧任务，返回真实 job，需后续查询帧结果。sourcePath 必须是用户授权过的本地视频路径：可以是用户通过「选择视频抽帧」或拖拽选择的，也可以是用户消息「随消息添加素材」括注里列出的视频路径（那是用户随消息显式添加的素材）。助手不能自行指定任意本地文件，也不能凭已读到的任务信息反推路径；用户既没拖视频、括注里也没有视频路径时应提示其先选择，不要把路径猜测出来提交。默认推荐 mode=scene（场景变化采样，界面同款默认）：按 minIntervalSeconds 取候选帧、与上一张保留帧的差异达到 sceneThreshold 才留，帧数比等间隔采样更少；两个参数可省略，省略即用引擎默认 0.15 / 1 秒。',
+  { name: 'create_video_job', description: '为一个已授权的视频提交抽帧任务，返回真实 job，需后续查询帧结果。sourcePath 必须是用户授权过的本地视频路径：可以是用户通过「选择视频抽帧」或拖拽选择的，也可以是用户消息「随消息添加素材」括注里列出的视频路径（那是用户随消息显式添加的素材）。助手不能自行指定任意本地文件，也不能凭已读到的任务信息反推路径；用户既没拖视频、括注里也没有视频路径时应提示其先选择，不要把路径猜测出来提交。ranges 可填 null，表示使用安全默认时间段 0～604800 秒；不要猜测视频时长或填写超过 604800 秒的终点。默认推荐 mode=scene（场景变化采样，界面同款默认）：按 minIntervalSeconds 取候选帧、与上一张保留帧的差异达到 sceneThreshold 才留，帧数比等间隔采样更少；两个参数可省略，省略即用引擎默认 0.15 / 1 秒。',
     parameters: schema({ sourcePath: { type: 'string', minLength: 1, maxLength: 32767 }, mode: { type: 'string', enum: ['interval', 'every_n', 'fps', 'scene'] },
       intervalSeconds: { type: ['number', 'null'], minimum: 0.001, maximum: 604800 }, everyNFrames: int(1, 1000000),
       targetFps: { type: ['number', 'null'], minimum: 0.001, maximum: 240 },
       sceneThreshold: { type: ['number', 'null'], minimum: VIDEO_SCENE_THRESHOLD_RANGE.min, maximum: VIDEO_SCENE_THRESHOLD_RANGE.max },
       minIntervalSeconds: { type: ['number', 'null'], minimum: VIDEO_SCENE_MIN_INTERVAL_RANGE.min, maximum: VIDEO_SCENE_MIN_INTERVAL_RANGE.max },
-      ranges: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'object', properties: { start: { type: 'number', minimum: 0 }, end: { type: 'number', minimum: 0 } },
+      ranges: { type: ['array', 'null'], minItems: 1, maxItems: 32, items: { type: 'object', properties: { start: { type: 'number', minimum: 0, maximum: VIDEO_MAX_RANGE_SECONDS }, end: { type: 'number', minimum: 0, maximum: VIDEO_MAX_RANGE_SECONDS } },
         required: ['start', 'end'], additionalProperties: false } },
       streamIndex: int(0, 65535), format: { type: ['string', 'null'], enum: ['png', 'jpg', null] }, jpegQuality: int(2, 31),
       maxFrames: int(1, 10000), timeoutMs: int(1, 86400000) }), mutation: true,
@@ -253,7 +253,7 @@ export const MEDIA_TOOL_DEFINITIONS: ToolDefinition[] = [
         if (args.sceneThreshold != null) parameters.sceneThreshold = finite(args.sceneThreshold, '场景差异阈值', VIDEO_SCENE_THRESHOLD_RANGE.min, VIDEO_SCENE_THRESHOLD_RANGE.max);
         if (args.minIntervalSeconds != null) parameters.minIntervalSeconds = finite(args.minIntervalSeconds, '场景取样间隔', VIDEO_SCENE_MIN_INTERVAL_RANGE.min, VIDEO_SCENE_MIN_INTERVAL_RANGE.max);
       }
-      if (args.ranges != null) parameters.ranges = videoRanges(args.ranges);
+      parameters.ranges = args.ranges == null ? [{ start: 0, end: VIDEO_MAX_RANGE_SECONDS }] : videoRanges(args.ranges);
       for (const [key, maximum] of [['streamIndex', 65535], ['jpegQuality', 31], ['maxFrames', 10000], ['timeoutMs', 86400000]] as const)
         if (args[key] != null) parameters[key] = integer(args[key], key, key === 'jpegQuality' ? 2 : 1, maximum);
       if (args.format != null) {

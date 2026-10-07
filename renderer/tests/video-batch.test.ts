@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { VideoInspection } from '../../shared/media';
-import { VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_DOWNSAMPLE_THRESHOLD, VIDEO_MAX_FRAMES } from '../../shared/media';
+import { VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_DOWNSAMPLE_THRESHOLD, VIDEO_MAX_FRAMES, VIDEO_MAX_RANGE_SECONDS } from '../../shared/media';
 import { batchExtractionPlan, batchFailures, batchOutcome, remainingBatchItems, retryWhileMediaBusy } from '../src/videoBatchPlan';
 
 function inspection(overrides: Partial<VideoInspection> = {}): VideoInspection {
@@ -58,6 +58,37 @@ test('默认每秒一帧超出上限时自动放宽间隔', () => {
   const plan = batchExtractionPlan(inspection({ durationSeconds: VIDEO_MAX_FRAMES + 1 }));
   assert.ok(!('error' in plan) && plan.parameters.mode === 'interval');
   if (plan.parameters.mode === 'interval') assert.equal(plan.parameters.intervalSeconds, 2);
+});
+
+test('超过引擎时间段上限时提前阻止批量提交', () => {
+  const duration = VIDEO_MAX_RANGE_SECONDS + 2;
+  const plan = batchExtractionPlan(inspection({ durationSeconds: duration }));
+  assert.ok('error' in plan);
+  if ('error' in plan) assert.match(plan.error, /超过引擎允许的单段范围/);
+});
+
+test('批量自定义按源帧间隔传递参数', () => {
+  const plan = batchExtractionPlan(inspection(), { density: 'custom', customMode: 'every_n', customValue: 30 });
+  assert.ok(!('error' in plan));
+  assert.equal(plan.parameters.mode, 'every_n');
+  if (plan.parameters.mode === 'every_n') assert.equal(plan.parameters.everyNFrames, 30);
+});
+
+test('批量自定义按秒间隔与目标帧率传递参数', () => {
+  const interval = batchExtractionPlan(inspection(), { density: 'custom', customMode: 'interval', customValue: 2.5 });
+  const fps = batchExtractionPlan(inspection(), { density: 'custom', customMode: 'fps', customValue: 5 });
+  assert.ok(!('error' in interval) && interval.parameters.mode === 'interval');
+  assert.ok(!('error' in fps) && fps.parameters.mode === 'fps');
+  if (interval.parameters.mode === 'interval') assert.equal(interval.parameters.intervalSeconds, 2.5);
+  if (fps.parameters.mode === 'fps') assert.equal(fps.parameters.targetFps, 5);
+});
+
+test('批量自定义抽样超过单视频帧数上限时返回明确错误', () => {
+  const plan = batchExtractionPlan(inspection({ durationSeconds: VIDEO_MAX_FRAMES + 1 }), {
+    density: 'custom', customMode: 'interval', customValue: 1,
+  });
+  assert.ok('error' in plan);
+  if ('error' in plan) assert.match(plan.error, /超过.*10000.*帧/);
 });
 
 test('批量探测遇到媒体任务占用后等待并自动重试', async () => {
