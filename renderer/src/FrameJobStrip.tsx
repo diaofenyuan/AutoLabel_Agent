@@ -97,6 +97,7 @@ export function FrameJobStrip() {
   const [job, setJob] = useState<MediaJob | null>(null);
   const [error, setError] = useState('');
   const [retrying, setRetrying] = useState(false);
+  const [importingJobId, setImportingJobId] = useState('');
   const [createdTimelineId, setCreatedTimelineId] = useState<string | null>(null);
   const jobId = mediaJob?.id ?? '';
   const autoImport = prefs.frameAutoImport !== false;
@@ -198,6 +199,23 @@ export function FrameJobStrip() {
     finally { setRetrying(false); }
   }
 
+  async function importNow() {
+    if (importing.has(jobId)) return;
+    importing.add(jobId);
+    setImportingJobId(jobId);
+    setError('');
+    try {
+      const imported = await request<MediaJob>('media.video.import', { jobId });
+      setJob(imported);
+      await Promise.all([refreshAssets(), refreshProjects()]);
+      notify('抽帧产物已导入项目，素材可以直接标注了。');
+    } catch (e) { setError(errorMessage(e)); }
+    finally {
+      importing.delete(jobId);
+      setImportingJobId(current => current === jobId ? '' : current);
+    }
+  }
+
   if (!jobId || !job) return null;
   const importable = isImportableVideoJob(job);
   const importInterrupted = importable && job.status === 'interrupted';
@@ -218,10 +236,7 @@ export function FrameJobStrip() {
       {imported && <Button onClick={() => { setMediaJob(null); void navigate('overview'); }}>查看素材</Button>}
       {/* 失败后原地重试：源视频修好后不必回到清单重新找一遍，这里直接按原参数再跑一次。 */}
       {!imported && job.status === 'failed' && job.canRetry && <Button className="primary" busy={retrying} onClick={() => void retry()}>重试这条</Button>}
-      {!imported && importable && !autoImport && <Button className="primary" onClick={async () => {
-        try { const next = await request<MediaJob>('media.video.import', { jobId }); setJob(next); await Promise.all([refreshAssets(), refreshProjects()]); await ensureTimeline(next); }
-        catch (e) { setError(errorMessage(e)); }
-      }}>立即导入素材</Button>}
+      {!imported && importable && !autoImport && <Button className="primary" busy={importingJobId === jobId} onClick={() => void importNow()}>立即导入素材</Button>}
       {!imported && job.status === 'completed' && !job.artifactCommitted && <span className="muted tiny">正在封存抽帧产物…</span>}
       {error && <span className="text-error tiny">{error}</span>}
       <Button onClick={() => setMediaJob(null)}>收起</Button>

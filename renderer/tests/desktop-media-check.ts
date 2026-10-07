@@ -98,8 +98,18 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     await wait(`document.querySelector('.media-job-detail')?.innerText.includes('抽帧就绪，待导入')`); await wait(`document.querySelector('.frame-job-strip')?.innerText.includes('抽帧就绪，待导入')`, 8000); await button('查看抽帧记录'); await wait(`document.querySelectorAll('.video-frame-list>div:not(.pagination)').length===4`); await capture('-ready.png', '.media-job-detail');
     checks.push({ check: 'video-inspect-extract-before-import', inspection, jobId: firstJob.id, geometryNoticeVisible: await js(`document.querySelector('.media-job-detail .notice')?.innerText??null`), frames: frames.items, overlappingRangesBlocked: true, assetCountBeforeImport: 0 });
 
-    // ===== 导入：产物入库后才可用，素材在项目概览里可见 =====
-    await button('将抽帧导入项目'); await wait(`window.autoLabel.request('media.job.get',{jobId:${json(firstJob.id)}}).then(j=>j.status==='completed'&&j.stage==='done'&&j.assetsCommitted)`, 60000); await wait(`document.querySelector('.frame-job-strip')?.innerText.includes('素材已入库，可以直接标注')`, 8000); const importedFrames = await api('media.video.frames', { jobId: firstJob.id, offset: 0, limit: 20 }); assert.ok(importedFrames.items.every((f: any) => f.assetId)); const all = await api('asset.list', { projectId: project.id, limit: 100 }); assert.equal(all.total, 4);
+    // ===== 进度条手动导入：点击后立即进入忙碌态，重复点击不会并发提交 =====
+    window.setContentSize(390, 844);
+    await wait(`document.querySelector('.frame-job-strip')?.innerText.includes('抽帧就绪，待导入')`);
+    assert.equal(await js<boolean>(`document.documentElement.scrollWidth<=window.innerWidth`), true, '窄屏进度条不得撑出页面宽度');
+    await capture('-manual-import-mobile.png', '.frame-job-strip'); await button('立即导入素材');
+    await wait(`!!document.querySelector('.frame-job-actions .button.primary[aria-busy="true"]')`);
+    await js(`document.querySelector('.frame-job-actions .button.primary')?.click()`);
+    assert.equal(await js<boolean>(`!!document.querySelector('.frame-job-actions .button.primary[aria-busy="true"]:disabled')`), true, '手动导入开始后按钮应显示忙碌并禁用重复点击');
+    await wait(`window.autoLabel.request('media.job.get',{jobId:${json(firstJob.id)}}).then(j=>j.status==='completed'&&j.stage==='done'&&j.assetsCommitted)`, 60000);
+    await wait(`document.querySelector('.frame-job-strip')?.innerText.includes('素材已入库，可以直接标注')`, 8000);
+    window.setContentSize(1440, 940);
+    const importedFrames = await api('media.video.frames', { jobId: firstJob.id, offset: 0, limit: 20 }); assert.ok(importedFrames.items.every((f: any) => f.assetId)); const all = await api('asset.list', { projectId: project.id, limit: 100 }); assert.equal(all.total, 4);
     await openProjectOverview(driver, name);
     await wait(`document.querySelectorAll('.result-thumb').length===4`);
     // ===== 缩略图：网格拉的是可重建的缩略图（<30KB），不是全尺寸 PNG；缓存删掉自动重建 =====
