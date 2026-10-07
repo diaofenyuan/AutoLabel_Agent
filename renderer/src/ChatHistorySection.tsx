@@ -45,12 +45,17 @@ export default function ChatHistorySection({ onBusyChange }: { onBusyChange: (bu
     finally { setBusy(false); }
   }
   async function exportAll() {
-    const target = await (await getBridge()).saveFile({ title: '导出全部对话记录', defaultPath: `对话记录-${new Date().toISOString().slice(0, 10)}.json`, extension: 'json' });
-    if (!target) return;
-    await run(async () => {
+    if (busy) return;
+    setBusy(true); setError('');
+    try {
+      // 保存对话框也属于导出流程：先锁住入口，避免连续点击打开多个系统对话框。
+      const target = await (await getBridge()).saveFile({ title: '导出全部对话记录', defaultPath: `对话记录-${new Date().toISOString().slice(0, 10)}.json`, extension: 'json' });
+      if (!target) return;
       const result = await request<{ sessions: number }>('chat.history.export', { targetPath: target });
+      await load();
       notify(`已导出 ${result.sessions} 个对话。`);
-    });
+    } catch (e) { setError(errorMessage(e)); }
+    finally { setBusy(false); }
   }
   if (isDemo) return <section className="settings-section"><h2>对话记录</h2><Notice>浏览器演示不保存本地对话记录，请在桌面版本中使用。</Notice></section>;
   return <div className="storage-settings">
@@ -66,7 +71,7 @@ export default function ChatHistorySection({ onBusyChange }: { onBusyChange: (bu
       {status?.warning && <p className="inline-error">{status.warning}</p>}
       <div className="actions">
         <Button disabled={busy || !status} onClick={() => void run(async () => { if (status) await (await getBridge()).openPath(status.root); })}><FolderOpen size={14} />打开目录</Button>
-        <Button disabled={busy || !status?.sessions} onClick={() => void exportAll()}><Download size={14} />导出全部</Button>
+        <Button disabled={busy || !status?.sessions} busy={busy} onClick={() => void exportAll()}><Download size={14} />导出全部</Button>
         <Button disabled={busy || !status?.trash.entries} onClick={() => void run(async () => {
           const result = await request<ChatMutationResult>('chat.history.purge', { all: true });
           await loadTrash();

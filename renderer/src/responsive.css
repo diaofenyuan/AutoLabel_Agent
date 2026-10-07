@@ -6,3 +6,4 @@
 }@media(max-width:540px){.tasks-engine-gate{align-items:flex-start}.overview-page>.page-heading{flex-direction:column}.overview-page>.page-heading .actions{width:100%;justify-content:flex-start;flex-wrap:wrap}}
 /* 短屏手机上欢迎内容高度超过视口时从顶部开始排布，避免标题被垂直居中推到屏幕外。 */
 @media(max-width:540px) and (max-height:760px){.chat-welcome{justify-content:flex-start;min-height:auto;padding-top:22px}}
+@media(max-width:540px){.chat-trash-item{flex-wrap:wrap;align-items:center}.chat-trash-item>span:nth-child(2){flex:1 1 100%;order:3;min-width:0;overflow-wrap:anywhere}.chat-trash-item>.button{margin-left:auto}}
