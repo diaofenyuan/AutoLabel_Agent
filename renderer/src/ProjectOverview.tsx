@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Database, Download, FolderOpen, Layers, MessageSquare, MoreHorizontal, RefreshCw, ShieldCheck, ClipboardCheck } from 'lucide-react';
+import { Database, Download, FolderOpen, Layers, MessageSquare, MoreHorizontal, Plus, RefreshCw, ShieldCheck, ClipboardCheck } from 'lucide-react';
 import type { Annotation, Asset } from '../../shared/protocol';
 import type { LibraryResource } from '../../shared/resources';
 import { useApp } from './context';
@@ -77,7 +77,7 @@ async function forEachConcurrent<T>(items: T[], limit: number, worker: (item: T)
  */
 export default function ProjectOverview() {
   useDismissMoreMenu();
-  const { project, notify, navigate, openProject, selectedAssetIds, setSelectedAssetIds } = useApp();
+  const { project, notify, navigate, openProject, startProjectChat, selectedAssetIds, setSelectedAssetIds } = useApp();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [total, setTotal] = useState(0);
   const [filterCounts, setFilterCounts] = useState<Record<ResultFilter, number>>({ all: 0, candidate: 0, empty: 0, failed: 0, confirmed: 0, unlabeled: 0 });
@@ -216,7 +216,7 @@ export default function ProjectOverview() {
 
   return <div className="content overview-page">
     <PageHeader title={`项目概览 · ${project.name}`} description={`${taskNames[project.taskType]} · ${project.classes.length} 个类别 · 建自 ${new Date(project.createdAt).toLocaleDateString('zh-CN')}`}
-      actions={<><Button onClick={() => void openProject(project)}><MessageSquare size={14} />进入对话</Button>
+      actions={<><Button onClick={() => void startProjectChat().catch(e => notify(errorMessage(e), true))}><Plus size={14} />新建对话</Button><Button onClick={() => void openProject(project)}><MessageSquare size={14} />进入对话</Button>
         <details className="overview-more-actions"><summary className="button" aria-label="更多项目操作"><MoreHorizontal size={15} />更多</summary><div className="overview-more-menu">
           <Button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); setDialog('template'); }}><ShieldCheck size={14} />类别与点位模板</Button>
           <Button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); setDialog('resources'); }}><FolderOpen size={14} />资源</Button>

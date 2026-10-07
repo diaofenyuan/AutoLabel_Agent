@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ChatStore } from './chat-store';
@@ -85,6 +85,58 @@ test('删除项目时其对话一并移入回收站，其他项目的会话不�
     assert.equal(restored.restored, 1);
     const recovered = await store.get('doomed');
     assert.deepEqual(recovered.messages.map(message => message.content), ['被删项目的对话', '好']);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('从项目派生新对话时保留全部历史摘要和最近会话素材范围', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'autolabel-chat-store-fork-'));
+  const store = new ChatStore(() => root);
+  try {
+    await store.record({ sessionId: 'history-one', projectId: 'project-1', providerId: 'p', model: 'm',
+      messages: [{ role: 'user', content: '先整理车辆素材' }], reply: '已整理车辆素材',
+      context: { scope: 'selected', assetIds: ['asset-1', 'asset-2'], referenceAssetIds: ['reference-1'] } });
+    await store.record({ sessionId: 'history-two', projectId: 'project-1', providerId: 'p', model: 'm',
+      messages: [{ role: 'user', content: '再检查行人' }], reply: '已检查行人',
+      context: { scope: 'project' } });
+    await store.record({ sessionId: 'outside', projectId: 'project-2', providerId: 'p', model: 'm',
+      messages: [{ role: 'user', content: '项目外的内容' }], reply: '不应进入摘要' });
+
+    const forked = await store.fork({ sessionId: 'history-new', projectId: 'project-1', projectName: '车辆项目' });
+    assert.equal(forked.id, 'history-new');
+    assert.deepEqual(forked.context, { scope: 'project' });
+    assert.deepEqual(forked.memory?.conversations.map(item => item.title), ['再检查行人', '先整理车辆素材']);
+    assert.ok(forked.memory?.conversations.every(item => item.projectId === 'project-1'));
+
+    const reloaded = await store.get('history-new');
+    assert.deepEqual(reloaded.context, { scope: 'project' });
+    assert.deepEqual(reloaded.memory?.conversations.map(item => item.lastAssistant), ['已检查行人', '已整理车辆素材']);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('派生对话删除后恢复仍保留快照，损坏快照只给出警告', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'autolabel-chat-store-memory-life-'));
+  const store = new ChatStore(() => root);
+  try {
+    await store.record({ sessionId: 'source', projectId: 'project-1', providerId: 'p', model: 'm',
+      messages: [{ role: 'user', content: '保留这段背景' }], reply: '背景已记录', context: { scope: 'selected', assetIds: ['asset-1'] } });
+    await store.fork({ sessionId: 'derived', projectId: 'project-1', projectName: '项目' });
+    const memoryFile = path.join(root, 'derived.memory.json');
+    assert.match(await readFile(memoryFile, 'utf8'), /背景已记录/);
+
+    const trash = await store.delete(['derived']);
+    assert.equal(trash.removed, 1);
+    const trashEntries = await store.trashList();
+    assert.equal((await store.restore([trashEntries.entries[0].id])).restored, 1);
+    assert.equal((await store.get('derived')).memory?.conversations[0].lastAssistant, '背景已记录');
+
+    await writeFile(memoryFile, '{broken', 'utf8');
+    const reloaded = await store.get('derived');
+    assert.equal(reloaded.memory, undefined);
+    assert.match((await store.list()).warning ?? '', /摘要/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -3,12 +3,16 @@ import { appendFile, lstat, mkdir, open, readdir, readFile, rename, rm } from 'n
 import path from 'node:path';
 import {
   CHAT_TITLE_LIMIT, CHAT_TRASH_RETENTION_DAYS, type ChatHistoryList, type ChatHistoryStatus, type ChatMessage,
-  type ChatMutationResult, type ChatRole, type ChatSession, type ChatSessionSummary, type ChatTrashEntry, type ChatTrashList,
+  type ChatMaterialContext, type ChatMemoryConversation, type ChatMemorySnapshot, type ChatMutationResult, type ChatRole,
+  type ChatSession, type ChatSessionSummary, type ChatTrashEntry, type ChatTrashList,
 } from '../shared/chat';
 import { DesktopError } from './validation';
 
 const idPattern = /^[A-Za-z0-9_-]{1,128}$/;
 const roles = new Set<ChatRole>(['system', 'user', 'assistant', 'tool']);
+const scopes = new Set<ChatMaterialContext['scope']>(['current', 'project', 'page', 'selected']);
+const MEMORY_LIMIT = 60000;
+const MEMORY_TEXT_LIMIT = 1200;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function validId(value: unknown): string {
@@ -42,6 +46,69 @@ async function readJson<T>(filename: string): Promise<T | undefined> {
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
 }
 
+function normalizedIds(value: unknown, limit = 5000): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const values = [...new Set(value.filter(item => typeof item === 'string' && idPattern.test(item)))].slice(0, limit) as string[];
+  return values.length ? values : [];
+}
+
+function normalizeContext(raw: unknown): ChatMaterialContext | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const item = raw as Record<string, unknown>;
+  if (!scopes.has(item.scope as ChatMaterialContext['scope'])) return undefined;
+  const context: ChatMaterialContext = { scope: item.scope as ChatMaterialContext['scope'] };
+  const assetIds = normalizedIds(item.assetIds);
+  const referenceAssetIds = normalizedIds(item.referenceAssetIds, 63);
+  if (assetIds !== undefined) context.assetIds = assetIds;
+  if (referenceAssetIds !== undefined) context.referenceAssetIds = referenceAssetIds;
+  if (Array.isArray(item.referenceResources)) {
+    context.referenceResources = item.referenceResources.flatMap(value => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+      const resource = value as Record<string, unknown>;
+      if (typeof resource.resourceId !== 'string' || !idPattern.test(resource.resourceId)) return [];
+      const version = resource.version === undefined ? undefined
+        : Number.isInteger(resource.version) && Number(resource.version) >= 0 ? Number(resource.version) : undefined;
+      const classMap = resource.classMap && typeof resource.classMap === 'object' && !Array.isArray(resource.classMap)
+        ? Object.fromEntries(Object.entries(resource.classMap).filter(([from, to]) => idPattern.test(from) && typeof to === 'string' && idPattern.test(to)))
+        : undefined;
+      return [{ resourceId: resource.resourceId, ...(version === undefined ? {} : { version }), ...(classMap ? { classMap } : {}) }];
+    }).slice(0, 63);
+  }
+  return context;
+}
+
+function trimMemoryText(value: string | undefined): string | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  return text.length > MEMORY_TEXT_LIMIT ? `${text.slice(0, MEMORY_TEXT_LIMIT)}…` : text;
+}
+
+function normalizeMemory(raw: unknown): ChatMemorySnapshot | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  if (typeof value.projectId !== 'string' || !idPattern.test(value.projectId) || !Array.isArray(value.conversations)) return undefined;
+  const conversations: ChatMemoryConversation[] = value.conversations.flatMap(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const entry = item as Record<string, unknown>;
+    if (typeof entry.id !== 'string' || !idPattern.test(entry.id) || typeof entry.projectId !== 'string' || !idPattern.test(entry.projectId)) return [];
+    return [{
+      id: entry.id, projectId: entry.projectId,
+      title: typeof entry.title === 'string' && entry.title ? entry.title : '未命名对话',
+      updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : nowIso(),
+      messageCount: Number.isInteger(entry.messageCount) && Number(entry.messageCount) >= 0 ? Number(entry.messageCount) : 0,
+      ...(trimMemoryText(typeof entry.firstUser === 'string' ? entry.firstUser : undefined) ? { firstUser: trimMemoryText(entry.firstUser as string) } : {}),
+      ...(trimMemoryText(typeof entry.lastAssistant === 'string' ? entry.lastAssistant : undefined) ? { lastAssistant: trimMemoryText(entry.lastAssistant as string) } : {}),
+      ...(normalizeContext(entry.context) ? { context: normalizeContext(entry.context) } : {}),
+    }];
+  });
+  return {
+    projectId: value.projectId,
+    generatedAt: typeof value.generatedAt === 'string' ? value.generatedAt : nowIso(),
+    conversations,
+    truncatedCount: Number.isInteger(value.truncatedCount) && Number(value.truncatedCount) >= 0 ? Number(value.truncatedCount) : 0,
+  };
+}
+
 function normalizeSummary(raw: unknown): ChatSessionSummary | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const item = raw as Record<string, unknown>;
@@ -61,6 +128,7 @@ function normalizeSummary(raw: unknown): ChatSessionSummary | undefined {
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
     lastMessageAt,
     messageCount: Number.isInteger(item.messageCount) && Number(item.messageCount) >= 0 ? Number(item.messageCount) : 0,
+    ...(normalizeContext(item.context) ? { context: normalizeContext(item.context) } : {}),
   };
 }
 
@@ -83,6 +151,7 @@ export interface ChatRecordInput {
   providerId: string;
   model: string;
   messages: Array<{ role: string; content: string }>;
+  context?: ChatMaterialContext;
   reply?: string;
   error?: string;
 }
@@ -104,6 +173,7 @@ export class ChatStore {
   }
   private indexFile(): string { return path.join(this.directory(), 'index.json'); }
   private messageFile(sessionId: string): string { return path.join(this.directory(), `${sessionId}.jsonl`); }
+  private memoryFile(sessionId: string): string { return path.join(this.directory(), `${sessionId}.memory.json`); }
   private trashDirectory(): string { return path.join(this.directory(), '.trash'); }
 
   private serial<T>(operation: () => Promise<T>): Promise<T> {
@@ -139,13 +209,27 @@ export class ChatStore {
       .filter((item): item is ChatMessage => !!item);
   }
 
+  private async readMemory(sessionId: string): Promise<ChatMemorySnapshot | undefined> {
+    try {
+      const raw = await readJson<unknown>(this.memoryFile(sessionId));
+      const memory = normalizeMemory(raw);
+      if (!memory) return undefined;
+      return memory;
+    } catch {
+      // 快照损坏不能阻断当前会话；保留索引和消息，下一次派生会重新生成。
+      this.warning = '部分对话历史摘要无法读取，已跳过损坏快照';
+      return undefined;
+    }
+  }
+
   /** 索引与消息数保持一致的唯一入口；重复提交同一轮不会产生重复消息。 */
-  private async createEntry(input: { sessionId: string; projectId?: string; title: string; providerId: string; model: string; titleSource?: 'auto' | 'user' }): Promise<ChatSessionSummary> {
+  private async createEntry(input: { sessionId: string; projectId?: string; title: string; providerId: string; model: string; titleSource?: 'auto' | 'user'; context?: ChatMaterialContext }): Promise<ChatSessionSummary> {
     const at = nowIso();
     return {
       id: input.sessionId, title: input.title, titleSource: input.titleSource ?? 'auto', pinned: false, pinOrder: 0,
       ...(input.projectId ? { projectId: input.projectId } : {}), providerId: input.providerId, model: input.model,
       createdAt: at, updatedAt: at, lastMessageAt: at, messageCount: 0,
+      ...(input.context ? { context: input.context } : {}),
     };
   }
 
@@ -162,7 +246,55 @@ export class ChatStore {
       const id = validId(sessionId);
       const entry = (await this.readIndex()).find(item => item.id === id);
       if (!entry) throw new DesktopError('CHAT_SESSION_NOT_FOUND', '对话不存在或已删除');
-      return { ...entry, messages: await this.readMessages(id) };
+      const memory = await this.readMemory(id);
+      return { ...entry, messages: await this.readMessages(id), ...(memory ? { memory } : {}) };
+    });
+  }
+
+  /**
+   * 从项目派生独立会话：历史只生成摘要快照，最近有消息会话的素材范围作为新会话初始上下文。
+   * 快照与当前消息文件分开，避免旧对话被重复展示或后续修改相互污染。
+   */
+  fork(input: { sessionId: string; projectId: string; projectName?: string; sourceSessionId?: string; providerId?: string; model?: string }): Promise<ChatSession> {
+    return this.serial(async () => {
+      const id = validId(input.sessionId);
+      const projectId = validId(input.projectId);
+      const sessions = await this.readIndex();
+      const existing = sessions.find(item => item.id === id);
+      if (existing) {
+        const memory = await this.readMemory(id);
+        return { ...existing, messages: await this.readMessages(id), ...(memory ? { memory } : {}) };
+      }
+      const candidates = ChatStore.sorted(sessions).filter(item => item.projectId === projectId && item.messageCount > 0);
+      const source = input.sourceSessionId
+        ? candidates.find(item => item.id === validId(input.sourceSessionId))
+        : candidates[0];
+      if (input.sourceSessionId && !source) throw new DesktopError('CHAT_SESSION_NOT_FOUND', '指定的源对话不存在或不属于当前项目');
+      const conversations: ChatMemoryConversation[] = [];
+      let used = 0;
+      let truncatedCount = 0;
+      for (const entry of candidates) {
+        const messages = await this.readMessages(entry.id);
+        const firstUser = messages.find(message => message.role === 'user')?.content;
+        const lastAssistant = [...messages].reverse().find(message => message.role === 'assistant')?.content;
+        const conversation: ChatMemoryConversation = {
+          id: entry.id, projectId, title: entry.title, updatedAt: entry.updatedAt, messageCount: entry.messageCount,
+          ...(firstUser ? { firstUser: trimMemoryText(firstUser) } : {}),
+          ...(lastAssistant ? { lastAssistant: trimMemoryText(lastAssistant) } : {}),
+          ...(entry.context ? { context: entry.context } : {}),
+        };
+        const weight = JSON.stringify(conversation).length;
+        if (used + weight > MEMORY_LIMIT) { truncatedCount++; continue; }
+        conversations.push(conversation); used += weight;
+      }
+      const memory: ChatMemorySnapshot = { projectId, generatedAt: nowIso(), conversations, truncatedCount };
+      const title = autoTitle('新对话') || `${input.projectName ? `${input.projectName} · ` : ''}新对话`;
+      const entry = await this.createEntry({ sessionId: id, projectId, title, providerId: input.providerId ?? '', model: input.model ?? '',
+        ...(source?.context ? { context: source.context } : {}) });
+      sessions.push(entry);
+      await this.writeIndex(ChatStore.sorted(sessions));
+      await atomicWrite(this.memoryFile(id), memory);
+      return { ...entry, messages: [], memory };
     });
   }
 
@@ -223,9 +355,12 @@ export class ChatStore {
     await mkdir(this.trashDirectory(), { recursive: true });
     for (const target of targets) {
       const messages = await this.readMessages(target.id);
+      const memory = await this.readMemory(target.id);
       const id = `${target.id}-${Date.now()}-${randomUUID().slice(0, 8)}`;
-      await atomicWrite(path.join(this.trashDirectory(), `${id}.json`), { id, sessionId: target.id, summary: target, messages, deletedAt: nowIso() });
+      await atomicWrite(path.join(this.trashDirectory(), `${id}.json`), { id, sessionId: target.id, summary: target, messages,
+        ...(memory ? { memory } : {}), deletedAt: nowIso() });
       staged.push({ file: this.messageFile(target.id), id: target.id });
+      staged.push({ file: this.memoryFile(target.id), id: target.id });
     }
     // 先写索引再删文件：宁可留下孤立消息文件，也不让索引指向缺失文件。
     await this.writeIndex(kept);
@@ -285,7 +420,7 @@ export class ChatStore {
       for (const entry of await this.readTrash()) {
         if (!wanted.has(entry.id)) continue;
         const file = path.join(this.trashDirectory(), `${entry.id}.json`);
-        const raw = await readJson<{ summary?: unknown; messages?: unknown[] }>(file);
+        const raw = await readJson<{ summary?: unknown; messages?: unknown[]; memory?: unknown }>(file);
         const summary = normalizeSummary(raw?.summary);
         if (!summary) continue;
         if (sessions.some(item => item.id === summary.id)) throw new DesktopError('CHAT_RESTORE_CONFLICT', `「${summary.title}」已存在，无法从回收站恢复`);
@@ -293,6 +428,8 @@ export class ChatStore {
         await mkdir(this.directory(), { recursive: true });
         // 消息文件是逐行 JSONL，用文本写入；atomicWrite 会把入参整体 JSON.stringify，套在这里会把消息双重编码成一行。
         await atomicWriteText(this.messageFile(summary.id), messages.map(message => JSON.stringify(message)).join('\n') + (messages.length ? '\n' : ''));
+        const memory = normalizeMemory(raw?.memory);
+        if (memory) await atomicWrite(this.memoryFile(summary.id), memory);
         sessions.push({ ...summary, messageCount: messages.length });
         await this.writeIndex(ChatStore.sorted(sessions));
         await rm(file, { force: true });
@@ -336,7 +473,10 @@ export class ChatStore {
       const wanted = Array.isArray(sessionIds) && sessionIds.length ? new Set(sessionIds.map(value => validId(value))) : undefined;
       const sessions = ChatStore.sorted(await this.readIndex()).filter(item => !wanted || wanted.has(item.id));
       const bundle: ChatSession[] = [];
-      for (const entry of sessions) bundle.push({ ...entry, messages: await this.readMessages(entry.id) });
+      for (const entry of sessions) {
+        const memory = await this.readMemory(entry.id);
+        bundle.push({ ...entry, messages: await this.readMessages(entry.id), ...(memory ? { memory } : {}) });
+      }
       return { exportedAt: nowIso(), version: 1, sessions: bundle };
     });
   }
@@ -386,6 +526,11 @@ export class ChatStore {
           title: autoTitle(firstUser) || new Date().toISOString().slice(0, 16).replace('T', ' '), providerId: input.providerId, model: input.model });
         sessions.push(entry);
       }
+      let indexChanged = false;
+      if (input.context) {
+        entry.context = input.context;
+        indexChanged = true;
+      }
       let aligned = 0;
       while (aligned < messages.length && aligned < recorded.length) {
         const role = roles.has(messages[aligned].role as ChatRole) ? messages[aligned].role as ChatRole : 'user';
@@ -395,6 +540,7 @@ export class ChatStore {
       const pending = messages.slice(aligned);
       if (!pending.length) {
         // 本次提交的每一条消息都已落库（同一轮重复提交）：直接返回，避免重复消息。
+        if (indexChanged) await this.writeIndex(ChatStore.sorted(sessions));
         return;
       }
       const at = nowIso();

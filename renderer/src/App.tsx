@@ -4,7 +4,7 @@ import { Context, blankChatSession, isEditableTarget, navAll, navLabel, type Cha
 import { getBridge, isDemo, request, errorMessage } from './bridge';
 import type { Project, Asset, Preferences, Provider, EngineEvent, EngineStatus } from './types';
 import { defaultPreferences } from './types';
-import type { ChatHistoryList, ChatSessionSummary } from '../../shared/chat';
+import type { ChatHistoryList, ChatSession as StoredChatSession, ChatSessionSummary } from '../../shared/chat';
 import { IconButton, Modal, ToastMessage } from './ui';
 import { Sidebar } from './Sidebar';
 import { ProjectDeletionDialog } from './ProjectDeletion';
@@ -39,6 +39,8 @@ export default function App() {
    * 否则「先发起、后结束」的导航会把另一次操作刚上的锁清掉，两条流程叠着跑，页面最终落在谁那里就不确定了。
    */
   const transitionOwner = useRef<symbol | null>(null);
+  // 显式「新建对话」的落点优先级高于仍在收尾的项目切换，避免旧请求把页面写回概览。
+  const pageIntent = useRef<Page | null>(null);
   const beginTransition = useCallback(() => { const token = Symbol('transition'); transitionOwner.current = token; return token; }, []);
   const endTransition = useCallback((token: symbol) => { if (transitionOwner.current === token) transitionOwner.current = null; }, []);
   const [prefs, setPrefs] = useState<Preferences>(defaultPreferences);
@@ -179,7 +181,9 @@ export default function App() {
    */
   const openProject = useCallback(async (selected: Project, firstMessage?: string, to: Page = 'chat') => {
     if (transitionOwner.current) throw new Error('素材正在切换，请稍后。');
+    pageIntent.current = null;
     const token = beginTransition(); setAssetsLoading(true); ++assetRevision.current;
+    let ownsTransition = false;
     try {
       await guard.current?.();
       const opened = await request<Project>('project.open', { projectId: selected.id });
@@ -205,17 +209,44 @@ export default function App() {
       // 素材数不在这一刻同步的话，侧栏会在刚导入完的当口显示 0 张。
       await refreshProjects();
       await refreshChatSessions();
-      setPage(to); history.replaceState(null, '', `#${to}`);
-    } finally { endTransition(token); setAssetsLoading(false); }
+    } finally {
+      ownsTransition = transitionOwner.current === token;
+      if (ownsTransition) { endTransition(token); setAssetsLoading(false); }
+    }
+    // 过渡锁释放后再展示目标页，避免概览里的「新建对话」在刷新期间被导航守卫拦下。
+    if (ownsTransition && pageIntent.current !== 'chat') { setPage(to); history.replaceState(null, '', `#${to}`); }
   }, [project?.id, chatSessions, refreshChatSessions, refreshProjects, beginTransition, endTransition]);
   /**
-   * 新建对话只能发生在项目内：这里只是把界面交回欢迎页，由用户描述要标注什么，
-   * 再由欢迎页建好项目并开会话（会话不脱离项目存在）。
+   * 新建对话优先沿用当前项目。已有标注任务运行时，用户可以在同一项目另开会话继续操作；
+   * 没有当前项目时才回到欢迎页，由用户先确认项目归属。
    */
-  const startProjectChat = useCallback(async () => {
+  const startProjectChat = useCallback(async (targetProject?: Project) => {
+    const owner = targetProject ?? project;
+    if (owner) {
+      pageIntent.current = 'chat';
+      const id = crypto.randomUUID();
+      try {
+        const forked = await request<StoredChatSession>('chat.history.fork', { sessionId: id, projectId: owner.id, projectName: owner.name });
+        setChats(state => ({ ...state, [id]: { ...blankChatSession(id, 'project'), memory: forked.memory, context: forked.context,
+          scope: forked.context?.scope ?? 'project', referenceResources: forked.context?.referenceResources } }));
+        if (forked.context?.assetIds) setSelectedAssetIds(forked.context.assetIds);
+      } catch (error) {
+        notify(`新对话创建失败：${errorMessage(error)}`, true);
+        pageIntent.current = null;
+        return;
+      }
+      setActiveSessionId(id);
+      // 显式新建对话优先级高于旧的项目切换刷新：取得新令牌后，旧操作不能再把页面写回概览。
+      const token = beginTransition();
+      try {
+        await guard.current?.(); clearTimeout(toastTimer.current); setToast(null); setPage('chat'); history.replaceState(null, '', '#chat');
+      } catch (error) { notify(`草稿未保存，已保留当前页面。${errorMessage(error)}`, true); }
+      finally { if (transitionOwner.current === token) endTransition(token); pageIntent.current = null; }
+      return;
+    }
     setActiveSessionId('');
     await navigate('chat');
-  }, [navigate]);
+  }, [project, navigate, notify, setChats, setSelectedAssetIds, beginTransition, endTransition]);
   const requestDeleteProject = useCallback((target: Project) => setDeletion(target), []);
   /**
    * 打开一条已有会话。会话的上下文属于项目：从「置顶」「其它项目分组」或搜索里点开会话时，

@@ -368,6 +368,15 @@ test('Agent 显式参考与执行配置保留原值，任务和重跑共享参�
   assert.doesNotThrow(() => validateCommand('evaluation.rerun.create', { setVersionId: 'v', budgetScopeId: 's', maxRequests: 1, schemes: [scheme] }));
   assert.throws(() => validateCommand('evaluation.rerun.create', { setVersionId: 'v', budgetScopeId: 's', maxRequests: 1, schemes: [{ ...scheme, referenceAssetIds: refs63 }] }), /格式不正确/);
 });
+
+test('项目派生对话协议严格校验源项目和历史摘要', () => {
+  assert.doesNotThrow(() => validateCommand('chat.history.fork', { sessionId: 'new-session', projectId: 'project-1', projectName: '项目' }));
+  assert.throws(() => validateCommand('chat.history.fork', { sessionId: 'new-session', projectId: 'project-1', unexpected: true }), /格式不正确/);
+  const chat = { sessionId: 's', providerId: 'p', model: 'm', messages: [{ role: 'user', content: '开始' }], context: { memorySummary: '历史摘要' } };
+  const validated = validateCommand('agent.chat', chat).payload as { context?: { memorySummary?: string } };
+  assert.equal(validated.context?.memorySummary, '历史摘要');
+  assert.throws(() => validateCommand('agent.chat', { ...chat, context: { memorySummary: 'x'.repeat(60001) } }), /格式不正确/);
+});
 test('4C 冻结图片保留发布版本，只允许固定鉴权媒体路由', () => {
   const url = 'autolabel-media://evaluation/version-1/asset-1';
   assert.deepEqual(mediaTargetFromUrl(url), { kind: 'evaluation', setVersionId: 'version-1', assetId: 'asset-1' });

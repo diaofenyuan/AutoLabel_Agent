@@ -20,6 +20,8 @@ import { MessageSquare, Settings2, FolderOpen, Sparkles, ChevronDown } from 'luc
 import { blankChatSession, useApp, type ChatSession } from './context';
 import { request, getBridge, isDemo, errorMessage } from './bridge';
 import { Composer, Button, Empty } from './ui';
+import { formatChatMemory } from './chatMemory';
+import type { ChatMaterialContext } from '../../shared/chat';
 
 type ChatMessageData = { role: 'user' | 'assistant'; content: string; failed?: boolean };
 /** 消息流渲染上限：超长会话先折叠更早的历史，展开按钮写明折叠了多少条。 */
@@ -53,7 +55,7 @@ function ChatMessage({ message, previousUser, onEdit, onRetry, onCopy }: { messa
  * 消息落盘由主进程负责，这里只在首次打开某条会话时读回一次，之后以内存状态为准。
  */
 export default function ChatPanel({ compact = false, assetId, sessionId }: { compact?: boolean; assetId?: string; sessionId?: string }) {
-  const { project, setProject, prefs, notify, navigate, startProjectChat, chats, setChats, assets, assetTotal, selectedAssetIds, assetsLoading, providers, events, activeSessionId, refreshChatSessions, refreshAssets, setMediaJob, setMediaTaskId, pendingVideoImports, setPendingVideoImports } = useApp();
+  const { project, setProject, prefs, notify, navigate, startProjectChat, chats, setChats, assets, assetTotal, selectedAssetIds, setSelectedAssetIds, assetsLoading, providers, events, activeSessionId, refreshChatSessions, refreshAssets, setMediaJob, setMediaTaskId, pendingVideoImports, setPendingVideoImports } = useApp();
   const chatConfig=resolveConfiguration('chat',prefs,project?.settings);
   const annotationConfig=resolveConfiguration('annotation',prefs,project?.settings);
   // 拖入文件只在会话页生效；工作台里的紧凑面板由工作台自己管导入。
@@ -119,8 +121,11 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
         // 读盘可能晚于本次会话的第一轮发送，已经有内容时不要用历史覆盖。
         const current = state[key];
         if (current?.messages.length) return state;
-        return { ...state, [key]: { ...(current ?? blankChatSession(key)), messages } };
+        const context = record.context;
+        return { ...state, [key]: { ...(current ?? blankChatSession(key)), messages,
+          ...(record.memory ? { memory: record.memory } : {}), ...(context ? { context, scope: context.scope, referenceResources: context.referenceResources } : {}) } };
       });
+      if (record.context?.assetIds) setSelectedAssetIds(record.context.assetIds);
     }).catch(() => {
       // 读盘失败可能只是一次抖动：退避重试几次；超过次数就停手，不能无限打转。
       if (!active || historyRetries.current >= 3) return;
@@ -128,7 +133,7 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
       timer = setTimeout(() => { if (active) setHistoryReload(value => value + 1); }, 500 * historyRetries.current);
     });
     return () => { active = false; if (timer) clearTimeout(timer); };
-  }, [key, setChats, historyReload]);
+  }, [key, setChats, setSelectedAssetIds, historyReload]);
   // 欢迎页把首条消息随会话交过来：挂载后自动发出一次，用户不必再按一次发送。
   // 条件还没就绪（例如打开项目时素材仍在切换）就先留着，等条件满足再发，不能白白把这次发送丢掉。
   useEffect(() => {
@@ -176,18 +181,27 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
         return;
       }
     }
-    const assetIds = effectiveScope === 'current' ? [assetId!] : effectiveScope === 'page' ? assets.map(a => a.id) : effectiveScope === 'selected' ? [...selectedAssetIds] : undefined;
+    // 派生会话的「当前页」可能来自上一条会话已经加载过的页面；优先使用快照中的 ID，
+    // 用户切换范围后 context 会被清掉，再回到当前页实时列表。
+    const inheritedScopeIds = session.context?.scope === session.scope ? session.context.assetIds : undefined;
+    const assetIds = effectiveScope === 'current' ? [assetId!] : effectiveScope === 'page' ? (inheritedScopeIds ?? assets.map(a => a.id)) : effectiveScope === 'selected' ? [...selectedAssetIds] : undefined;
     if (assetIds && !assetIds.length) { notify('当前处理范围没有素材，请先选择图片。', { error: true, action: { label: '去勾选', run: () => void navigate('overview') } }); return; }
     const next = [...session.messages, { role: 'user' as const, content }];
+    const materialContext: ChatMaterialContext = {
+      scope: effectiveScope,
+      ...(assetIds ? { assetIds } : {}),
+      ...(session.referenceResources?.length ? { referenceResources: session.referenceResources } : {}),
+    };
+    const memorySummary = formatChatMemory(session.memory);
     const streamSinceSequence = events.at(-1)?.sequence ?? -1;
     const scopeLabel = effectiveScope === 'current' ? assets.find(a => a.id === assetId)?.name ?? '当前图片' : effectiveScope === 'project' ? `全项目 · ${assetTotal} 张` : `${effectiveScope === 'page' ? '当前页' : '已勾选（跨页）'} · ${assetIds!.length} 张`;
-    update({ messages: next, input: '', busy: true, cancelRequested: false, runningScope: scopeLabel, streamingText: '', streamSinceSequence, planned: undefined });
+    update({ messages: next, input: '', busy: true, cancelRequested: false, runningScope: scopeLabel, streamingText: '', streamSinceSequence, planned: undefined, context: materialContext });
     try {
       const result = await request<{ content: string; status: string; actions?: AgentStep[] }>('agent.chat', {
         sessionId: session.id, projectId: project?.id, providerId: selectedProviderId, model: selectedModel,
         // failed 是界面态标记，不属于 Agent 消息协议；重试时剥离，避免把本地展示字段送入严格校验。
         messages: next.map(({ role, content }) => ({ role, content })), autoExecute: overrides.autoExecute ?? session.autoExecute,
-        context: { ...(session.referenceResources?.length?{referenceResources:session.referenceResources}:{}), ...(assetIds ? { assetIds } : {}), ...(annotationConfig.providerId&&annotationConfig.model ? { annotationProviderId:annotationConfig.providerId,annotationModel:annotationConfig.model } : {}), ...(annotationConfig.prompt?{prompt:annotationConfig.prompt}:{}), ...(session.exportDir ? { exportDir: session.exportDir } : {}), ...(annotationConfig.maxRequests!==undefined ? { maxRequests:annotationConfig.maxRequests} : {}), ...(annotationConfig.concurrency?{concurrency:annotationConfig.concurrency}:{}) },
+        context: { ...materialContext, ...(memorySummary ? { memorySummary } : {}), ...(annotationConfig.providerId&&annotationConfig.model ? { annotationProviderId:annotationConfig.providerId,annotationModel:annotationConfig.model } : {}), ...(annotationConfig.prompt?{prompt:annotationConfig.prompt}:{}), ...(session.exportDir ? { exportDir: session.exportDir } : {}), ...(annotationConfig.maxRequests!==undefined ? { maxRequests:annotationConfig.maxRequests} : {}), ...(annotationConfig.concurrency?{concurrency:annotationConfig.concurrency}:{}) },
       });
       // 先看方案时 agent 只给出待执行的操作：确认卡片据此渲染，写操作一个都没跑。
       update({ messages: [...next, { role: 'assistant', content: result.content || (result.status === 'cancelled' ? '对话已停止。' : '接口未返回文本。') }], planned: result.actions?.filter(action => action.status === 'planned'), streamingText: undefined, streamSinceSequence: undefined });
@@ -218,7 +232,8 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
   const scopeOptions: Array<{ value: ChatSession['scope']; label: string }> = [
     ...(assetId ? [{ value: 'current' as const, label: '当前图片' }] : []),
     { value: 'project' as const, label: `全项目 · ${assetTotal} 张` },
-    ...(assets.length ? [{ value: 'page' as const, label: `当前页 · ${assets.length} 张` }] : []),
+    ...((session.context?.scope === session.scope ? session.context.assetIds?.length ?? assets.length : assets.length)
+      ? [{ value: 'page' as const, label: `当前页 · ${session.context?.scope === session.scope ? session.context.assetIds?.length ?? assets.length : assets.length} 张` }] : []),
     ...(selectedAssetIds.length ? [{ value: 'selected' as const, label: `已勾选（跨页）· ${selectedAssetIds.length} 张` }] : []),
   ];
   const scopeLabel = scopeOptions.find(option => option.value === effectiveScope)?.label ?? '全项目';
@@ -240,7 +255,7 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
   }
   return <div className={`chat-panel ${compact ? 'compact' : ''} ${dropActive ? 'drop-active' : ''}`} {...(compact ? {} : drop.handlers)}>
     {!compact && <DropOverlay visible={dropActive} />}
-    <div className="chat-messages" role="log" aria-label="对话消息">{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><p className="chat-image-guide">需要让助手处理图片时，可拖入、粘贴图片，或点击输入框下方的「添加图片」。图片会先加入当前项目；云端自动标注还需要验证标注模型的图片输入能力。</p><Button onClick={() => void navigate('settings', 'ai')}><Settings2 size={14} />配置对话模型</Button><div className="chat-examples">{sampleRequests.map(text => <button key={text} type="button" onClick={() => editComposer(text)}>{text}</button>)}</div></Empty> : <>{session.messages.length > MESSAGE_FOLD && <button type="button" className="text-button chat-history-fold" onClick={() => setShowAllHistory(true)}>更早的 {session.messages.length - MESSAGE_FOLD} 条历史已折叠 · 展开</button>}{session.messages.slice(showAllHistory ? 0 : -MESSAGE_FOLD).map((message, i, folded) => {
+    <div className="chat-messages" role="log" aria-label="对话消息">{session.memory?.conversations.length ? <details className="chat-memory-note"><summary>已继承项目 {session.memory.conversations.length + session.memory.truncatedCount} 条历史对话摘要</summary><div className="chat-memory-note-body">{formatChatMemory(session.memory)}</div></details> : null}{!session.messages.length && !compact ? <Empty icon={<MessageSquare size={23} />} title="一起完成标注" description={isDemo ? '人工编辑可直接使用。对话与工具执行需连接桌面引擎和模型。' : '描述目标、类别和标注规则，助手会检查需要的信息。'}><p className="chat-image-guide">需要让助手处理图片时，可拖入、粘贴图片，或点击输入框下方的「添加图片」。图片会先加入当前项目；云端自动标注还需要验证标注模型的图片输入能力。</p><Button onClick={() => void navigate('settings', 'ai')}><Settings2 size={14} />配置对话模型</Button><div className="chat-examples">{sampleRequests.map(text => <button key={text} type="button" onClick={() => editComposer(text)}>{text}</button>)}</div></Empty> : <>{session.messages.length > MESSAGE_FOLD && <button type="button" className="text-button chat-history-fold" onClick={() => setShowAllHistory(true)}>更早的 {session.messages.length - MESSAGE_FOLD} 条历史已折叠 · 展开</button>}{session.messages.slice(showAllHistory ? 0 : -MESSAGE_FOLD).map((message, i, folded) => {
       const previousUser = [...folded.slice(0, i)].reverse().find(item => item.role === 'user')?.content;
       // key 用消息在整段历史里的绝对位置：折叠展开或新消息追加时都不会换身份。
       // 用切片内的下标当 key，展开历史会把最多 200 条消息重新挂载到别的消息上（复制/重试这类行内状态跟错人）。
@@ -280,7 +295,7 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
             </button>
             {toolsOpen && <div className="picker-popover composer-popover" role="dialog" aria-label="处理范围与执行方式">
               <p className="muted tiny">这次让助手处理哪些图片</p>
-              <div className="composer-choices">{scopeOptions.map(option => <button key={option.value} type="button" className={effectiveScope === option.value ? 'selected' : ''} aria-pressed={effectiveScope === option.value} onClick={() => update({ scope: option.value })}>{option.label}</button>)}</div>
+              <div className="composer-choices">{scopeOptions.map(option => <button key={option.value} type="button" className={effectiveScope === option.value ? 'selected' : ''} aria-pressed={effectiveScope === option.value} onClick={() => update({ scope: option.value, ...(option.value === session.scope ? {} : { context: undefined }) })}>{option.label}</button>)}</div>
               <p className="muted tiny">发出的请求怎么处理</p>
               <div className="composer-choices">{([['true', '直接执行'], ['false', '先看方案']] as const).map(([value, label]) => <button key={value} type="button" className={String(session.autoExecute) === value ? 'selected' : ''} aria-pressed={String(session.autoExecute) === value} onClick={() => update({ autoExecute: value === 'true' })}>{label}</button>)}</div>
               {/* 「直接执行」会真的发出请求并可能计费，这句话必须留在能改这个开关的地方。 */}

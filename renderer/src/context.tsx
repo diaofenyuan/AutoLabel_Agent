@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 import { LayoutGrid, ListTodo, MessageSquare, Settings, type LucideIcon } from 'lucide-react';
-import type { ChatSessionSummary } from '../../shared/chat';
+import type { ChatMaterialContext, ChatMemorySnapshot, ChatSessionSummary } from '../../shared/chat';
 import type { Asset, EngineEvent, EngineStatus, Preferences, Project, Provider } from './types';
 
 export type Page = 'chat' | 'overview' | 'tasks' | 'settings';
@@ -44,6 +44,9 @@ export interface ChatAttachment { id: string; path: string; kind: 'image' | 'vid
 export interface ChatSession {
   id: string; messages: Array<{ role: 'user'|'assistant'; content: string; failed?: boolean }>;
   referenceResources?:import('../../shared/resources').ReferenceSelection[];
+  /** 从项目派生时冻结的历史摘要和最近一次素材范围。 */
+  memory?: ChatMemorySnapshot;
+  context?: ChatMaterialContext;
   input: string; busy: boolean; cancelRequested?: boolean; exportDir: string; scope: 'current'|'project'|'page'|'selected'; autoExecute: boolean; runningScope?: string;
   streamingText?: string; streamSinceSequence?: number;
   /** 欢迎页把首条消息随会话一起交出来：会话页挂载后立即发出，用户不必再按一次发送。 */
@@ -101,8 +104,8 @@ export interface AppState {
   refreshChatSessions: (projectId?: string) => Promise<void>;
   activeSessionId: string;
   setActiveSessionId: (id: string) => void;
-  /** 新建对话：会话必须挂在项目下，这里把界面交回欢迎页，由描述建好项目后再开会话。 */
-  startProjectChat: () => Promise<void>;
+  /** 新建对话：已有项目时直接在当前项目下新建空会话；没有项目时回到欢迎页确认项目归属。 */
+  startProjectChat: (project?: Project) => Promise<void>;
   /**
    * 打开一条已有会话。会话是按项目存上下文的：从别的项目点开这条会话时，
    * 必须先把项目切过去，否则助手会拿当前项目的素材与设置去回答另一条会话。

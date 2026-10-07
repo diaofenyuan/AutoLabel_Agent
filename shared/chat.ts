@@ -1,6 +1,37 @@
+import type { ReferenceSelection } from './resources.js';
+
 /** 对话记录共享类型：主进程按此落盘，界面按此分组与展示。 */
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 export type ChatTitleSource = 'auto' | 'user';
+export type ChatMaterialScope = 'current' | 'project' | 'page' | 'selected';
+
+/** 会话最近一次实际使用的项目素材范围；它只描述 ID，不授权项目外路径。 */
+export interface ChatMaterialContext {
+  scope: ChatMaterialScope;
+  assetIds?: string[];
+  referenceAssetIds?: string[];
+  referenceResources?: ReferenceSelection[];
+}
+
+/** 用于新会话背景的单条历史摘要，不复制原始消息。 */
+export interface ChatMemoryConversation {
+  id: string;
+  projectId: string;
+  title: string;
+  updatedAt: string;
+  messageCount: number;
+  firstUser?: string;
+  lastAssistant?: string;
+  context?: ChatMaterialContext;
+}
+
+/** 项目级历史摘要快照；超出长度的会话通过 truncatedCount 明确说明。 */
+export interface ChatMemorySnapshot {
+  projectId: string;
+  generatedAt: string;
+  conversations: ChatMemoryConversation[];
+  truncatedCount: number;
+}
 
 export interface ChatMessage {
   role: ChatRole;
@@ -24,11 +55,17 @@ export interface ChatSessionSummary {
   updatedAt: string;
   lastMessageAt: string;
   messageCount: number;
+  /** 最近一次发送的素材范围，用于项目内派生新会话。 */
+  context?: ChatMaterialContext;
   /** 仅供侧栏悬浮预览，不参与长期存储。 */
   preview?: string;
 }
 
-export interface ChatSession extends ChatSessionSummary { messages: ChatMessage[] }
+export interface ChatSession extends ChatSessionSummary {
+  messages: ChatMessage[];
+  /** 从项目派生时冻结的历史摘要，不混入当前会话消息。 */
+  memory?: ChatMemorySnapshot;
+}
 
 export interface ChatHistoryList {
   sessions: ChatSessionSummary[];

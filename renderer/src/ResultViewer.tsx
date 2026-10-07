@@ -3,6 +3,29 @@ import { chipTextColor, chipTextWidth } from './canvasChip';
 import { taskNames, type Asset, type LabelClass } from './types';
 
 /**
+ * 候选结果在运行创建时会冻结一份类别模板。运行期间项目类别表可能尚未刷新，
+ * 只查当前表会把仍然有效的候选类别误显示成「类别缺失」；当前类别优先，冻结模板只补缺失项。
+ */
+export function mergeAnnotationClasses(classes: LabelClass[], metadata?: Record<string, unknown>): LabelClass[] {
+  const merged = new Map(classes.map(item => [item.id, item]));
+  const template = metadata?.annotationTemplate;
+  if (!template || typeof template !== 'object' || Array.isArray(template)) return classes;
+  const templateClasses = (template as { classes?: unknown }).classes;
+  if (!Array.isArray(templateClasses)) return classes;
+  for (const value of templateClasses) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const item = value as Record<string, unknown>;
+    if (typeof item.id !== 'string' || typeof item.name !== 'string' || merged.has(item.id)) continue;
+    merged.set(item.id, {
+      id: item.id,
+      name: item.name,
+      color: typeof item.color === 'string' ? item.color : '#4a83ff',
+    });
+  }
+  return [...merged.values()];
+}
+
+/**
  * 只读标注预览：图片 + 检测框 / 旋转框 / 多边形 / 关键点 / 分类。
  * 从工作台画布里抽出，去掉全部编辑交互与坐标控件；对话结果卡片与项目概览的抽查都用它，
  * 人工修正改由对话指令驱动，不再回到画布。
@@ -10,7 +33,8 @@ import { taskNames, type Asset, type LabelClass } from './types';
 export default function ResultViewer({ asset, classes, connectionTemplate, maxHeight }: {
   asset: Asset; classes: LabelClass[]; connectionTemplate?: unknown; maxHeight?: string;
 }) {
-  const label = (classId: string) => classes.find(item => item.id === classId);
+  const resolvedClasses = mergeAnnotationClasses(classes, asset.metadata);
+  const label = (classId: string) => resolvedClasses.find(item => item.id === classId);
   // 预览按容器宽度等比缩放，所以线宽与字号按图片尺寸取一个单位值，缩放后仍看得清。
   const unit = Math.max(1, Math.max(asset.width, asset.height) / 800);
   return <div className="result-viewer" style={maxHeight ? { maxHeight } : undefined}>

@@ -230,7 +230,7 @@ if (sidebarOnly) {
   assert.ok(byCheck.get('sidebar-name-readable')?.shown >= 5);
   // 项目行只保留一个更多入口；其低频动作和侧栏搜索职责分别有独立断言。
   assert.equal(byCheck.get('sidebar-name-readable')?.actionButtons, 1);
-  assert.deepEqual(byCheck.get('project-actions-in-more-menu')?.items, ['项目概览', '重命名', '删除项目…']);
+  assert.deepEqual(byCheck.get('project-actions-in-more-menu')?.items, ['项目概览', '新建对话', '重命名', '删除项目…']);
   assert.deepEqual(byCheck.get('sidebar-search-and-page-jump-are-distinct')?.projectSearch, { project: true, pageOnly: false });
   assert.deepEqual(byCheck.get('sidebar-search-and-page-jump-are-distinct')?.jumpSearch, { page: '任务', count: 1 });
   // 会话行按项目分组出现，点开别的项目下的会话必须把项目一起切过去。

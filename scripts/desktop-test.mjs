@@ -12,6 +12,8 @@ const entries = [['desktop/security.test.ts', 'desktop/dist/security.test.cjs'],
   ['renderer/tests/timeline-ensure.test.ts', 'desktop/dist/timeline-ensure.test.cjs'],
   ['renderer/tests/media-job-presentation.test.ts', 'desktop/dist/media-job-presentation.test.cjs'],
   ['renderer/tests/thumbnail-url.test.ts', 'desktop/dist/thumbnail-url.test.cjs'],
+  ['renderer/tests/result-viewer.test.ts', 'desktop/dist/result-viewer.test.cjs'],
+  ['renderer/tests/chat-memory.test.ts', 'desktop/dist/chat-memory.test.cjs'],
   ['renderer/tests/review-target.test.ts', 'desktop/dist/review-target.test.cjs'],
   // 桌面存储与业务边界单测统一登记，避免只有孤儿 runner 而未进入回归。
   ['desktop/storage.test.ts', 'desktop/dist/storage.test.cjs'],

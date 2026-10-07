@@ -60,6 +60,17 @@ export async function checkDesktopSidebar(window: BrowserWindow, output: string)
     await js(`document.querySelector('.sidebar-empty-secondary').click()`);
     await waitFor(`!!document.querySelector('.chat-panel textarea')`);
     await waitFor(`!!document.querySelector('.sidebar-project .sidebar-row-title')`);
+    // 当前项目已有一条会话时，新对话仍应留在同一项目；否则会退回欢迎页，
+    // 用户在另一条会话执行标注时新开对话会丢失素材上下文，无法继续提交任务。
+    await js(`([...document.querySelectorAll('#app-sidebar .nav-item')].find(node=>node.innerText.trim()==='新对话')).click()`);
+    await waitFor(`!!document.querySelector('.chat-panel textarea')&&!document.querySelector('.onboarding-lanes')`);
+    const newProjectChat = await js<{ project: string; panel: boolean; onboarding: boolean }>(`(()=>({
+      project:document.querySelector('.sidebar-project.selected .sidebar-row-title')?.innerText.trim()??'',
+      panel:!!document.querySelector('.chat-panel'), onboarding:!!document.querySelector('.onboarding-lanes')}))()`);
+    assert.equal(newProjectChat.panel, true, `已有项目点击新对话应直接进入该项目会话：${JSON.stringify(newProjectChat)}`);
+    assert.equal(newProjectChat.onboarding, false, `已有项目点击新对话不应退回欢迎页：${JSON.stringify(newProjectChat)}`);
+    assert.ok(newProjectChat.project.includes('人工示例'), `新会话应保留当前项目上下文：${JSON.stringify(newProjectChat)}`);
+    navigationChecks.push({ check: 'new-chat-keeps-current-project', ...newProjectChat });
     // 选中行常驻显示操作按钮，本来就需要预留宽度；这里量的是平时占多数的未选中行，
     // 也正是「项目名被截成一个字」发生时的那一行。
     const longName = '城市场景与更多补充说明的第二批';
@@ -100,7 +111,13 @@ export async function checkDesktopSidebar(window: BrowserWindow, output: string)
     await js(`document.querySelector('.sidebar-project.selected [aria-label^="项目操作 "]').click()`);
     await waitFor(`!!document.querySelector('.sidebar-menu[role="menu"][aria-label^="城市场景与更多补充说明的第二批"]')`);
     const projectMenuItems = await js<string[]>(`[...document.querySelectorAll('.sidebar-menu[role="menu"] [role="menuitem"]')].map(item=>item.innerText.trim())`);
-    assert.deepEqual(projectMenuItems, ['项目概览', '重命名', '删除项目…'], '项目低频操作应收在明确命名的更多菜单中');
+    assert.deepEqual(projectMenuItems, ['项目概览', '新建对话', '重命名', '删除项目…'], '项目低频操作应收在明确命名的更多菜单中');
+    await js(`([...document.querySelectorAll('.sidebar-menu[role="menu"] [role="menuitem"]')].find(node=>node.innerText.trim()==='项目概览')).click()`);
+    await waitFor(`!!document.querySelector('.overview-page')`);
+    const overviewNewChat = await js<boolean>(`[...document.querySelectorAll('.overview-page .page-heading button')].some(node=>node.innerText.trim()==='新建对话')`);
+    assert.equal(overviewNewChat, true, '项目概览必须提供从项目新建对话的入口');
+    await js(`([...document.querySelectorAll('.overview-page .page-heading button')].find(node=>node.innerText.trim()==='新建对话')).click()`);
+    await waitFor(`!!document.querySelector('.chat-panel')&&!document.querySelector('.onboarding-lanes')`);
     await js(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
     await waitFor(`!document.querySelector('.sidebar-menu[role="menu"][aria-label^="城市场景与更多补充说明的第二批"]') && document.querySelector('.sidebar-project.selected [aria-label^="项目操作 "]')?.getAttribute('aria-expanded')==='false'`);
 
@@ -203,6 +220,7 @@ export async function checkDesktopSidebar(window: BrowserWindow, output: string)
     await writeFile(output, json({ checks: [...navigationChecks,
       { check: 'sidebar-name-readable', ...resting, actionButtons: padding.buttons, padding },
       { check: 'project-actions-in-more-menu', items: projectMenuItems },
+      { check: 'project-overview-new-chat-entry', available: overviewNewChat },
       { check: 'sidebar-search-and-page-jump-are-distinct', projectSearch, jumpSearch },
       { check: 'session-opens-its-own-project', ...crossProject, ...afterSwitch, ...sessionPresentation },
       { check: 'mobile-drawer-modal-semantics', ...drawerModal! },

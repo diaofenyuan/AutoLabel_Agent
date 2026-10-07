@@ -20,6 +20,7 @@ import { VideoTranscoder } from './transcode';
 import { DataStorage, DesktopPreferences, initializeStorageLocation, scopedVaultPath, type StorageLocation } from './storage';
 import { ROOT_SUBDIRECTORY, StoragePathSettings, resolveStoragePaths, storagePathsState, userFallbackRoot, validateTrainingRoot, type ResolvedPaths } from './storage-paths';
 import { ChatStore } from './chat-store';
+import type { ChatMaterialContext } from '../shared/chat';
 import type { StoragePathsState } from '../shared/storage';
 import { PathGrants, authorizeCommandPaths, mediaTargetFromUrl, isTrustedUrl, normalizeMedia, publicInputResult, redact } from './security';
 import { createGrantStore, grantStorePath } from './grant-store';
@@ -389,6 +390,13 @@ async function chatHistory(command: string, payload: Record<string, unknown>): P
     ...(payload.providerId !== undefined ? { providerId: payload.providerId as string } : {}),
     ...(payload.model !== undefined ? { model: payload.model as string } : {}),
   });
+  if (command === 'chat.history.fork') return chatStore.fork({
+    sessionId: payload.sessionId as string, projectId: payload.projectId as string,
+    ...(payload.sourceSessionId ? { sourceSessionId: payload.sourceSessionId as string } : {}),
+    ...(payload.projectName !== undefined ? { projectName: payload.projectName as string } : {}),
+    ...(payload.providerId !== undefined ? { providerId: payload.providerId as string } : {}),
+    ...(payload.model !== undefined ? { model: payload.model as string } : {}),
+  });
   if (command === 'chat.history.rename') return chatStore.rename(payload.sessionId, payload.title);
   if (command === 'chat.history.pin') return chatStore.pin(payload.sessionId, payload.pinned);
   if (command === 'chat.history.delete') return chatStore.delete(payload.sessionIds);
@@ -503,12 +511,20 @@ async function enableLibraryModel(engineNow: EngineManager, catalogId: string): 
 }
 /** 对话完成后由主进程落盘；记录失败不改变本次对话结果，只写诊断日志。 */
 async function recordAgentChat(payload: Record<string, unknown>): Promise<unknown> {
+  const agentContext = payload.context && typeof payload.context === 'object' ? payload.context as Record<string, unknown> : undefined;
+  const persistedContext: ChatMaterialContext | undefined = agentContext?.scope ? {
+    scope: agentContext.scope as ChatMaterialContext['scope'],
+    ...(Array.isArray(agentContext.assetIds) ? { assetIds: agentContext.assetIds as string[] } : {}),
+    ...(Array.isArray(agentContext.referenceAssetIds) ? { referenceAssetIds: agentContext.referenceAssetIds as string[] } : {}),
+    ...(Array.isArray(agentContext.referenceResources) ? { referenceResources: agentContext.referenceResources as ChatMaterialContext['referenceResources'] } : {}),
+  } : undefined;
   const record: Parameters<ChatStore['record']>[0] = {
     sessionId: payload.sessionId as string,
     ...(payload.projectId ? { projectId: payload.projectId as string } : {}),
     providerId: payload.providerId as string,
     model: payload.model as string,
     messages: (payload.messages ?? []) as Array<{ role: string; content: string }>,
+    ...(persistedContext ? { context: persistedContext } : {}),
   };
   const logFailure = (error: unknown) => engine.log(`对话记录未写入：${error instanceof DesktopError ? error.code : 'CHAT_RECORD_FAILED'}`);
   try {

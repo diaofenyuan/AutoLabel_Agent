@@ -14,7 +14,7 @@ import ProjectResolveDialog from './ProjectResolveDialog';
 import { applyProjectDraft } from './projectSetup';
 
 /**
- * 会话挂在项目下，导航里不再有「新建对话」：新对话由欢迎页按描述建项目后开始。
+ * 会话挂在项目下；当前已有项目时「新对话」直接创建同项目会话，没有项目时才回到欢迎页确认归属。
  * 主导航只剩「新对话」这一项动作与底部的设置；任务与流程都回到对话里发起，进度在对话的任务卡片回看。
  */
 const mainEntries = [
@@ -222,6 +222,7 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
                 <span className="sidebar-actions"><button aria-label={`项目操作 ${item.name}`} aria-haspopup="menu" aria-expanded={projectMenu === item.id} title="项目操作" onClick={() => setProjectMenu(value => value === item.id ? '' : item.id)}><MoreHorizontal size={15} /></button></span>
                 {projectMenu === item.id && <div className={`sidebar-menu project-menu ${menuFlip.project ? 'flip' : ''}`} role="menu" aria-label={`${item.name} 的项目操作`}>
                   <button role="menuitem" onClick={() => { setProjectMenu(''); void openOverview(item); }}><LayoutGrid size={14} />项目概览</button>
+                  <button role="menuitem" onClick={() => { setProjectMenu(''); void openProject(item, undefined, 'overview').then(() => startProjectChat(item)).catch(e => notify(errorMessage(e), true)); }}><Plus size={14} />新建对话</button>
                   <button role="menuitem" onClick={() => { setProjectMenu(''); setRename({ kind: 'project', id: item.id, value: item.name }); }}><Pencil size={14} />重命名</button>
                   <button role="menuitem" onClick={() => { setProjectMenu(''); requestDeleteProject(item); }}><Trash2 size={14} />删除项目…</button>
                 </div>}

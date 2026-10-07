@@ -536,6 +536,23 @@ test('未完成或跨项目重跑不能固化指标，完成摘要剔除真值',
   assert.equal(writes, 1); assert.ok(!JSON.stringify(result).includes('hidden-truth'));
 });
 
+test('项目历史摘要只作为模型背景，不扩大助手的素材范围', async () => {
+  let sent: Record<string, unknown> | undefined;
+  const memorySummary = '历史会话：先整理车辆素材；最近结论：已整理完成。';
+  const agent = new AgentController(client((command, payload) => {
+    if (command === 'provider.capabilities') return { tools: 'unverified' };
+    if (command === 'chat.send') { sent = payload; return { content: '收到。' }; }
+    throw new Error(command);
+  }));
+  await agent.run({ ...request, context: { ...request.context, memorySummary } });
+  const messages = sent?.messages as Array<{ role: string; content: string }>;
+  assert.match(messages[0].content, /历史对话摘要/);
+  assert.match(messages[0].content, /历史会话/);
+  assert.ok(messages.some(message => message.role === 'user' && message.content === request.messages[0].content));
+  assert.equal('context' in (sent ?? {}), false, '历史摘要不能作为工具素材权限传入引擎');
+  assert.deepEqual((sent?.tools ?? undefined), undefined);
+});
+
 test('真实重跑预检期间取消后，不会提交新方案', async () => {
   const controller = new AbortController(); let created = false;
   const environment = { projectId: 'project-1', budgetScopeId: 'scope-1', context: freshContext, signal: controller.signal, openAsset() {},

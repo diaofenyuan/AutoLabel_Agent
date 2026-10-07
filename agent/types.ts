@@ -1,5 +1,6 @@
 import type { EngineEvent } from '../shared/protocol.ts';
 import type { ReferenceSelection } from '../shared/resources.ts';
+import type { ChatMaterialScope } from '../shared/chat.ts';
 
 export interface ToolCall { id: string; name: string; arguments: string | Record<string, unknown> }
 export interface ChatMessage {
@@ -8,10 +9,13 @@ export interface ChatMessage {
   tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
 }
 export interface AgentContext {
+  scope?: ChatMaterialScope;
   annotationProviderId?: string; annotationModel?: string; assetIds?: string[];
   prompt?: string; concurrency?: number; maxRequests?: number | null; exportDir?: string;
   referenceAssetIds?: string[];
   referenceResources?: ReferenceSelection[];
+  /** 项目历史摘要只作为模型背景，不参与工具素材范围判断。 */
+  memorySummary?: string;
 }
 export interface AgentRequest {
   sessionId: string; projectId?: string; providerId: string; model: string;
