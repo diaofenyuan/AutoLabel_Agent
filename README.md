@@ -2,6 +2,8 @@
 
 Windows 中文桌面标注工具，采用 Electron、React、TypeScript、Java 21 和 SQLite。界面按 Codex 式中性、简洁的工作空间设计，支持可选 Python YOLO 推理进程。
 
+**项目范围：本项目仅面向 Windows 桌面端，运行形态为 Electron 桌面软件，不包含 Android、iOS 等移动端应用；后续需求、界面与验收均以桌面端为准。**
+
 当前处于开发与集成阶段。需求与验收计划是本地文档（SPEC.md、TASK_PLAN.md），未纳入版本库；不要把设计计划或最小安装包当作全部功能已完成。模块实现现状见 `engine/README.md` 与 `desktop/`、`renderer/` 源码。
 
 ## 开发
