@@ -14,6 +14,25 @@ export function remainingBatchItems<T extends { state: { kind: string } }>(items
   return items.filter(item => item.state.kind !== 'queued');
 }
 
+/** 媒体工作器单线程运行；批量检查撞上前一视频时等待释放，不把临时占用记成失败。 */
+export async function retryWhileMediaBusy<T>(operation: () => Promise<T>, options: {
+  shouldStop: () => boolean;
+  onBusy?: () => void;
+  wait?: (milliseconds: number) => Promise<void>;
+}): Promise<T | null> {
+  const wait = options.wait ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
+  while (!options.shouldStop()) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!error || typeof error !== 'object' || (error as { code?: unknown }).code !== 'media_busy') throw error;
+      options.onBusy?.();
+      await wait(750);
+    }
+  }
+  return null;
+}
+
 /** 一键抽帧的条目统计：失败数必须能被带出弹窗，不能只剩一个「未能创建」的数字。 */
 export interface BatchOutcome { queued: number; failed: number; pending: number }
 

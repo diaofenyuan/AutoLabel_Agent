@@ -59,7 +59,7 @@ final class VideoFrames implements AutoCloseable {
             directory=createDirectory(generationDirectory);Path frames=Files.createDirectory(directory.resolve("frames"));Path partial=directory.resolve("frames.partial.jsonl");
             atomicJson(directory.resolve("recipe.json"),fixed);space(directory,job,frameReserve(fixed));
             String filter=filter(fixed);Path filterPath=directory.resolve("filter.txt");Files.writeString(filterPath,filter,StandardCharsets.UTF_8,StandardOpenOption.CREATE_NEW);
-            List<String> args=new ArrayList<>(List.of(ffmpeg.toString(),"-hide_banner","-nostdin","-nostats","-loglevel","info","-xerror","-filter_threads","1","-threads","2","-err_detect","explode","-protocol_whitelist","file,pipe","-format_whitelist",FORMATS,"-noautorotate","-copyts","-i",text(fixed,"sourcePath",32767),"-map","0:"+integer(fixed,"streamIndex",0,65535),"-an","-sn","-dn","-filter_script:v",filterPath.toString(),"-fps_mode","passthrough","-enc_time_base","-1","-threads:v","1","-frames:v",Long.toString(integer(fixed,"maxFrames",1,100000)+1),"-f","image2pipe","-c:v","png","-pix_fmt","rgb24","pipe:1"));
+            List<String> args=new ArrayList<>(List.of(ffmpeg.toString(),"-hide_banner","-nostdin","-nostats","-loglevel","info","-filter_threads","1","-threads","2","-err_detect","ignore_err","-protocol_whitelist","file,pipe","-format_whitelist",FORMATS,"-noautorotate","-copyts","-i",text(fixed,"sourcePath",32767),"-map","0:"+integer(fixed,"streamIndex",0,65535),"-an","-sn","-dn","-filter_script:v",filterPath.toString(),"-fps_mode","passthrough","-enc_time_base","-1","-threads:v","1","-frames:v",Long.toString(integer(fixed,"maxFrames",1,100000)+1),"-f","image2pipe","-c:v","png","-pix_fmt","rgb24","pipe:1"));
             String format=text(fixed,"format",8);Process process=start(args,job);Parser parser=new Parser(fixed,job);CompletableFuture<Void> stderr=readLines(process.getErrorStream(),parser::accept,job);
             long count=0,bytes=0,lastProgress=0,emitted=0,dropped=0;double lastKept=Double.NEGATIVE_INFINITY;double[] lastSignature=null;
             boolean scene=text(fixed,"mode",20).equals("scene");double minInterval=scene?fixed.get("minIntervalSeconds").getAsDouble():0,sceneThreshold=scene?fixed.get("sceneThreshold").getAsDouble():0;
@@ -94,6 +94,7 @@ final class VideoFrames implements AutoCloseable {
             if(!hash(Path.of(text(fixed,"sourcePath",32767)),job).equals(text(fixed,"sourceHash",64)))throw error(409,"video_source_changed","来源视频在抽帧期间发生变化，保留未完成产物。");
             checkpoint(job);String manifestHash=hash(partial,job);Path complete=directory.resolve("frames.jsonl");Files.move(partial,complete,StandardCopyOption.ATOMIC_MOVE);
             JsonObject summary=Json.obj("version",VERSION,"jobId",job.id,"status","completed","frameCount",count,"outputBytes",bytes,"sourceHash",fixed.get("sourceHash"),"sourceVideoId",fixed.get("sourceVideoId"),"originPts",Long.toString(parser.origin),"timeBase",fixed.get("timeBase"),"manifestHash",manifestHash,"manifestPath",complete.toString(),"selectionVersion",SELECTION);
+            JsonArray warnings=decodeWarnings(parser.log());if(!warnings.isEmpty())summary.add("decodeWarnings",warnings);
             if(scene){summary.addProperty("sceneThreshold",fixed.get("sceneThreshold").getAsDouble());summary.addProperty("minIntervalSeconds",minInterval);summary.addProperty("deduplicatedFrames",dropped);}
             synchronized(job){checkpoint(job);atomicJson(directory.resolve("complete.json"),summary);job.committed=true;}notify(job,summary.deepCopy());return new Extraction(complete,summary);
         }catch(ApiError failure){if(directory!=null)incomplete(directory,job,failure);throw failure;}
@@ -172,6 +173,15 @@ final class VideoFrames implements AutoCloseable {
         }
         int expectedPending(){return expected.size();}
         String log(){synchronized(logs){return logs.toString();}}
+    }
+
+    /** 损坏包按可恢复策略继续抽帧，但必须在完成摘要中留下用户可见的依据。 */
+    private static JsonArray decodeWarnings(String log){
+        JsonArray warnings=new JsonArray();Set<String> unique=new LinkedHashSet<>();
+        for(String line:log.split("\\R"))if(line.matches("(?i).*?(packet corrupt|corrupt input packet|error submitting packet|invalid data found|overread).*")){
+            String value=line.strip();if(value.length()>500)value=value.substring(0,500);if(unique.add(value)&&warnings.size()<20)warnings.add(value);
+        }
+        return warnings;
     }
 
     private static JsonObject frame(JsonObject fixed,Parser parser,Frame frame,String file,String hash,long bytes){

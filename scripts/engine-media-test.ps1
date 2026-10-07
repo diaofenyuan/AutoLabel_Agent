@@ -1,5 +1,6 @@
 ﻿param(
     [string]$VideoPath = '.qa/media-samples/vtest.avi',
+    [string]$RecoveryVideoPath,
     [string]$FfmpegPath = 'build/media-tools/ffmpeg.exe',
     [string]$FfprobePath = 'build/media-tools/ffprobe.exe',
     [switch]$NoBuild
@@ -18,6 +19,8 @@ try {
     $jar = Join-Path $root 'engine/build/autolabel-engine.jar'
     & "$jdk/bin/javac.exe" -encoding UTF-8 -cp $jar -d $classes 'engine/src/test/java/cn/autolabel/engine/MediaJobsIntegrationTest.java'
     if ($LASTEXITCODE -ne 0) { throw '媒体集成测试编译失败。' }
-    & "$jdk/bin/java.exe" '-Djava.awt.headless=true' -cp "$classes;$jar" cn.autolabel.engine.MediaJobsIntegrationTest $ffmpeg $ffprobe $video
+    $arguments = @($ffmpeg, $ffprobe, $video)
+    if ($RecoveryVideoPath) { $arguments += (Resolve-Path -LiteralPath $RecoveryVideoPath).Path }
+    & "$jdk/bin/java.exe" '-Djava.awt.headless=true' -cp "$classes;$jar" cn.autolabel.engine.MediaJobsIntegrationTest @arguments
     if ($LASTEXITCODE -ne 0) { throw '媒体关键链路验证失败。' }
 } finally { Pop-Location }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { VideoInspection } from '../../shared/media';
 import { VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_DOWNSAMPLE_THRESHOLD, VIDEO_MAX_FRAMES, VIDEO_SCENE_MIN_INTERVAL_SECONDS, VIDEO_SCENE_THRESHOLD } from '../../shared/media';
-import { batchExtractionPlan, batchFailures, batchOutcome, remainingBatchItems } from '../src/videoBatchPlan';
+import { batchExtractionPlan, batchFailures, batchOutcome, remainingBatchItems, retryWhileMediaBusy } from '../src/videoBatchPlan';
 
 function inspection(overrides: Partial<VideoInspection> = {}): VideoInspection {
   return {
@@ -57,6 +57,40 @@ test('超长视频退到按间隔采样并留出帧数余量', () => {
 test('时长正好在上限内时仍用场景模式', () => {
   const plan = batchExtractionPlan(inspection({ durationSeconds: VIDEO_MAX_FRAMES * VIDEO_SCENE_MIN_INTERVAL_SECONDS }));
   assert.ok(!('error' in plan) && plan.parameters.mode === 'scene');
+});
+
+test('批量探测遇到媒体任务占用后等待并自动重试', async () => {
+  let calls = 0;
+  const waits: number[] = [];
+  const result = await retryWhileMediaBusy(async () => {
+    calls++;
+    if (calls === 1) throw Object.assign(new Error('媒体资源正在使用'), { code: 'media_busy' });
+    return inspection();
+  }, { shouldStop: () => false, wait: async ms => { waits.push(ms); } });
+  assert.deepEqual(result, inspection());
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [750]);
+});
+
+test('批量探测的真实错误直接返回，不进入媒体占用重试', async () => {
+  let calls = 0;
+  const decodeError = Object.assign(new Error('视频解码失败'), { code: 'video_decode_failed' });
+  await assert.rejects(retryWhileMediaBusy(async () => {
+    calls++;
+    throw decodeError;
+  }, { shouldStop: () => false, wait: async () => {} }), error => error === decodeError);
+  assert.equal(calls, 1);
+});
+
+test('用户停止时结束媒体占用等待，不再发起探测', async () => {
+  let stopped = false;
+  let calls = 0;
+  const result = await retryWhileMediaBusy(async () => {
+    calls++;
+    throw Object.assign(new Error('媒体资源正在使用'), { code: 'media_busy' });
+  }, { shouldStop: () => stopped, wait: async () => { stopped = true; } });
+  assert.equal(result, null);
+  assert.equal(calls, 1);
 });
 
 test('再次开始时跳过已排队的视频，失败与待处理的仍会重试', () => {

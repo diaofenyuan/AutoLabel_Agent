@@ -214,7 +214,7 @@ interface MediaJobState {
   sourceName?: string;
   progress: MediaProgress;
   summary?: Record<string, unknown>;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; details?: Record<string, unknown> };
 }
 
 export type MediaJob = MediaJobState & (

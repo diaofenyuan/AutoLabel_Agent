@@ -20,8 +20,17 @@ public final class MediaJobsIntegrationTest {
     private static JsonObject flow(Engine e,String pid,JsonArray steps)throws Exception{return cmd(e,"flow.create",Json.obj("projectId",pid,"input",Json.obj("source","project","selection","all"),"definition",Json.obj("version",1,"name","媒体链路","steps",steps)));}
     private static JsonObject step(String id,String kind,JsonObject p){return Json.obj("id",id,"kind",kind,"enabled",true,"parameters",p);}
     public static void main(String[] args)throws Exception{
-        if(args.length!=3)throw new IllegalArgumentException("ffmpeg ffprobe video");ffmpeg=Path.of(args[0]).toAbsolutePath();ffprobe=Path.of(args[1]).toAbsolutePath();video=Path.of(args[2]).toAbsolutePath();root=Path.of("engine/build/verification/media-jobs-"+System.currentTimeMillis()).toAbsolutePath();Files.createDirectories(root);
-        realVideo();sameContent();bulkImport();assetImportRetry();recoveryAndCancellation();artifactRecovery();importRecovery();System.out.println("PASS "+checks+" media integration checks; VERIFICATION_DIR="+root);
+        if(args.length<3||args.length>4)throw new IllegalArgumentException("ffmpeg ffprobe video [damagedVideo]");ffmpeg=Path.of(args[0]).toAbsolutePath();ffprobe=Path.of(args[1]).toAbsolutePath();video=Path.of(args[2]).toAbsolutePath();root=Path.of("engine/build/verification/media-jobs-"+System.currentTimeMillis()).toAbsolutePath();Files.createDirectories(root);
+        realVideo();sameContent();bulkImport();assetImportRetry();recoveryAndCancellation();artifactRecovery();importRecovery();if(args.length==4)recoverDamagedVideo(Path.of(args[3]).toAbsolutePath());System.out.println("PASS "+checks+" media integration checks; VERIFICATION_DIR="+root);
+    }
+    private static void recoverDamagedVideo(Path source)throws Exception{
+        try(VideoFrames helper=new VideoFrames(ffmpeg,ffprobe)){
+            JsonObject request=Json.obj("jobId",Json.id(),"sourcePath",source.toString(),"mode","interval","intervalSeconds",1,"ranges",Json.arr(Json.obj("start",0,"end",604800)),"maxFrames",10000,"timeoutMs",600000);
+            JsonObject fixed=helper.inspect(request,60000);Path output=root.resolve("damaged-source-recovery");VideoFrames.Extraction extracted=helper.extract(fixed,output,null);
+            check(Json.integer(extracted.summary(),"frameCount",0)>0,"recoverable corrupt input still yields usable frames");
+            check(Json.array(extracted.summary(),"decodeWarnings").size()>0,"recovered corrupt input records decode warnings");
+            check(Files.isRegularFile(output.resolve("complete.json")),"recovered output publishes only after normal integrity checks");
+        }
     }
     private static void realVideo()throws Exception{
         try(Engine e=new Engine(root.resolve("real"),startup())){

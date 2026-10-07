@@ -3,7 +3,7 @@ import { VIDEO_DOWNSAMPLE_LONG_EDGE, type MediaJob, type VideoInspection } from 
 import { request, errorMessage, isDemo } from './bridge';
 import { Button, Modal } from './ui';
 import { baseName } from './projectNaming';
-import { batchExtractionPlan, batchFailures, batchOutcome, remainingBatchItems, type BatchFailure } from './videoBatchPlan';
+import { batchExtractionPlan, batchFailures, batchOutcome, remainingBatchItems, retryWhileMediaBusy, type BatchFailure } from './videoBatchPlan';
 
 type BatchItemState = { kind: 'pending' } | { kind: 'working'; label: string } | { kind: 'queued'; note?: string } | { kind: 'failed'; error: string };
 interface BatchItem { path: string; name: string; state: BatchItemState }
@@ -44,8 +44,11 @@ export default function VideoBatchImport({ projectId, files, onClose, onCreated 
       if (cancelled.current) break;
       try {
         patch(item.path, { kind: 'working', label: '正在检查…' });
-        const inspection = await request<VideoInspection>('media.video.inspect', { sourcePath: item.path });
-        if (cancelled.current) break;
+        const inspection = await retryWhileMediaBusy(
+          () => request<VideoInspection>('media.video.inspect', { sourcePath: item.path }),
+          { shouldStop: () => cancelled.current, onBusy: () => patch(item.path, { kind: 'working', label: '等待当前媒体任务结束，随后自动继续…' }) }
+        );
+        if (!inspection || cancelled.current) break;
         const plan = batchExtractionPlan(inspection);
         if ('error' in plan) { patch(item.path, { kind: 'failed', error: plan.error }); failures.push({ path: item.path, name: item.name, error: plan.error }); continue; }
         patch(item.path, { kind: 'working', label: '正在创建任务…' });
