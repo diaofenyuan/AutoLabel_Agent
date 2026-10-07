@@ -83,6 +83,13 @@ export async function checkDesktopRunControls(window: BrowserWindow, output: str
     const beforeRetry = calls; await button('重试失败样本', "document.querySelector('.run-detail')"); await waitForServerCalls(beforeRetry);
     const afterRetry = await runStatus(failedRun.id, ['failed', 'completed_with_errors']);
     assert.ok(calls > beforeRetry);
+    // 同一任务快速重复点击时只保留一条读取中的行，完成后仍可正常打开详情。
+    const duplicateRow = `[...document.querySelectorAll('.run-list .run-row')].find(e=>e.innerText.includes('fixture-failed'))`;
+    await js(`${duplicateRow}.click()`);
+    await wait(`${duplicateRow}.getAttribute('aria-busy')==='true'`);
+    await js(`${duplicateRow}.click()`);
+    assert.equal(await js<number>(`document.querySelectorAll('.run-row[aria-busy="true"]').length`), 1);
+    await wait(`!document.querySelector('.run-row[aria-busy="true"]')`);
     // 连续切换两条任务，确认详情最终跟随最后一次点击，且行级加载态正常收敛。
     const pausedRow = `[...document.querySelectorAll('.run-list .run-row')].find(e=>e.innerText.includes('fixture-paused'))`;
     const failedRow = `[...document.querySelectorAll('.run-list .run-row')].find(e=>e.innerText.includes('fixture-failed'))`;
@@ -101,7 +108,7 @@ export async function checkDesktopRunControls(window: BrowserWindow, output: str
     window.webContents.debugger.detach();
     await js(`document.querySelector('[aria-label="关闭任务详情"]')?.click()`);
     await wait(`!document.querySelector('.run-detail')`);
-    await writeFile(output, JSON.stringify({ passed: true, taskKinds, taskFilters, searchByName: true, failureReasonVisible: true, latestTaskSelectionWins: latestSelectionWon, paused: { runId: pausedRun.id, resumeStayedPaused: true, cancelled: cancelled.status === 'cancelled', controls }, failedRetry: { runId: failedRun.id, callsBefore: beforeRetry, callsAfter: calls, status: afterRetry.status, retryDispatched: true } }, null, 2));
+    await writeFile(output, JSON.stringify({ passed: true, taskKinds, taskFilters, searchByName: true, failureReasonVisible: true, duplicateSelectionGuard: true, latestTaskSelectionWins: latestSelectionWon, paused: { runId: pausedRun.id, resumeStayedPaused: true, cancelled: cancelled.status === 'cancelled', controls }, failedRetry: { runId: failedRun.id, callsBefore: beforeRetry, callsAfter: calls, status: afterRetry.status, retryDispatched: true } }, null, 2));
   } catch (error) {
     await writeFile(output, JSON.stringify({ passed: false, calls, error: error instanceof Error ? error.message : String(error), body: await js('document.body.innerText') }, null, 2));
     throw error;
