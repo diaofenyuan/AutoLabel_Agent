@@ -42,6 +42,22 @@ export async function classifyDrop(files: File[]): Promise<DroppedFiles> {
   return result;
 }
 
+/** 粘贴截图没有磁盘路径时，将 Blob 交给桌面侧落盘并纳入同一授权链路。 */
+export async function filesToDroppedFiles(files: File[]): Promise<DroppedFiles> {
+  const result = await classifyDrop(files);
+  const bridge = await getBridge();
+  for (const file of files) {
+    if (!file.type.startsWith('image/') || file.size === 0) continue;
+    const path = bridge.pathForFile?.(file) ?? '';
+    if (path || result.unresolved.indexOf(file.name) < 0) continue;
+    if (!bridge.saveClipboardImage) continue;
+    const saved = await bridge.saveClipboardImage({ data: await file.arrayBuffer(), name: file.name || '截图.png' });
+    result.images.push(saved);
+    result.unresolved = result.unresolved.filter(item => item !== file.name);
+  }
+  return result;
+}
+
 /** 可拖入的扩展名清单：拖放提示与拒绝原因共用，改一处就够。 */
 export const droppableExtensions = { imagesLabel: IMAGE_EXTENSION_LABEL, videoLabel: VIDEO_EXTENSION_LABEL };
 

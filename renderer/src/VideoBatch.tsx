@@ -84,7 +84,7 @@ export default function VideoBatchImport({ projectId, files, onClose, onCreated 
     : '';
   return <Modal title={`一键抽帧（${items.length} 个视频）`} onClose={close}>
     <div className="form-stack">
-      <p className="muted tiny">全部按默认参数抽帧：场景变化采样、输出 PNG、超高清自动缩到长边 {VIDEO_DOWNSAMPLE_LONG_EDGE} 像素。任务在引擎里排队逐个执行，素材就绪后自动导入项目；想单独调某个视频的参数，回到清单逐个点「抽帧」。个别视频建不成任务不会中断整批，失败原因就地列出，可只重试它们。</p>
+      <p className="muted tiny">全部按默认参数抽帧：每 1 秒固定抽取一帧、输出 PNG、超高清自动缩到长边 {VIDEO_DOWNSAMPLE_LONG_EDGE} 像素。任务在引擎里排队逐个执行，素材就绪后自动导入项目；想单独调某个视频的参数，回到清单逐个点「抽帧」。个别视频建不成任务不会中断整批，失败原因就地列出，可只重试它们。</p>
       <div className="board-list video-pick-list">{items.map(item => <article className="board-row" key={item.path}>
         <div className="board-main">
           <strong>{item.name}</strong>

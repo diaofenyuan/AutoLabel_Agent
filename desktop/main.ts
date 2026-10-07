@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage, protocol, session, powerMonitor, safeStorage } from 'electron';
 import type { IpcMainInvokeEvent, OpenDialogOptions } from 'electron';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { accessSync, constants as fsConstants } from 'node:fs';
 import { readFile, writeFile, mkdir, stat, statfs, realpath, readdir, cp } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
@@ -878,6 +879,23 @@ function registerIpc(): void {
       filters: extension ? [{ name: `${extension.toUpperCase()} 文件`, extensions: [extension] }] : undefined });
     // 新输出文件尚不存在，只授权已确认的父目录和精确文件名。
     return result.canceled || !result.filePath ? null : grants.addOutput(result.filePath);
+  });
+  handle('autolabel:save-clipboard-image', async (_event, options) => {
+    const data = options && typeof options === 'object' && 'data' in options ? (options as { data?: unknown }).data : undefined;
+    if (!(data instanceof ArrayBuffer) || data.byteLength < 32 || data.byteLength > 32 * 1024 * 1024) {
+      throw new DesktopError('INVALID_PAYLOAD', '截图数据无效或超过 32 MB');
+    }
+    const bytes = Buffer.from(data);
+    // PNG 签名和 IEND 尾标记用于阻断伪造扩展名的任意文件写入。
+    const pngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    const pngTail = Buffer.from([73, 69, 78, 68, 174, 66, 96, 130]);
+    if (!bytes.subarray(0, 8).equals(pngHeader) || !bytes.subarray(-8).equals(pngTail)) throw new DesktopError('INVALID_PAYLOAD', '剪贴板内容不是有效 PNG');
+    const directory = path.join(userData, 'clipboard-images');
+    await mkdir(directory, { recursive: true });
+    const filename = `截图-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}.png`;
+    const target = path.join(directory, filename);
+    await writeFile(target, bytes, { flag: 'wx' });
+    return grants.add(target, 'images');
   });
   handle('autolabel:transcode-video', async (_event, options) => {
     const parsed = transcodeSourceSchema.safeParse(options);

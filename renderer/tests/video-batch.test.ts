@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { VideoInspection } from '../../shared/media';
-import { VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_DOWNSAMPLE_THRESHOLD, VIDEO_MAX_FRAMES, VIDEO_SCENE_MIN_INTERVAL_SECONDS, VIDEO_SCENE_THRESHOLD } from '../../shared/media';
+import { VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_DOWNSAMPLE_THRESHOLD, VIDEO_MAX_FRAMES } from '../../shared/media';
 import { batchExtractionPlan, batchFailures, batchOutcome, remainingBatchItems, retryWhileMediaBusy } from '../src/videoBatchPlan';
 
 function inspection(overrides: Partial<VideoInspection> = {}): VideoInspection {
@@ -13,12 +13,12 @@ function inspection(overrides: Partial<VideoInspection> = {}): VideoInspection {
   };
 }
 
-test('默认参数：场景变化采样、整段时长、PNG，不超阈值不缩放', () => {
+test('默认参数：固定每秒一帧、整段时长、PNG，不超阈值不缩放', () => {
   const plan = batchExtractionPlan(inspection({ width: 1280, height: 720 }));
   assert.ok(!('error' in plan));
   assert.deepEqual(plan.parameters, {
     ranges: [{ start: 0, end: 60 }], streamIndex: 0, format: 'png',
-    mode: 'scene', sceneThreshold: VIDEO_SCENE_THRESHOLD, minIntervalSeconds: VIDEO_SCENE_MIN_INTERVAL_SECONDS,
+    mode: 'interval', intervalSeconds: 1,
   });
   assert.equal(plan.note, undefined);
 });
@@ -54,9 +54,10 @@ test('超长视频退到按间隔采样并留出帧数余量', () => {
   assert.match(plan.note ?? '', /每 \d+ 秒一帧/);
 });
 
-test('时长正好在上限内时仍用场景模式', () => {
-  const plan = batchExtractionPlan(inspection({ durationSeconds: VIDEO_MAX_FRAMES * VIDEO_SCENE_MIN_INTERVAL_SECONDS }));
-  assert.ok(!('error' in plan) && plan.parameters.mode === 'scene');
+test('默认每秒一帧超出上限时自动放宽间隔', () => {
+  const plan = batchExtractionPlan(inspection({ durationSeconds: VIDEO_MAX_FRAMES + 1 }));
+  assert.ok(!('error' in plan) && plan.parameters.mode === 'interval');
+  if (plan.parameters.mode === 'interval') assert.equal(plan.parameters.intervalSeconds, 2);
 });
 
 test('批量探测遇到媒体任务占用后等待并自动重试', async () => {

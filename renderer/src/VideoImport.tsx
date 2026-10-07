@@ -40,7 +40,7 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
   const [sourcePath, setSourcePath] = useState(initialSourcePath ?? ''), [inspection, setInspection] = useState<VideoInspection | null>(null), [error, setError] = useState('');
   const [inspecting, setInspecting] = useState(false), [busy, setBusy] = useState(false);
   const [transcodePath, setTranscodePath] = useState(''), [transcoding, setTranscoding] = useState(false), [elapsed, setElapsed] = useState(0);
-  const [density, setDensity] = useState<VideoDensity>('scene'), [customMode, setCustomMode] = useState<'interval' | 'every_n' | 'fps'>('interval'), [customValue, setCustomValue] = useState('1');
+  const [density, setDensity] = useState<VideoDensity>('standard'), [customMode, setCustomMode] = useState<'interval' | 'every_n' | 'fps'>('interval'), [customValue, setCustomValue] = useState('1');
   const [recipes, setRecipes] = useState<VideoExtractionRecipe[]>([]), [recipeId, setRecipeId] = useState(''), [recipeNotice, setRecipeNotice] = useState('');
   const [savingRecipe, setSavingRecipe] = useState(false), [recipeName, setRecipeName] = useState(''), [recipeBusy, setRecipeBusy] = useState(false);
   /**
@@ -298,7 +298,7 @@ export default function VideoImport({ projectId, initialSourcePath, onClose, onC
       ? <div className="video-start">
         <p className="video-start-lead">选择一段本机视频，抽帧后即可开始标注。</p>
         <Button className="primary" busy={inspecting} disabled={isDemo || transcoding} onClick={() => void choose()}><FolderOpen size={15} />{sourcePath ? '重新选择视频' : '选择视频'}</Button>
-        <p className="muted tiny">默认按「场景变化」抽帧：每 1 秒取一个候选帧，与上一张保留帧相比画面变化明显才留下，相近的帧自动跳过，输出 PNG；采样密度与输出尺寸可在选择后调整。</p>
+        <p className="muted tiny">默认每 1 秒固定抽取一帧，不会因画面相似而跳过，输出 PNG；采样密度与输出尺寸可在选择后调整。</p>
         {sourcePath && <p className="muted tiny">已选择：{fileName}（尚未通过检查）</p>}
       </div>
       : <>

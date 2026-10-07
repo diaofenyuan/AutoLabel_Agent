@@ -58,13 +58,13 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     const inspection = await js<string>(`document.querySelector('.video-inspection').innerText`); assert.ok(inspection.includes('768 × 576')); assert.ok(inspection.includes('79.50 秒'));
     // 拖入即抽帧：面板直接带出推荐配方，主按钮就是「开始抽帧」，不用先选密度再开始。
     const defaultDensity = await js<string>(`document.querySelector('[aria-label="视频采样密度"]').value`);
-    assert.equal(defaultDensity, 'scene', `抽帧面板应默认给「场景变化（推荐）」，实际 ${defaultDensity}`);
+    assert.equal(defaultDensity, 'standard', `抽帧面板默认应为每秒一帧，实际 ${defaultDensity}`);
     assert.equal(await js<boolean>(`[...document.querySelectorAll('.modal-actions button')].some(b=>b.innerText.trim()==='开始抽帧'&&!b.disabled)`), true, '拖入视频后主按钮应直接可点「开始抽帧」');
-    const initialEstimate = await js<string>(`document.querySelector('.video-scene-estimate')?.innerText??''`);
+    const initialEstimate = await js<string>(`[...document.querySelectorAll('.video-import p')].find(p=>p.innerText.includes('按当前时间段预计'))?.innerText??''`);
     const initialStorageEstimate = await js<string>(`document.querySelector('.video-output-estimate')?.innerText??''`);
-    assert.match(initialEstimate, /最多约 80 个候选帧/, `场景采样要按视频时长显示候选帧上界：${initialEstimate}`);
+    assert.match(initialEstimate, /预计抽出约 80 帧/, `默认每秒一帧要按视频时长显示帧数：${initialEstimate}`);
     assert.match(initialStorageEstimate, /PNG/, `空间估算应说明当前输出格式：${initialStorageEstimate}`);
-    checks.push({ check: 'video-drop-default-scene', defaultDensity, primaryReady: true, candidateEstimateVisible: true });
+    checks.push({ check: 'video-drop-default-one-fps', defaultDensity, primaryReady: true, frameEstimateVisible: true });
     // 关掉自动导入来实际检查手动入库路径，必须从当前表单操作，避免只改引擎偏好却让界面仍使用旧状态。
     const autoImportChecked = await js<boolean>(`[...document.querySelectorAll('.checkbox-row')].find(e=>e.innerText.includes('抽帧完成后自动导入项目'))?.querySelector('input')?.checked??false`);
     if (autoImportChecked) await js(`([...document.querySelectorAll('.checkbox-row')].find(e=>e.innerText.includes('抽帧完成后自动导入项目'))?.querySelector('input')?.click())`);

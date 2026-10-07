@@ -37,6 +37,6 @@ export function dropRejectionNotice(files: DroppedFiles): string | null {
   }
   const invalid = files.rejected.filter(item => item.reason !== 'unsupported_extension');
   if (invalid.length) parts.push(`${invalid.length} 项无法读取：路径无效或已失效，请重新拖入。`);
-  if (files.unresolved.length) parts.push(`有 ${files.unresolved.length} 个文件没有拿到文件路径（常见于直接复制的截图）。请先保存为 PNG/JPG，再点击「添加图片」或拖入。`);
+  if (files.unresolved.length) parts.push(`有 ${files.unresolved.length} 个文件没有拿到文件路径，请重新复制截图或点击「添加图片」。`);
   return parts.length ? parts.join(' ') : null;
 }

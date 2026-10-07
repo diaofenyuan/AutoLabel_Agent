@@ -83,6 +83,8 @@ export interface DesktopBridge {
   /** 删除 transcodeVideo 产出的临时副本；只接受该功能自己创建的路径。 */
   discardTranscode(options: { path: string }): Promise<void>;
   saveFile(options: { title: string; defaultPath?: string; extension?: string }): Promise<string | null>;
+  /** 将剪贴板截图保存为受管 PNG，并登记为图片附件。 */
+  saveClipboardImage?(options: { data: ArrayBuffer; name?: string }): Promise<string>;
   openPath(path: string): Promise<void>;
   restartEngine(): Promise<EngineStatus>;
   setWindowDirty(dirty: boolean): Promise<void>;

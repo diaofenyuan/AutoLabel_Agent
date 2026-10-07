@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useApp, type ChatAttachment } from './context';
 import { errorMessage, getBridge, request } from './bridge';
 import { Button, Modal, SearchField } from './ui';
-import { dropRejectionNotice, classifyDrop, useFileDrop, type DroppedFiles } from './fileDrop';
+import { dropRejectionNotice, filesToDroppedFiles, useFileDrop, type DroppedFiles } from './fileDrop';
 import { IMAGE_EXTENSION_LABEL, VIDEO_EXTENSION_LABEL } from '../../shared/mediaFormats';
 import type { DesktopBridge } from '../../shared/protocol';
 import { baseName } from './projectNaming';
@@ -72,7 +72,7 @@ async function scanDirectoryAttachment(bridge: DesktopBridge, directory: string)
 
 /** 粘贴 / 点选的文件：与拖入同一条归类与授权管道（路径由 preload 解析、拒绝原因照旧如实回报）。 */
 export async function filesToAttachments(files: File[]): Promise<ChatAttachment[]> {
-  const result = await classifyDrop(files);
+  const result = await filesToDroppedFiles(files);
   const attachments: ChatAttachment[] = [...result.images.map(item => ({ id: crypto.randomUUID(), path: item, kind: 'image' as const, name: baseName(item) })),
     ...result.videos.map(item => ({ id: crypto.randomUUID(), path: item, kind: 'video' as const, name: baseName(item) }))];
   // 文件夹同样走统一扫描：点选进来的文件夹和拖入的一样携带数量与视频清单。

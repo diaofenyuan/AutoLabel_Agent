@@ -31,6 +31,7 @@ const bridge: DesktopBridge = Object.freeze({
   transcodeVideo: (options: { sourcePath: string }) => invoke<{ path: string }>('autolabel:transcode-video', options),
   discardTranscode: (options: { path: string }) => invoke<void>('autolabel:discard-transcode', options),
   saveFile: (options: { title: string; defaultPath?: string; extension?: string }) => invoke<string | null>('autolabel:save-file', options),
+  saveClipboardImage: (options: { data: ArrayBuffer; name?: string }) => invoke<string>('autolabel:save-clipboard-image', options),
   openPath: (value: string) => invoke<void>('autolabel:open-path', value),
   restartEngine: () => invoke<EngineStatus>('autolabel:restart-engine'),
   setWindowDirty: (dirty: boolean) => invoke<void>('autolabel:window-dirty', dirty),

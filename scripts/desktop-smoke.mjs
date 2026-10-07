@@ -200,11 +200,11 @@ if (runControlOnly) { assert.equal(result.passed, true); assert.equal(result.tas
 if (mediaOnly) { assert.equal(result.passed, true); assert.equal(result.timeline?.frameCount, 4); assert.equal(result.timeline?.framesHaveSourcePts, true); assert.equal(result.timeline?.workspaceVisible, true);
   const scene = result.checks.find(check => check.check === 'scene-extraction');
   assert.ok(scene && scene.firstKept === true && scene.thresholdOneFrames === 1 && scene.thinnedFrames >= 1 && scene.thinnedFrames <= 3, `场景变化抽帧断言未通过：${JSON.stringify(scene)}`);
-  const dropDefault = result.checks.find(check => check.check === 'video-drop-default-scene');
-  assert.equal(dropDefault?.defaultDensity, 'scene', `拖入应默认给场景变化推荐档：${JSON.stringify(dropDefault)}`);
+  const dropDefault = result.checks.find(check => check.check === 'video-drop-default-one-fps');
+  assert.equal(dropDefault?.defaultDensity, 'standard', `拖入应默认每秒固定抽一帧：${JSON.stringify(dropDefault)}`);
   const thumb = result.checks.find(check => check.check === 'thumbnail-served-and-rebuildable');
   assert.ok(thumb && thumb.thumbBytes < 30 * 1024 && thumb.fullBytes > thumb.thumbBytes && thumb.rebuiltBytes === thumb.thumbBytes, `缩略图断言未通过：${JSON.stringify(thumb)}`);
-  console.log(`视频抽帧参数、场景变化抽帧与轨迹工作区检查通过：${output}`); process.exit(0); }
+  console.log(`视频默认抽帧、可选场景采样与轨迹工作区检查通过：${output}`); process.exit(0); }
 if (reasonOnly) {
   assert.equal(result.passed, true);
   const byCheck = new Map(result.checks.map(check => [check.check, check]));

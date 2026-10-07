@@ -1,8 +1,8 @@
-import { VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_DOWNSAMPLE_THRESHOLD, VIDEO_MAX_FRAMES, VIDEO_SCENE_MIN_INTERVAL_SECONDS, VIDEO_SCENE_THRESHOLD, type VideoExtractionParameters, type VideoInspection } from '../../shared/media';
+import { VIDEO_DENSITY_SECONDS, VIDEO_DOWNSAMPLE_LONG_EDGE, VIDEO_DOWNSAMPLE_THRESHOLD, VIDEO_MAX_FRAMES, type VideoExtractionParameters, type VideoInspection } from '../../shared/media';
 
 /**
  * 一键抽帧按单个抽帧面板的默认参数逐个建任务，这里的取值必须与 VideoImport 的首屏默认保持一致：
- * 场景变化采样、PNG 输出；长边超过阈值时等比缩到目标长边（不留黑边）。
+ * 每秒一帧、PNG 输出；长边超过阈值时等比缩到目标长边（不留黑边）。
  * 纯参数计算单独成模块：回归测试不需要界面与引擎（bridge/ui 在 node 里不可导入）。
  */
 /**
@@ -66,18 +66,17 @@ export function batchExtractionPlan(inspection: VideoInspection): { parameters: 
   const longEdge = Math.max(inspection.width, inspection.height);
   const downsampled = longEdge > VIDEO_DOWNSAMPLE_THRESHOLD && inspection.width > 0 && inspection.height > 0;
   const scale = VIDEO_DOWNSAMPLE_LONG_EDGE / longEdge;
-  // 场景模式候选帧按每 minInterval 秒一个估算，超过引擎单次上限整单会失败：退到按间隔采样并留出余量。
-  // 边界按「上限内」算（ceil，D 正好是 minInterval 的整数倍时仍用场景模式）：最后一个候选落在 t=D 上，
-  // 而视频末帧的 PTS 一定小于时长，实际不会多出那一帧。
-  const overLimit = Math.ceil(duration / VIDEO_SCENE_MIN_INTERVAL_SECONDS) > VIDEO_MAX_FRAMES;
+  // 默认密度按每秒一帧估算，超过引擎上限时放宽间隔并留出取整余量。
+  const defaultInterval = VIDEO_DENSITY_SECONDS.standard;
+  const overLimit = Math.ceil(duration / defaultInterval) > VIDEO_MAX_FRAMES;
   const intervalSeconds = Math.max(1, Math.ceil(duration / Math.max(1, VIDEO_MAX_FRAMES - 1)));
   const parameters: VideoExtractionParameters = {
     ranges: [{ start: 0, end: duration }], streamIndex: inspection.streamIndex, format: 'png',
     ...(downsampled ? { outputSize: { width: Math.max(1, Math.round(inspection.width * scale)), height: Math.max(1, Math.round(inspection.height * scale)), fit: 'contain' as const } } : {}),
-    ...(overLimit ? { mode: 'interval' as const, intervalSeconds } : { mode: 'scene' as const, sceneThreshold: VIDEO_SCENE_THRESHOLD, minIntervalSeconds: VIDEO_SCENE_MIN_INTERVAL_SECONDS })
+    mode: 'interval', intervalSeconds: overLimit ? intervalSeconds : defaultInterval
   };
   const notes = [
-    ...(overLimit ? [`视频较长（约 ${Math.round(duration)} 秒），场景模式候选帧会超过单次上限，已改为每 ${intervalSeconds} 秒一帧。`] : []),
+    ...(overLimit ? [`视频较长（约 ${Math.round(duration)} 秒），每秒一帧会超过单次上限，已改为每 ${intervalSeconds} 秒一帧。`] : []),
     ...(downsampled ? [`源视频长边 ${longEdge} 像素，已默认把输出缩到长边 ${VIDEO_DOWNSAMPLE_LONG_EDGE} 像素（保持宽高比）。`] : [])
   ];
   return { parameters, ...(notes.length ? { note: notes.join(' ') } : {}) };
