@@ -208,6 +208,7 @@ export function FrameJobStrip() {
       const imported = await request<MediaJob>('media.video.import', { jobId });
       setJob(imported);
       await Promise.all([refreshAssets(), refreshProjects()]);
+      await ensureTimeline(imported);
       notify('抽帧产物已导入项目，素材可以直接标注了。');
     } catch (e) { setError(errorMessage(e)); }
     finally {

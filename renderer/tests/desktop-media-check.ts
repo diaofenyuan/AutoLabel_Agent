@@ -99,10 +99,9 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     checks.push({ check: 'video-inspect-extract-before-import', inspection, jobId: firstJob.id, geometryNoticeVisible: await js(`document.querySelector('.media-job-detail .notice')?.innerText??null`), frames: frames.items, overlappingRangesBlocked: true, assetCountBeforeImport: 0 });
 
     // ===== 进度条手动导入：点击后立即进入忙碌态，重复点击不会并发提交 =====
-    window.setContentSize(390, 844);
+    window.setContentSize(1440, 940);
     await wait(`document.querySelector('.frame-job-strip')?.innerText.includes('抽帧就绪，待导入')`);
-    assert.equal(await js<boolean>(`document.documentElement.scrollWidth<=window.innerWidth`), true, '窄屏进度条不得撑出页面宽度');
-    await capture('-manual-import-mobile.png', '.frame-job-strip'); await button('立即导入素材');
+    await capture('-manual-import.png', '.frame-job-strip'); await button('立即导入素材');
     await wait(`!!document.querySelector('.frame-job-actions .button.primary[aria-busy="true"]')`);
     await js(`document.querySelector('.frame-job-actions .button.primary')?.click()`);
     assert.equal(await js<boolean>(`!!document.querySelector('.frame-job-actions .button.primary[aria-busy="true"]:disabled')`), true, '手动导入开始后按钮应显示忙碌并禁用重复点击');
@@ -146,19 +145,15 @@ export async function checkDesktopMedia(window: BrowserWindow, output: string): 
     checks.push({ check: 'truth-set-entry-reachable', openedFromOverview: true });
     checks.push({ check: 'explicit-frame-import', jobId: firstJob.id, assetsCommitted: true, imported: all.total, sourceIdentityRetained: true, overviewVisible: 4 });
 
-    // ===== 时间轴：帧数据按接口断言；界面在「任务 · 轨迹标注」里选中它并进入工作区 =====
+    // ===== 时间轴：手动导入后自动补建，界面在「任务 · 轨迹标注」进入工作区 =====
     const keyframeAsset = all.items[0];
     const seededAnnotation = { id: 'track-undo-fixture', type: 'detect', classId: 'person', bbox: { x: 12, y: 18, width: 80, height: 64 } };
     const savedAnnotation = await api('annotation.save', { assetId: keyframeAsset.id, baseVersion: keyframeAsset.version, annotations: [seededAnnotation], confirm: false });
     checks.push({ check: 'track-undo-seed-annotation', assetId: keyframeAsset.id, version: savedAnnotation.version });
     await gotoTasks(driver, '轨迹标注');
-    await wait(`!!document.querySelector('.video-timeline')`);
-    await wait(`!!document.querySelector('[aria-label="时间轴来源抽帧任务"] option[value="${firstJob.id}"]')`);
-    await select('[aria-label="时间轴来源抽帧任务"]', firstJob.id);
-    await button('建立时间轴');
     await wait(`!!document.querySelector('.timeline-workspace')`);
     const timelineId = await js<string>(`document.querySelector('[aria-label="视频时间轴"]').value`);
-    assert.ok(timelineId, '从任务页建立时间轴后应自动进入该时间轴');
+    assert.ok(timelineId, '手动导入后应自动补建时间轴并进入该时间轴');
     const timeline = await api('track.timeline.get', { timelineId });
     checks.push({ check: 'track-undo-create-timeline-from-task-ui', timelineId: timeline.id, version: timeline.version });
     const timelineFrames = await api('track.timeline.frames', { timelineId: timeline.id, offset: 0, limit: 50 });

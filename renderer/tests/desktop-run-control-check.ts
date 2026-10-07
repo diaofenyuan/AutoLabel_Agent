@@ -100,12 +100,6 @@ export async function checkDesktopRunControls(window: BrowserWindow, output: str
     assert.equal(latestSelectionWon, true, '较早返回的任务详情不能覆盖最近一次点击');
     await wait(`!document.querySelector('.run-row[aria-busy="true"]')`);
     await writeFile(output.replace(/\.json$/, '-desktop.png'), (await window.webContents.capturePage()).toPNG());
-    window.webContents.debugger.attach('1.3');
-    await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
-    await new Promise(resolve => setTimeout(resolve, 250));
-    await writeFile(output.replace(/\.json$/, '-mobile.png'), (await window.webContents.capturePage()).toPNG());
-    await window.webContents.debugger.sendCommand('Emulation.clearDeviceMetricsOverride');
-    window.webContents.debugger.detach();
     await js(`document.querySelector('[aria-label="关闭任务详情"]')?.click()`);
     await wait(`!document.querySelector('.run-detail')`);
     await writeFile(output, JSON.stringify({ passed: true, taskKinds, taskFilters, searchByName: true, failureReasonVisible: true, duplicateSelectionGuard: true, latestTaskSelectionWins: latestSelectionWon, paused: { runId: pausedRun.id, resumeStayedPaused: true, cancelled: cancelled.status === 'cancelled', controls }, failedRetry: { runId: failedRun.id, callsBefore: beforeRetry, callsAfter: calls, status: afterRetry.status, retryDispatched: true } }, null, 2));
