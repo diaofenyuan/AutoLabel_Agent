@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useApp } from './context';
 import { request, errorMessage, getBridge } from './bridge';
 import { Composer } from './ui';
@@ -39,7 +39,7 @@ function timeAgo(iso: string): string {
  * 描述或拖入的文件先确认项目归属（命名或选已有），发送后才建好项目并开始对话。
  */
 export default function ChatHome() {
-  const { projects, project, openProject, refreshProjects, notify, setMediaJob, setMediaTaskId, prefs, savePrefs, providers, navigate, setPendingVideoImports,
+  const { projects, project, openProject, refreshProjects, notify, setMediaJob, setMediaTaskId, prefs, setPrefs, savePrefs, providers, navigate, setPendingVideoImports,
     homeDraft: input, setHomeDraft: setInput, homeAttachments: attachments, setHomeAttachments: setAttachments } = useApp();
   const [busy, setBusy] = useState(false);
   // 欢迎页还没有项目时，用户点「选择视频抽帧」要先有一个项目承载抽帧产物；这里存下这次点击建好的项目与选中路径。
@@ -54,9 +54,25 @@ export default function ChatHome() {
   }));
   // 欢迎页还没有会话，选择模型即写入默认值：新建会话与任务都以它为初值。
   const choice = { providerId: prefs.chatProviderId, model: prefs.chatModel };
+  const prefsRef = useRef(prefs); prefsRef.current = prefs;
+  const pendingPrefsRef = useRef<typeof prefs | null>(null);
+  const choiceSaveQueueRef = useRef(Promise.resolve());
   async function saveChoice(next: Partial<typeof choice>) {
-    try { await savePrefs({ ...prefs, chatProviderId: next.providerId ?? choice.providerId, chatModel: next.model ?? choice.model }); }
-    catch (e) { notify(errorMessage(e), true); }
+    // 模型选择可以连续点击：串行保存，避免较慢的旧请求最后返回并覆盖新选择。
+    const base = pendingPrefsRef.current ?? prefsRef.current;
+    const nextPrefs = { ...base, chatProviderId: next.providerId ?? base.chatProviderId, chatModel: next.model ?? base.chatModel };
+    pendingPrefsRef.current = nextPrefs;
+    const operation = choiceSaveQueueRef.current.then(async () => {
+      try {
+        await request('settings.save', { settings: nextPrefs });
+        if (pendingPrefsRef.current === nextPrefs) { pendingPrefsRef.current = null; prefsRef.current = nextPrefs; setPrefs(nextPrefs); }
+      } catch (e) {
+        // 旧请求失败时不打断后续选择；只对当前最后一项提示错误。
+        if (pendingPrefsRef.current === nextPrefs) { pendingPrefsRef.current = null; notify(errorMessage(e), true); }
+      }
+    });
+    choiceSaveQueueRef.current = operation.then(() => undefined, () => undefined);
+    await operation;
   }
   // 最近更新的几个项目都留出入口：只给一个「继续」时，用户没法表达「我要接着另一个项目干」。
   const recentProjects = [...projects].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? ''))).slice(0, 3);
