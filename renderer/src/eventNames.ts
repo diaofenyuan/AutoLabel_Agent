@@ -8,7 +8,7 @@ const eventNames: Record<string, string> = {
   'call.queued': '请求排队中', 'call.sent': '请求已发送', 'call.delta': '正在接收响应', 'call.not_sent': '请求未发送', 'call.completed': '请求已完成', 'call.failed': '请求失败', 'call.unknown': '请求结果未知',
   'flow.created': '流程已创建', 'flow.running': '流程执行中', 'flow.pausing': '流程正在暂停', 'flow.paused': '流程已暂停', 'flow.resumed': '流程已恢复', 'flow.recovered': '流程已从中断恢复', 'flow.needs_attention': '流程需要处理', 'flow.cancelling': '流程正在停止', 'flow.cancelled': '流程已停止', 'flow.completed': '流程已完成', 'flow.completed_with_errors': '流程完成，有需处理项', 'flow.failed': '流程失败',
   'flow.step.started': '流程步骤开始', 'flow.step.progress': '流程步骤进度更新', 'flow.step.completed': '流程步骤已完成', 'flow.step.completed_with_errors': '流程步骤完成，有需处理项', 'flow.step.failed': '流程步骤失败', 'flow.step.needs_attention': '流程步骤等待处理', 'flow.step.paused': '流程步骤已暂停', 'flow.step.cancelled': '流程步骤已停止', 'flow.step.skipped': '流程步骤已跳过',
-  'budget.updated': '请求预算已更新', 'budget.cost_updated': '费用记录已更新', 'settings.saved': '全局设置已保存',
+  'budget.updated': '请求预算已更新', 'budget.cost_updated': '费用记录已更新', 'settings.saved': '全局设置已保存', 'settings.globalConcurrencyApplied': '全局并发限制已应用',
   'provider.saved': '接口配置已保存', 'provider.deleted': '接口配置已删除', 'resource.saved': '资源已保存', 'evaluation.completed': '评测已完成',
   'evaluation_rerun.created': '评测重跑已创建', 'evaluation_set.created': '评测集已创建', 'evaluation_set.published': '评测集已发布', 'evaluation_truth.saved': '评测真值已保存',
   'review.built': '复核清单已建立', 'review.resolved': '复核问题已处理', 'review.sampled': '抽查样本已建立',
