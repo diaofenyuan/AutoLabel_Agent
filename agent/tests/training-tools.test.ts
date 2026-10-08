@@ -85,8 +85,9 @@ test('数据集预检只读，原因与问题都以中文返回，不带原始�
 
 test('训练快照只能由已生成版本建立，提交前先预检且不猜测参数', async () => {
   const f = fixture();
-  const created = await tool('create_training_dataset').execute({ versionId: 'version-1', name: '检测数据' }, f.environment) as RecordValue;
-  assert.deepEqual(f.calls.at(-1), { command: 'training.dataset.create', payload: { projectId: 'project-1', source: 'version', versionId: 'version-1', name: '检测数据' } });
+  await assert.rejects(tool('create_training_dataset').execute({ versionId: 'version-1', name: '检测数据' }, f.environment), /不支持的参数/);
+  const created = await tool('create_training_dataset').execute({ versionId: 'version-1' }, f.environment) as RecordValue;
+  assert.deepEqual(f.calls.at(-1), { command: 'training.dataset.create', payload: { projectId: 'project-1', source: 'version', versionId: 'version-1' } });
   assert.equal(created.id, 'dataset-1');
   for (const args of [{ versionId: 'version-1', source: 'upload', trainDir: 'D:/private' }, { versionId: 'version-1', files: [] },
     { versionId: 'version-1', path: 'D:/private' }])

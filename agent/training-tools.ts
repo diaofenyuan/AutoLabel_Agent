@@ -196,14 +196,13 @@ export const TRAINING_TOOL_DEFINITIONS: ToolDefinition[] = [
       return { total: result.total, offset, limit, nextOffset: offset + items.length < result.total ? offset + items.length : null, items };
     } },
   { name: 'create_training_dataset', description: '从一个已生成的数据集版本建立不可变训练数据快照并做体检。只接受版本标识，不接受目录或文件路径；快照建立后不会随项目素材变化，可反复用于训练。体检未通过时先按问题修复数据，不要直接开训。',
-    parameters: schema({ versionId: { type: 'string', minLength: 1, maxLength: 128 }, name: { type: ['string', 'null'], maxLength: 200 } }), mutation: true,
+    parameters: schema({ versionId: { type: 'string', minLength: 1, maxLength: 128 } }), mutation: true,
     async execute(args, env) {
-      fields(args, ['versionId', 'name']);
+      fields(args, ['versionId']);
       const project = projectId(env), versionId = id(args.versionId, '数据集版本');
-      const name = args.name == null ? undefined : text(args.name, '数据集名称', 200);
       active(env);
       const created = await env.engine.request('training.dataset.create',
-        { projectId: project, source: 'version', versionId, ...(name == null ? {} : { name }) });
+        { projectId: project, source: 'version', versionId });
       return datasetSummary(created, project);
     } },
   { name: 'preflight_training', description: '按数据集快照与训练参数做引擎预检：环境、设备、基础权重一致性、磁盘与生效参数。只预检，不创建任务、不启动进程；自动批次在只有 CPU 时会报错而不是静默降级。',
