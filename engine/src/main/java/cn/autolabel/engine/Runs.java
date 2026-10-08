@@ -5,11 +5,13 @@ import java.nio.file.*;
 import java.sql.Connection;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 
 final class Runs implements AutoCloseable {
     /** 并发上限的合法区间上界；线程池按此宽度分配，实际放行数量由 globalLimit 实时决定。 */
     static final int CONCURRENCY_CEILING=32;
     final Store store;final Projects projects;final Providers providers;final CandidateReuse reuse;RunResults inputResults;InputResultReuse inputReuse;
+    volatile Consumer<JsonObject> terminalHook=run->{};
     private volatile int globalLimit;
     private final ThreadPoolExecutor requests;
     private final ScheduledExecutorService dispatcher=Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("queue-dispatcher").factory());
@@ -253,8 +255,15 @@ final class Runs implements AutoCloseable {
             if(!cancelled&&!retry&&Json.str(run,"failurePolicy","").equals("pause")){run.addProperty("status","paused");run.addProperty("pauseReason",unknown?"result_unknown":"sample_failed");Store.update(c,"UPDATE runs SET status='paused',data=? WHERE id=?",run,runId);}
             Store.event(c,"sample."+status,runId,assetId,attempt,Json.obj("stage",status,"code",code,"message",message,"nextAttemptAt",retry?next:null));return null;});
     }
-    void settle(String id){store.tx(c->{JsonObject run=Store.document(c,"runs",id);if(!Json.str(run,"status","").equals("running"))return null;JsonObject stats=Json.object(view(c,id,false),"statistics");long pending=0;for(String key:List.of("queued","preparing","sending","waiting","parsing","validating","saving","retry_wait"))pending+=Json.number(stats,key,0);
-        if(pending==0){if(Json.bool(run,"inputResults",false)&&!RunResults.aggregated(c,id))return null;String status=Json.number(stats,"unknown",0)>0?"needs_attention":(Json.number(stats,"failed",0)>0||Store.one(c,"SELECT r.id FROM run_asset_results r WHERE r.run_id=? AND r.status='needs_attention' AND r.rowid=(SELECT MAX(x.rowid) FROM run_asset_results x WHERE x.run_id=r.run_id AND x.asset_id=r.asset_id) LIMIT 1",id)!=null)?"completed_with_errors":"completed";run.addProperty("status",status);run.addProperty("completedAt",Json.now());Store.update(c,"UPDATE runs SET status=?,data=? WHERE id=?",status,run,id);Store.event(c,"run."+status,id,null,null,Json.obj("statistics",stats));}return null;});}
+    void settle(String id){
+        JsonObject terminal=store.tx(c->{JsonObject run=Store.document(c,"runs",id);if(!Json.str(run,"status","").equals("running"))return null;JsonObject stats=Json.object(view(c,id,false),"statistics");long pending=0;for(String key:List.of("queued","preparing","sending","waiting","parsing","validating","saving","retry_wait"))pending+=Json.number(stats,key,0);
+            if(pending>0||Json.bool(run,"inputResults",false)&&!RunResults.aggregated(c,id))return null;
+            String status=Json.number(stats,"unknown",0)>0?"needs_attention":(Json.number(stats,"failed",0)>0||Store.one(c,"SELECT r.id FROM run_asset_results r WHERE r.run_id=? AND r.status='needs_attention' AND r.rowid=(SELECT MAX(x.rowid) FROM run_asset_results x WHERE x.run_id=r.run_id AND x.asset_id=r.asset_id) LIMIT 1",id)!=null)?"completed_with_errors":"completed";
+            run.addProperty("status",status);run.addProperty("completedAt",Json.now());Store.update(c,"UPDATE runs SET status=?,data=? WHERE id=?",status,run,id);Store.event(c,"run."+status,id,null,null,Json.obj("statistics",stats));
+            return Set.of("completed","completed_with_errors").contains(status)?Json.obj("runId",id,"projectId",run.get("projectId"),"name",run.get("name"),"status",status):null;});
+        if(terminal==null)return;
+        try{terminalHook.accept(terminal);}catch(Exception failure){try{store.tx(c->{Store.event(c,"dataset.version.auto_create_failed",Json.required(terminal,"runId"),null,null,Json.obj("projectId",terminal.get("projectId"),"message","标注任务已完成，但自动生成数据集版本失败。"));return null;});}catch(Exception ignored){}}
+    }
     JsonArray attempts(JsonObject p){String id=Json.required(p,"runId");return store.read(c->Store.docs(c,"SELECT data FROM attempts WHERE run_id=? ORDER BY rowid DESC LIMIT 200",id));}
     /**
      * 休眠只停止新的分派，不撤销在途请求；唤醒后核对持久化状态并保持用户暂停/预算不足/结果未知原状。

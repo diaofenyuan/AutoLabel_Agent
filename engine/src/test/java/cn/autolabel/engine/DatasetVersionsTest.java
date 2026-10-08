@@ -25,6 +25,7 @@ final class DatasetVersionsTest {
         versionEvaluation(root.resolve("evaluation"));
         backup(root.resolve("backup"));
         recovery(root.resolve("recovery"));
+        automatic(root.resolve("automatic"));
     }
 
     // ===== 过滤与硬规则 =====
@@ -656,6 +657,47 @@ final class DatasetVersionsTest {
     }
 
     // ===== 引擎重启恢复与重试生成 =====
+
+    // ===== 标注任务终态自动生成版本 =====
+
+    private static void automatic(Path root)throws Exception{
+        try(Engine e=new Engine(root.resolve("data"))){
+            JsonObject project=EngineTest.command(e,"project.create",Json.obj("name","自动版本","taskType","detect",
+                "classes",Json.arr(Json.obj("id","cat","name","猫","color","#3b82f6"))));
+            String pid=Json.required(project,"id");JsonArray ids=EngineTest.importSamples(e,pid,2);
+            annotate(e,ids.get(0).getAsString(),"cat");
+            JsonObject terminal=Json.obj("runId","run-auto-1","projectId",pid,"status","completed","name","自动标注 · fixture");
+            e.datasetVersions.autoCreateForRun(terminal);e.datasetVersions.autoCreateForRun(terminal);
+            JsonObject page=EngineTest.command(e,"dataset.version.list",Json.obj("projectId",pid));
+            check(Json.array(page,"items").size()==1,"同一标注任务只能生成一个自动版本");
+            JsonObject version=await(e,Json.array(page,"items").get(0).getAsJsonObject());
+            check(Json.required(version,"status").equals("ready"),"自动版本最终就绪");
+            check(Json.required(version,"sourceKind").equals("annotation_run"),"版本记录自动标注任务来源");
+            check(Json.required(version,"sourceRunId").equals("run-auto-1"),"版本记录来源任务");
+            check(Json.required(version,"sourceRunStatus").equals("completed"),"版本记录来源任务状态");
+
+            JsonObject empty=EngineTest.command(e,"project.create",Json.obj("name","自动版本空项目","taskType","detect",
+                "classes",Json.arr(Json.obj("id","cat","name","猫","color","#3b82f6"))));
+            String emptyPid=Json.required(empty,"id");
+            e.datasetVersions.autoCreateForRun(Json.obj("runId","run-auto-empty","projectId",emptyPid,"status","completed","name","空标注"));
+            JsonObject failedPage=EngineTest.command(e,"dataset.version.list",Json.obj("projectId",emptyPid));
+            check(Json.array(failedPage,"items").size()==1,"没有有效标注时仍保留自动版本记录");
+            JsonObject failed=Json.array(failedPage,"items").get(0).getAsJsonObject();
+            check(Json.required(failed,"status").equals("failed"),"空标注自动版本明确失败");
+            check(Json.object(failed,"failure").has("message"),"自动版本失败带可读原因");
+
+            JsonObject hookedProject=EngineTest.command(e,"project.create",Json.obj("name","终态触发","taskType","detect",
+                "classes",Json.arr(Json.obj("id","cat","name","猫","color","#3b82f6"))));
+            String hookedPid=Json.required(hookedProject,"id");String hookedAsset=EngineTest.importSamples(e,hookedPid,1).get(0).getAsString();
+            annotate(e,hookedAsset,"cat");String hookedRun="run-auto-hook";
+            e.store.tx(c->{JsonObject run=Json.obj("id",hookedRun,"projectId",hookedPid,"name","终态触发任务","status","running",
+                "total",1,"createdAt",Json.now());Store.update(c,"INSERT INTO runs(id,project_id,status,data) VALUES(?,?,?,?)",hookedRun,hookedPid,"running",run);return null;});
+            e.runs.settle(hookedRun);e.runs.settle(hookedRun);
+            JsonObject hookedPage=EngineTest.command(e,"dataset.version.list",Json.obj("projectId",hookedPid));
+            check(Json.array(hookedPage,"items").size()==1,"标注任务终态自动触发一个版本");
+            check(Json.required(Json.array(hookedPage,"items").get(0).getAsJsonObject(),"sourceRunId").equals(hookedRun),"终态版本绑定运行标识");
+        }
+    }
 
     /**
      * 引擎崩溃后，持久化为 building 的记录已没有任何进程会推进：必须如实结算为 interrupted 并清掉崩溃残留，

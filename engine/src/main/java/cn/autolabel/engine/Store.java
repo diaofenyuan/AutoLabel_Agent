@@ -7,7 +7,7 @@ import java.util.*;
 import java.util.concurrent.*;
 
 final class Store implements AutoCloseable {
-    static final int SCHEMA_VERSION=12;
+    static final int SCHEMA_VERSION=13;
     interface Work<T> { T run(Connection c) throws Exception; }
     final Path root;
     // 受管原图根默认在数据目录内；桌面可把它指到存储根下的 uploads 目录，使导入复制的训练集可单独配置。
@@ -141,6 +141,8 @@ final class Store implements AutoCloseable {
             s.execute("CREATE INDEX IF NOT EXISTS dataset_version_items_outcome ON dataset_version_items(version_id,outcome)");
             s.execute("CREATE TABLE IF NOT EXISTS dataset_version_builds(id TEXT PRIMARY KEY,version_id TEXT NOT NULL REFERENCES dataset_versions(id),status TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,data TEXT NOT NULL)");
             s.execute("CREATE INDEX IF NOT EXISTS dataset_version_builds_version ON dataset_version_builds(version_id,created_at DESC)");
+            // 每次标注任务最多绑定一个自动版本；单独成表让重复终态回调在事务层幂等收敛。
+            s.execute("CREATE TABLE IF NOT EXISTS dataset_version_sources(run_id TEXT PRIMARY KEY,version_id TEXT NOT NULL UNIQUE REFERENCES dataset_versions(id),created_at TEXT NOT NULL)");
             // 抽帧配方：全局记录（不属于任何项目），跟着数据目录与备份一起走；名称在同类配方内唯一。
             s.execute("CREATE TABLE IF NOT EXISTS media_recipes(id TEXT PRIMARY KEY,kind TEXT NOT NULL,name TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(kind,name))");
             // 事件表只增不减会让 WAL 与事件查询随会龄膨胀：启动时清掉 30 天前的事件（当前会话与近期任务不受影响）。
@@ -236,7 +238,7 @@ final class Store implements AutoCloseable {
     }
     static JsonObject one(Connection c,String sql,Object... args)throws SQLException{List<JsonObject> list=rows(c,sql,args);return list.isEmpty()?null:list.getFirst();}
     static JsonObject document(Connection c,String table,String id)throws SQLException{
-        if(!Set.of("projects","assets","providers","runs","resources","exports","evaluation_sets","evaluation_set_versions","evaluations","review_items","review_samples","flow_runs","flow_steps","flow_artifacts","flow_artifact_items","input_results","run_asset_results","media_jobs","video_sources","screening_features","track_timelines","timeline_frames","tracks","track_versions","track_generations","track_generation_frames","track_contributions","local_tracking_candidates","export_formats","training_datasets","training_jobs","dataset_versions","dataset_version_builds").contains(table))throw new IllegalArgumentException();
+        if(!Set.of("projects","assets","providers","runs","resources","exports","evaluation_sets","evaluation_set_versions","evaluations","review_items","review_samples","flow_runs","flow_steps","flow_artifacts","flow_artifact_items","input_results","run_asset_results","media_jobs","video_sources","screening_features","track_timelines","timeline_frames","tracks","track_versions","track_generations","track_generation_frames","track_contributions","local_tracking_candidates","export_formats","training_datasets","training_jobs","dataset_versions","dataset_version_builds","dataset_version_sources").contains(table))throw new IllegalArgumentException();
         JsonObject row=one(c,"SELECT data FROM "+table+" WHERE id=?",id);
         if(row==null)throw new ApiError(404,"not_found","记录不存在。");return Json.parse(row.get("data").getAsString());
     }

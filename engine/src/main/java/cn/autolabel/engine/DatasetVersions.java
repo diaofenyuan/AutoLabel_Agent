@@ -92,14 +92,15 @@ final class DatasetVersions implements AutoCloseable {
                 buildId,versionId,"queued",now,now,Json.obj("versionId",versionId,"progress",Json.obj("stage","queued","done",0,"total",0)));
             Store.event(c,"dataset.version.retried",null,null,null,Json.obj("versionId",versionId,"projectId",Json.str(record,"projectId",null)));
             return Json.obj("projectId",Json.required(record,"projectId"),"annotationScope",Json.required(record,"annotationScope"),
-                "recipe",recipe,"recipeHash",Json.str(record,"recipeHash",hashText(recipe.toString())));});
+                "recipe",recipe,"recipeHash",Json.str(record,"recipeHash",hashText(recipe.toString())),
+                "sourceKind",Json.str(record,"sourceKind","project"),"sourceRunId",Json.str(record,"sourceRunId",null));});
         // 崩溃残留的目录会让 run 的 createDirectory / ATOMIC_MOVE 直接失败，必须在这里先清掉。
         deleteVersionArtifacts(versionId);
         JsonObject recipe=Json.object(plan,"recipe");
         String seed=Json.str(Json.object(recipe,"split"),"seed","");
         try{
             builds.execute(()->run(versionId,buildId,Json.required(plan,"projectId"),Json.required(plan,"annotationScope"),recipe,
-                Json.required(plan,"recipeHash"),seed,Json.object(recipe,"selection")));
+                Json.required(plan,"recipeHash"),seed,Json.object(recipe,"selection"),Json.str(plan,"sourceKind","project"),Json.str(plan,"sourceRunId",null)));
         }catch(RejectedExecutionException closing){
             // 派发失败必须把版本还原为可重试的终态，不能留下永远没人推进的 building。
             store.tx(c->{JsonObject failure=Json.obj("code","dataset_version_interrupted","message","引擎正在退出，重试未派发；可稍后再次重试。");
@@ -351,6 +352,88 @@ final class DatasetVersions implements AutoCloseable {
 
     // ===== 生成 =====
 
+    /**
+     * 标注任务终态后的自动版本入口：只消费已完成/部分完成任务，且按 runId 在数据库中幂等收敛。
+     * 该方法由 Runs 在事务提交后调用，失败必须留在版本记录里，不能反向影响已完成的标注任务。
+     */
+    void autoCreateForRun(JsonObject terminalRun){
+        String status=Json.str(terminalRun,"status","");
+        if(!Set.of("completed","completed_with_errors").contains(status))return;
+        String runId=Json.str(terminalRun,"runId","");
+        String projectId=Json.str(terminalRun,"projectId","");
+        if(runId.isBlank()||projectId.isBlank())return;
+        try{
+            String runName=Json.str(terminalRun,"name","自动标注");
+            if(runName.length()>MAX_NAME-8)runName=runName.substring(0,MAX_NAME-8);
+            String name="标注任务 · "+runName,seed="run-"+runId;
+            JsonObject selection=DatasetSelection.withSeed(DatasetSelection.normalize(new JsonObject()),seed);
+            JsonObject transform=DatasetTransforms.normalize(new JsonObject()),splitRecipe=DatasetSplitting.normalize(new JsonObject());
+            Source source=resolve(projectId,"labeled",selection,transform);
+            JsonObject inspection=inspect(source);
+            JsonObject recipe=recipe("labeled",seed,selection,transform,splitRecipe);
+            String recipeHash=hashText(recipe.toString());
+            if(flipNeedsSymmetry(source)){
+                Json.array(inspection,"issues").add(Json.obj("severity","error","code","dataset_augment_flip_requires_symmetry",
+                    "message","姿态任务的翻转增强需要先在项目设置中定义关键点对称映射。"));
+            }
+            if(blocking(Json.array(inspection,"issues"))>0||source.assets.isEmpty()){
+                String message=source.assets.isEmpty()?"当前标注任务没有产生可用的正式标注，无法生成训练版本。":"数据集体检存在阻断问题，请先处理版本详情中的问题。";
+                createAutoRecord(projectId,name,"labeled",recipe,recipeHash,source,inspection,runId,status,"failed",Json.obj("code",source.assets.isEmpty()?"dataset_version_empty":"dataset_version_blocked","message",message));
+                return;
+            }
+            createAutoRecord(projectId,name,"labeled",recipe,recipeHash,source,inspection,runId,status,"building",null);
+        }catch(Exception failure){
+            // 项目仍可读取时尽量留下失败版本；这里不把自动建版本异常抛回运行结算线程。
+            try{
+                JsonObject project=store.read(c->Store.document(c,"projects",projectId));
+                JsonArray classes=Json.array(project,"classes");
+                JsonObject fallback=Json.obj("id",Json.id(),"projectId",projectId,"number",0,"name","标注任务 · 自动建版本失败",
+                    "status","failed","sourceKind","annotation_run","sourceRunId",runId,"sourceRunStatus",status,
+                    "taskType",Json.str(project,"taskType","detect"),"annotationScope","labeled","createdAt",Json.now(),
+                    "classes",classes.deepCopy(),"keypointNames",Json.array(Json.object(project,"settings"),"keypointNames").deepCopy(),
+                    "failure",Json.obj("code","dataset_version_failed","message","自动生成数据集版本失败，请重试生成或查看诊断。"));
+                store.tx(c->{if(Store.one(c,"SELECT version_id FROM dataset_version_sources WHERE run_id=?",runId)!=null)return null;
+                    int next=(int)Json.number(Store.one(c,"SELECT COALESCE(MAX(version),0)+1 AS n FROM dataset_versions WHERE project_id=?",projectId),"n",1);
+                    fallback.addProperty("number",next);String id=Json.required(fallback,"id"),now=Json.required(fallback,"createdAt");
+                    Store.update(c,"INSERT INTO dataset_versions(id,project_id,version,status,recipe_hash,created_at,data) VALUES(?,?,?,?,?,?,?)",id,projectId,next,"failed",null,now,fallback);
+                    Store.update(c,"INSERT INTO dataset_version_sources(run_id,version_id,created_at) VALUES(?,?,?)",runId,id,now);
+                    Store.event(c,"dataset.version.failed",null,null,null,Json.obj("versionId",id,"projectId",projectId,"sourceKind","annotation_run","runId",runId));return null;});
+            }catch(Exception ignored){/* 自动版本失败不能改变标注任务已经完成的事实。 */}
+        }
+    }
+
+    /** 插入自动版本与来源声明；返回已有版本时不重复派发构建。 */
+    private void createAutoRecord(String projectId,String name,String scope,JsonObject recipe,String recipeHash,Source source,
+            JsonObject inspection,String runId,String runStatus,String status,JsonObject failure)throws Exception{
+        String id=Json.id(),buildId=Json.id(),now=Json.now();
+        JsonObject result=store.tx(c->{
+            JsonObject existing=Store.one(c,"SELECT version_id FROM dataset_version_sources WHERE run_id=?",runId);
+            if(existing!=null)return Json.obj("id",existing.get("version_id"),"existing",true);
+            int next=(int)Json.number(Store.one(c,"SELECT COALESCE(MAX(version),0)+1 AS n FROM dataset_versions WHERE project_id=?",projectId),"n",1);
+            JsonObject data=Json.obj("id",id,"projectId",projectId,"number",next,"name",name,"status",status,
+                "sourceKind","annotation_run","sourceRunId",runId,"sourceRunStatus",runStatus,"taskType",source.taskType,
+                "annotationScope",scope,"recipe",recipe,"recipeHash",recipeHash,"classes",classTable(source),
+                "keypointNames",source.keypointNames.deepCopy(),"inspection",inspection,"createdAt",now);
+            if(failure!=null)data.add("failure",failure.deepCopy());
+            Store.update(c,"INSERT INTO dataset_versions(id,project_id,version,status,recipe_hash,created_at,data) VALUES(?,?,?,?,?,?,?)",
+                id,projectId,next,status,recipeHash,now,data);
+            Store.update(c,"INSERT INTO dataset_version_sources(run_id,version_id,created_at) VALUES(?,?,?)",runId,id,now);
+            Store.update(c,"INSERT INTO dataset_version_builds(id,version_id,status,created_at,updated_at,data) VALUES(?,?,?,?,?,?)",
+                buildId,id,status.equals("building")?"queued":status,now,now,Json.obj("versionId",id,
+                    "progress",Json.obj("stage",status,"done",0,"total",0),"failure",failure));
+            Store.event(c,"dataset.version.created",null,null,null,Json.obj("versionId",id,"projectId",projectId,"number",next,
+                "recipeHash",recipeHash,"sourceKind","annotation_run","runId",runId));
+            if(failure!=null)Store.event(c,"dataset.version.failed",null,null,null,Json.obj("versionId",id,"projectId",projectId,
+                "code",Json.str(failure,"code","dataset_version_failed"),"sourceKind","annotation_run","runId",runId));
+            return Json.obj("id",id,"existing",false);
+        });
+        if(Json.bool(result,"existing",false))return;
+        if(!status.equals("building"))return;
+        try{builds.execute(()->run(id,buildId,projectId,scope,recipe,recipeHash,Json.str(Json.object(recipe,"split"),"seed",""),
+            Json.object(recipe,"selection"),"annotation_run",runId));}
+        catch(RejectedExecutionException closing){fail(id,buildId,error(503,"engine_closing","引擎正在退出，自动版本未派发；可稍后重试生成。"));}
+    }
+
     JsonObject create(JsonObject p)throws Exception{
         keys(p,"projectId","name","annotationScope","seed","selection","transform","split");
         String projectId=string(p,"projectId",128),scope=scope(p);
@@ -381,7 +464,7 @@ final class DatasetVersions implements AutoCloseable {
             Store.event(c,"dataset.version.created",null,null,null,Json.obj("versionId",id,"projectId",projectId,"number",next,"recipeHash",recipeHash));
             return null;
         });
-        builds.execute(()->run(id,buildId,projectId,scope,recipe,recipeHash,seed,selection));
+        builds.execute(()->run(id,buildId,projectId,scope,recipe,recipeHash,seed,selection,"project",null));
         return get(Json.obj("versionId",id));
     }
 
@@ -392,7 +475,8 @@ final class DatasetVersions implements AutoCloseable {
         return Json.obj("annotationScope",scope,"selection",selection,"transform",transform,"split",split);
     }
 
-    private void run(String versionId,String buildId,String projectId,String scope,JsonObject recipe,String recipeHash,String seed,JsonObject selection){
+    private void run(String versionId,String buildId,String projectId,String scope,JsonObject recipe,String recipeHash,String seed,JsonObject selection,
+            String sourceKind,String sourceRunId){
         Path temporary=null;
         try{
             JsonObject transform=Json.object(recipe,"transform");
@@ -590,7 +674,7 @@ final class DatasetVersions implements AutoCloseable {
             }
             JsonObject manifest=manifest(versionId,s,recipe,recipeHash,manifestItems,items,order.size(),inspection,auxiliary,objects,bytes,counters,sampled.report(),
                 transformSection(transform,transformed,viewTotal,variantTotal,rejectedViews),
-                splitReport(splitRecipe,order,splits,items,counters));
+                splitReport(splitRecipe,order,splits,items,counters),sourceKind,sourceRunId);
             Path manifestFile=temporary.resolve("manifest.json");
             Files.writeString(manifestFile,Json.GSON.toJson(manifest),StandardCharsets.UTF_8);
             String manifestHash=Media.hash(manifestFile),contentHash=contentHash(s,items),now=Json.now();
@@ -608,7 +692,8 @@ final class DatasetVersions implements AutoCloseable {
                     manifest.get("selection").toString(),manifest.get("transform").toString(),inspection.toString(),versionId);
                 Store.update(c,"UPDATE dataset_version_builds SET status='done',updated_at=?,data=json_set(data,'$.progress',json(?)) WHERE id=?",
                     now,Json.obj("stage","done","done",frozen.size(),"total",frozen.size()).toString(),buildId);
-                Store.event(c,"dataset.version.ready",null,null,null,Json.obj("versionId",versionId,"projectId",projectId,"contentHash",contentHash,"manifestHash",manifestHash));
+                Store.event(c,"dataset.version.ready",null,null,null,Json.obj("versionId",versionId,"projectId",projectId,"contentHash",contentHash,"manifestHash",manifestHash,
+                    "sourceKind",sourceKind,"runId",sourceRunId));
                 return null;
             });
         }catch(Exception failure){
@@ -704,7 +789,7 @@ final class DatasetVersions implements AutoCloseable {
 
     private static JsonObject manifest(String versionId,Source s,JsonObject recipe,String recipeHash,JsonArray manifestItems,
             List<JsonObject> items,int groups,JsonObject inspection,JsonArray auxiliary,long objects,long bytes,Map<String,long[]> counters,
-            JsonObject samplingReport,JsonObject transformSection,JsonObject splitReport){
+            JsonObject samplingReport,JsonObject transformSection,JsonObject splitReport,String sourceKind,String sourceRunId){
         Map<String,Integer> reasons=new TreeMap<>();int excluded=0;
         for(JsonObject item:items)if(Json.str(item,"outcome","").equals("filtered_out")){
             excluded++;reasons.merge(Json.str(item,"reasonCode","unspecified"),1,Integer::sum);
@@ -713,7 +798,7 @@ final class DatasetVersions implements AutoCloseable {
         JsonArray copy=new JsonArray();for(JsonObject item:items)copy.add(item.deepCopy());
         return Json.obj("schemaVersion",3,"kind","dataset-version","generatorVersion","0.1.0","id",versionId,
             "projectId",s.projectId,"taskType",s.taskType,"classes",classTable(s),"keypointNames",s.keypointNames.deepCopy(),
-            "lineage",Json.obj("sourceKind","project","parentVersionId",null,"annotationScope",s.scope),
+            "lineage",Json.obj("sourceKind",sourceKind,"parentVersionId",null,"sourceRunId",sourceRunId,"annotationScope",s.scope),
             "recipe",recipe,"recipeHash",recipeHash,
             "selection",Json.obj("annotationScope",s.scope,"filters",Json.object(Json.object(recipe,"selection"),"filters"),
                 "excluded",excluded,"excludedByReason",Json.GSON.toJsonTree(reasons),"sampling",samplingReport),
@@ -838,7 +923,7 @@ final class DatasetVersions implements AutoCloseable {
     private JsonObject view(Connection c,JsonObject record)throws Exception{
         JsonObject result=new JsonObject();
         for(String field:List.of("id","projectId","number","name","status","sourceKind","taskType","annotationScope",
-            "recipe","recipeHash","contentHash","manifestHash","classes","keypointNames","summary","split","selection","transform","createdAt","completedAt","failure"))
+            "sourceRunId","sourceRunStatus","recipe","recipeHash","contentHash","manifestHash","classes","keypointNames","summary","split","selection","transform","createdAt","completedAt","failure"))
             if(record.has(field))result.add(field,record.get(field).deepCopy());
         if(record.has("inspection")){
             JsonObject inspection=Json.object(record,"inspection");
