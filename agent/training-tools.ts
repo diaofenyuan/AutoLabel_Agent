@@ -52,7 +52,7 @@ function versionSummary(value: unknown, project: string) {
   const versionId = id(version.id, '数据集版本');
   if (version.projectId !== project) throw new AgentError('PROJECT_SCOPE', '数据集版本不属于当前项目');
   return compact({ id: versionId, ...pick(version, ['projectId', 'number', 'name', 'status', 'sourceKind', 'taskType', 'annotationScope',
-    'recipeHash', 'contentHash', 'manifestHash', 'createdAt', 'completedAt']),
+    'sourceRunId', 'sourceRunStatus', 'recipeHash', 'contentHash', 'manifestHash', 'createdAt', 'completedAt']),
     summary: version.summary == null ? undefined : pick(object(version.summary, '版本摘要'), ['images', 'excluded', 'objects', 'bytes', 'groups', 'issues', 'errors', 'warnings']),
     split: version.split == null ? undefined : pick(object(version.split, '版本划分'), ['seed', 'train', 'val', 'test', 'groups']),
     build: version.build == null ? undefined : pick(object(version.build, '版本构建'), ['status']),
@@ -175,7 +175,7 @@ export const TRAINING_TOOL_DEFINITIONS: ToolDefinition[] = [
         // 体检问题同样只给中文说明：原始码留给界面上的「诊断详情」，不进对话上下文。
         excludedReasons: reasonBreakdown(reasons), issues: issues(inspection?.issues ?? null, '数据集体检问题').map(item => pick(item, ['severity', 'message'])) });
     } },
-  { name: 'list_dataset_versions', description: '分页列出当前项目已生成的数据集版本：划分比例、规模与构建状态。版本不可变，这里只读取摘要；不会创建、修改或删除版本，也不返回清单与文件路径。',
+  { name: 'list_dataset_versions', description: '分页列出当前项目的数据集版本：标注任务进入 completed 或 completed_with_errors 后会自动生成版本，building 需等待、failed 先处理原因，只有 ready 版本可建立训练快照。这里仅读取划分比例、规模、来源与构建状态，不会创建、修改或删除版本，也不返回清单与文件路径。',
     parameters: schema({ offset: nullableInteger(0, 2147483647), limit: nullableInteger(1, 100) }), mutation: false,
     async execute(args, env) {
       fields(args, ['offset', 'limit']); active(env);

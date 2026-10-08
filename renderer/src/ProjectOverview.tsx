@@ -77,7 +77,7 @@ async function forEachConcurrent<T>(items: T[], limit: number, worker: (item: T)
  */
 export default function ProjectOverview() {
   useDismissMoreMenu();
-  const { project, notify, navigate, openProject, startProjectChat, selectedAssetIds, setSelectedAssetIds } = useApp();
+  const { project, notify, navigate, openProject, startProjectChat, selectedAssetIds, setSelectedAssetIds, events } = useApp();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [total, setTotal] = useState(0);
   const [filterCounts, setFilterCounts] = useState<Record<ResultFilter, number>>({ all: 0, candidate: 0, empty: 0, failed: 0, confirmed: 0, unlabeled: 0 });
@@ -159,7 +159,7 @@ export default function ProjectOverview() {
     void request<ExportRecord[]>('export.list', { projectId: project.id })
       .then(list => { if (live) setExports(list); }).catch(() => undefined);
     return () => { live = false; };
-  }, [project?.id]);
+  }, [project?.id, events.at(-1)?.sequence]);
 
   if (!project) return <div className="content"><Empty icon={<FolderOpen size={28} />} title="还没有打开项目"
     description="从对话开始描述要标注什么，助手会建好项目；也可以直接打开侧栏里的项目。">
@@ -239,9 +239,9 @@ export default function ProjectOverview() {
       <article className="overview-card">
         <h2><Layers size={15} /><Term name="datasetVersion">数据集版本</Term></h2>
         <p className="overview-figure">{versions.length}<small>个</small></p>
-        <p className="muted tiny">版本不可变，训练与导出都从这里取数据。</p>
+        <p className="muted tiny">标注任务完成后会自动生成版本；训练与导出都从这里取不可变数据。</p>
         <ul className="overview-list">{versions.slice(0, 3).map(version => <li key={version.id}>
-          <strong>{version.name || `版本 ${version.number}`}</strong>
+          <strong>{version.name || `版本 ${version.number}`}{version.sourceKind === 'annotation_run' ? ' · 自动' : ''}</strong>
           <span>{versionStatusNames[version.status] ?? version.status}
             {version.summary?.images !== undefined ? ` · ${version.summary.images} 张` : ''}
             {version.summary?.objects !== undefined ? ` · ${version.summary.objects} 个目标` : ''}</span>

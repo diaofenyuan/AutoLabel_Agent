@@ -6,7 +6,7 @@ import type { EngineClient } from '../types.ts';
 
 type RecordValue = Record<string, unknown>;
 const tool = (name: string) => TRAINING_TOOL_DEFINITIONS.find(tool => tool.name === name)!;
-const version = { id: 'version-1', projectId: 'project-1', number: 3, name: '第三版', status: 'ready', sourceKind: 'project',
+const version = { id: 'version-1', projectId: 'project-1', number: 3, name: '第三版', status: 'ready', sourceKind: 'annotation_run', sourceRunId: 'run-1', sourceRunStatus: 'completed',
   taskType: 'detect', createdAt: '2026-09-16T00:00:00Z', contentHash: 'hash', manifestHash: 'manifest',
   recipe: { private: '完整配方' }, summary: { images: 12, objects: 30, bytes: 1024, groups: 4 },
   split: { seed: '固定种子', train: 8, val: 2, test: 2 }, files: [{ image: 'D:/private/image.png' }] };
@@ -55,6 +55,8 @@ test('训练来源只读取当前项目的数据集版本与快照，不返回�
   const datasets = await tool('list_training_datasets').execute({}, f.environment) as RecordValue;
   assert.deepEqual(f.calls.map(call => call.payload.projectId), ['project-1', 'project-1']);
   assert.equal((versions.items as RecordValue[])[0].number, 3);
+  assert.equal((versions.items as RecordValue[])[0].sourceRunId, 'run-1');
+  assert.equal((versions.items as RecordValue[])[0].sourceRunStatus, 'completed');
   assert.deepEqual((versions.items as RecordValue[])[0].split, { seed: '固定种子', train: 8, val: 2, test: 2 });
   assert.deepEqual((datasets.items as RecordValue[])[0].summary, { images: 12, objects: 30, emptyLabels: 1, bytes: 2048, classes: 1, keypoints: 0, splits: { train: 8, val: 2, test: 2 }, classCounts: [30], errors: 0, warnings: 1, usable: true });
   assert.equal((datasets.items as RecordValue[])[0].snapshotHash, 'snapshot-hash');

@@ -83,6 +83,9 @@ export async function checkDesktopAnnotate(window: BrowserWindow, output: string
 
     await openProjectOverview({ js, wait: waitFor }, batch);
     await waitFor(`!!document.querySelector('.page-overview')&&!!document.querySelector('.result-thumb')`);
+    const overviewText = await js<string>(`document.querySelector('.overview-page')?.innerText ?? ''`);
+    assert.ok(overviewText.includes('标注任务完成后会自动生成版本'), `项目概览应说明标注完成后的自动版本闭环，实际：${overviewText.slice(0, 500)}`);
+    checks.push({ check: 'annotation-completion-auto-version-guidance', documented: true });
 
     // ===== 无类别时：入口存在但明确不可用，并说清去哪加类别 =====
     await openAsset('figure-1');

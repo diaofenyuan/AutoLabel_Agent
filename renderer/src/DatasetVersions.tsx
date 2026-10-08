@@ -10,6 +10,7 @@ interface Count { outcome: string; split: string; count: number }
 interface VersionIssue { severity: string; code: string; message: string; assetId?: string }
 export interface DatasetVersion {
   id: string; projectId: string; number: number; name: string; status: string; sourceKind: string; taskType: string;
+  sourceRunId?: string; sourceRunStatus?: string;
   annotationScope: string; recipeHash: string; contentHash?: string; manifestHash?: string; createdAt: string; completedAt?: string;
   recipe?: { selection?: { annotationScope?: string }; split?: { seed?: string; train?: number; val?: number; test?: number } };
   summary?: { images?: number; excluded?: number; objects?: number; bytes?: number; groups?: number; issues?: number; errors?: number; warnings?: number };
@@ -279,6 +280,7 @@ export function DatasetVersionDialog({ project, onClose, onOpenTemplate, onOpenC
             <header><strong style={{ fontSize: 13 }}>v{version.number}{version.name ? ` · ${version.name}` : ''}</strong>
               <span className={`training-badge ${version.status === 'ready' ? 'ready' : version.status === 'failed' || version.status === 'interrupted' ? 'invalid' : ''}`}>{statusText[version.status] ?? version.status}</span></header>
             <p className="muted tiny">{scopeShort[version.annotationScope] ?? version.annotationScope} · {version.taskType.toUpperCase()} · {images} 张图片 · {String(summary.objects ?? '—')} 个目标</p>
+            {version.sourceKind === 'annotation_run' && <p className="muted tiny">自动来源：标注任务 {version.sourceRunId?.slice(0, 8) ?? '未记录'} · {version.sourceRunStatus === 'completed_with_errors' ? '部分完成' : '已完成'}</p>}
             <p className="muted tiny">{size(summary.bytes)} · 排除 {String(summary.excluded ?? 0)} 张 · 来源组 {String(summary.groups ?? '—')} 个</p>
             {version.status === 'building' && version.build?.progress && <><div className="progress"><span style={{ width: `${Math.min(100, (version.build.progress.done ?? 0) / Math.max(1, version.build.progress.total ?? 1) * 100)}%` }} /></div>
               <p className="muted tiny">{stageText[version.build.progress.stage ?? ''] ?? version.build.progress.stage} · {version.build.progress.done} / {version.build.progress.total}</p></>}
@@ -327,7 +329,7 @@ function DetailView({ version, onClose, notify }: { version: DatasetVersion; onC
   return <section className="operation-section">
     <div className="section-toolbar"><h2 style={{ fontSize: 13 }}>v{version.number} 详情</h2><button className="text-button" onClick={onClose}>收起</button></div>
     <div className="training-summary">
-      <p>状态：{statusText[version.status] ?? version.status} · 来源：{version.sourceKind} · 任务：{version.taskType}</p>
+      <p>状态：{statusText[version.status] ?? version.status} · 来源：{version.sourceKind === 'annotation_run' ? `标注任务 ${version.sourceRunId?.slice(0, 8) ?? '未记录'}` : '手工创建'} · 任务：{version.taskType}</p>
       <p>内容哈希：<code>{version.contentHash ?? '—'}</code></p>
       <p>清单哈希：<code>{version.manifestHash ?? '—'}</code></p>
       <p>配方哈希：<code>{version.recipeHash}</code></p>
