@@ -21,6 +21,7 @@ import { blankChatSession, useApp, type ChatSession } from './context';
 import { request, getBridge, isDemo, errorMessage } from './bridge';
 import { Composer, Button, Empty } from './ui';
 import { formatChatMemory } from './chatMemory';
+import { parseReasonCode } from './reasonCodes';
 import type { ChatMaterialContext } from '../../shared/chat';
 
 type ChatMessageData = { role: 'user' | 'assistant'; content: string; failed?: boolean };
@@ -37,16 +38,56 @@ const sampleRequests = [
   '把已确认的标注导出成 YOLO 数据集',
 ];
 
-function ChatMessage({ message, previousUser, onEdit, onRetry, onCopy }: { message: ChatMessageData; previousUser?: string; onEdit: (text: string) => void; onRetry: (text: string) => void; onCopy: (text: string) => void }) {
+function ChatMessage({ message, previousUser, onEdit, onRetry, onCopy, onCheckTasks }: { message: ChatMessageData; previousUser?: string; onEdit: (text: string) => void; onRetry: (text: string) => void; onCopy: (text: string) => void; onCheckTasks: () => void }) {
   const failed = message.role === 'assistant' && Boolean(message.failed);
   return <div className={`chat-message ${message.role} ${failed ? 'chat-message-failed' : ''}`}>
     <div className="chat-message-head"><span className={`chat-avatar ${message.role}`} aria-hidden="true">{message.role === 'assistant' ? <Sparkles size={12} /> : '你'}</span><small>{message.role === 'user' ? '你' : '标注助手'}</small></div>
     <div className="chat-text">{failed&&<span className="chat-error-label">这次没有完成</span>}<RichText text={message.content}/></div>
+    {failed && <UnknownOutcomeHelp code={parseReasonCode(message.content).code} onCheckTasks={onCheckTasks} />}
     <div className="chat-message-actions" aria-label="消息操作">
       <button type="button" onClick={() => onCopy(message.content)}>复制</button>
       {message.role === 'user' && <button type="button" onClick={() => onEdit(message.content)}>编辑</button>}
       {message.role === 'assistant' && previousUser && <button type="button" onClick={() => onRetry(previousUser)}>重试上一条</button>}
     </div>
+  </div>;
+}
+
+/**
+ * 对话失败里「远端结果未知」的一类：请求可能已经在服务商那边处理或计费，
+ * 界面若只显示错误原文，用户既不知道该不该重试，也不知道去哪里核对。
+ * 这里给出唯一安全的两条路：先到任务中心核对，再决定是否重发。
+ */
+const UNKNOWN_OUTCOME_CODES = new Set([
+  'provider_timeout', 'provider_network_unknown', 'provider_stream_unknown',
+  'chat_wait_timeout', 'AGENT_TIMEOUT', 'ENGINE_TIMEOUT', 'ENGINE_DISCONNECTED',
+  'provider_capacity_timeout', 'interactive_busy'
+]);
+
+/**
+ * 等待已超过这个秒数就明确告诉用户「还在等，可以停」。
+ * 此前这里只有一句静态文案，接口挂死时用户完全无法区分「模型在想」和「已经卡住」，
+ * 只能盯着三个点等到十分钟上限。
+ */
+const STALL_HINT_SECONDS = 90;
+
+/** 已等待时长：一分钟内按秒报，超过一分钟改用「x 分 y 秒」，避免出现三位数秒数。 */
+function formatWaited(seconds: number) {
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes} 分 ${seconds % 60} 秒`;
+}
+
+/**
+ * 「结果未知」类失败的出口。
+ *
+ * 这类失败的共同点是：请求可能已经在服务商那边处理、甚至已经计费，界面无法判断。
+ * 因此不给「重发」当默认动作——重发是用户的决定，且必须先看到任务中心的真实状态。
+ */
+function UnknownOutcomeHelp({ code, onCheckTasks }: { code: string; onCheckTasks: () => void }) {
+  if (!UNKNOWN_OUTCOME_CODES.has(code)) return null;
+  return <div className="chat-unknown-help">
+    <p className="muted tiny">这次请求可能在接口那边已经处理或计费，软件无法确认结果，也不会自动重发。先到任务中心核对真实状态，再决定是否重新发起。</p>
+    <div className="actions"><Button onClick={onCheckTasks}>去任务中心核对</Button></div>
   </div>;
 }
 
@@ -103,6 +144,19 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     return () => { document.removeEventListener('mousedown', onPointerDown); document.removeEventListener('keydown', onKeyDown); };
   }, [toolsOpen]);
   const [historyReload, setHistoryReload] = useState(0);
+  /**
+   * 本轮对话的开始时刻与一个低频心跳。
+   * 等待条此前只有一句静态文案：接口真的挂死时（引擎侧的正文读超时上限最长 10 分钟）
+   * 用户无法区分「模型还在想」和「已经卡住」。心跳只为把已等待秒数显示出来，不驱动任何业务判断。
+   */
+  const [busySince, setBusySince] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!busySince) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [busySince]);
+  const waitedSeconds = busySince ? Math.floor((now - busySince) / 1000) : 0;
   const historyRetries = useRef(0);
   const historyRetryKey = useRef('');
   useEffect(() => {
@@ -196,6 +250,7 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
     const streamSinceSequence = events.at(-1)?.sequence ?? -1;
     const scopeLabel = effectiveScope === 'current' ? assets.find(a => a.id === assetId)?.name ?? '当前图片' : effectiveScope === 'project' ? `全项目 · ${assetTotal} 张` : `${effectiveScope === 'page' ? '当前页' : '已勾选（跨页）'} · ${assetIds!.length} 张`;
     update({ messages: next, input: '', busy: true, cancelRequested: false, runningScope: scopeLabel, streamingText: '', streamSinceSequence, planned: undefined, context: materialContext });
+    setBusySince(Date.now());
     try {
       const result = await request<{ content: string; status: string; actions?: AgentStep[] }>('agent.chat', {
         sessionId: session.id, projectId: project?.id, providerId: selectedProviderId, model: selectedModel,
@@ -259,8 +314,8 @@ export default function ChatPanel({ compact = false, assetId, sessionId }: { com
       const previousUser = [...folded.slice(0, i)].reverse().find(item => item.role === 'user')?.content;
       // key 用消息在整段历史里的绝对位置：折叠展开或新消息追加时都不会换身份。
       // 用切片内的下标当 key，展开历史会把最多 200 条消息重新挂载到别的消息上（复制/重试这类行内状态跟错人）。
-      return <ChatMessage key={session.messages.length - folded.length + i} message={message} previousUser={previousUser} onEdit={editComposer} onRetry={retryMessage} onCopy={copyMessage} />;
-    })}</>}{session.busy && session.streamingText && <div className="chat-message assistant streaming"><div className="chat-message-head"><span className="chat-avatar assistant" aria-hidden="true"><Sparkles size={12} /></span><small>标注助手</small></div><div className="chat-text"><RichText text={session.streamingText}/></div></div>}{session.busy && <div className="chat-wait" role="status" aria-live="polite"><span className="waiting-dots">•••</span>{session.cancelRequested ? '正在请求停止 · 已发送请求的结果仍需核对' : chatStatus(events, session.id)} · {session.runningScope}</div>}
+      return <ChatMessage key={session.messages.length - folded.length + i} message={message} previousUser={previousUser} onEdit={editComposer} onRetry={retryMessage} onCopy={copyMessage} onCheckTasks={() => void navigate('tasks')} />;
+    })}</>}{session.busy && session.streamingText && <div className="chat-message assistant streaming"><div className="chat-message-head"><span className="chat-avatar assistant" aria-hidden="true"><Sparkles size={12} /></span><small>标注助手</small></div><div className="chat-text"><RichText text={session.streamingText}/></div></div>}{session.busy && <div className="chat-wait" role="status" aria-live="polite"><span className="waiting-dots">•••</span>{session.cancelRequested ? '正在请求停止 · 已发送请求的结果仍需核对' : chatStatus(events, session.id)}{` · 已等待 ${formatWaited(waitedSeconds)}`} · {session.runningScope}{!session.cancelRequested && waitedSeconds >= STALL_HINT_SECONDS && <span className="chat-wait-stall"> · 响应偏慢，可停止后到任务中心核对</span>}</div>}
       {/* 结果卡片跟着会话走：已经有回复且绑定了项目时才展开实际结果，避免空转读取。 */}
       {!compact && <AgentSteps steps={steps} busy={session.busy} />}
       {!compact && session.planned?.length ? <PlanCard actions={session.planned} busy={session.busy}

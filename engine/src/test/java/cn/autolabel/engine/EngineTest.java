@@ -215,12 +215,33 @@ public final class EngineTest {
         }
         HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),4);server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.createContext("/stall/chat/completions",e->{try{e.sendResponseHeaders(200,0);e.getResponseBody().write('{');e.getResponseBody().flush();Thread.sleep(2500);e.getResponseBody().write('}');}catch(Exception ignored){}finally{e.close();}});
+        // SSE 夹具：返回 text/event-stream 响应头后只写一个 data 行就停住，不再发任何字节也不关闭连接。
+        // 这是「界面永远停在接口已发送，等待返回」的成因：HttpRequest.timeout 只管到响应头，
+        // 之后的 input.read() 没有任何上限。断言这次调用必须在 timeoutMs 附近以超时码结束。
+        server.createContext("/streamstall/v1/chat/completions",e->{try{e.getResponseHeaders().set("Content-Type","text/event-stream");e.sendResponseHeaders(200,0);e.getResponseBody().write("data: {\"choices\":[{\"index\":0,\"delta\":{}}]}\n\n".getBytes(StandardCharsets.UTF_8));e.getResponseBody().flush();Thread.sleep(30000);}catch(Exception ignored){}finally{e.close();}});
         server.createContext("/oversize/chat/completions",e->{try{e.sendResponseHeaders(200,0);byte[] data=new byte[65536];Arrays.fill(data,(byte)' ');for(int i=0;i<150;i++)e.getResponseBody().write(data);}catch(Exception ignored){}finally{e.close();}});server.start();
         try(Engine e=new Engine(root.resolve("transport-data"))){for(String path:List.of("stall","oversize")){JsonObject p=e.providers.save(Json.obj("name",path,"baseUrl","http://127.0.0.1:"+server.getAddress().getPort()+"/"+path,"protocol","chat-completions","timeoutMs",1000,"requestsPerMinute",60000));e.providers.credential(Json.obj("providerId",p.get("id"),"key","transport-key"));long start=System.currentTimeMillis();
                 try{e.providers.chat(Json.obj("providerId",p.get("id"),"model","fixture","messages",Json.arr(Json.obj("role","user","content","test"))));throw new AssertionError("expected bounded transport failure");}catch(ApiError failure){check(failure.code.equals(path.equals("stall")?"provider_timeout":"response_too_large"),"transport code "+path+": "+failure.code);}
                 check(System.currentTimeMillis()-start<2200,"transport bounded elapsed "+path);
             }
             JsonArray attempts=e.store.read(c->Store.docs(c,"SELECT data FROM attempts ORDER BY rowid"));check(attempts.size()==2,"transport attempts retained");check(Json.required(attempts.get(0).getAsJsonObject(),"status").equals("unknown"),"stalled body remote result unknown");
+
+            // 流式停滞：响应头已到、正文停住。修复前这次调用会永久阻塞（界面停在「接口已发送，等待返回」），
+            // 现在必须由空闲看门狗掐断，并归入「结果未知、不自动重发」的同一口径。
+            JsonObject streamProvider=e.providers.save(Json.obj("name","streamstall","baseUrl","http://127.0.0.1:"+server.getAddress().getPort()+"/streamstall/v1","protocol","chat-completions","timeoutMs",1000,"requestsPerMinute",60000));
+            e.providers.credential(Json.obj("providerId",streamProvider.get("id"),"key","stream-stall-key"));
+            long streamStart=System.currentTimeMillis();
+            try{e.providers.chat(Json.obj("providerId",streamProvider.get("id"),"model","fixture","messages",Json.arr(Json.obj("role","user","content","test")),"stream",true));throw new AssertionError("expected stalled stream to fail");}
+            catch(ApiError failure){check(failure.code.equals("provider_timeout"),"stalled SSE stream must fail as provider_timeout, got "+failure.code);}
+            long streamElapsed=System.currentTimeMillis()-streamStart;
+            check(streamElapsed<8000,"stalled SSE stream bounded in "+streamElapsed+"ms");
+
+            // 停滞调用结束后对话槽位必须已经释放：紧接着再发一次正常请求不能拿到 interactive_busy。
+            JsonObject liveProvider=e.providers.save(Json.obj("name","streamlive","baseUrl","http://127.0.0.1:"+server.getAddress().getPort()+"/streamstall/v1","protocol","chat-completions","timeoutMs",1000,"requestsPerMinute",60000));
+            e.providers.credential(Json.obj("providerId",liveProvider.get("id"),"key","stream-live-key"));
+            boolean busy=false;try{e.providers.chat(Json.obj("providerId",liveProvider.get("id"),"model","fixture","messages",Json.arr(Json.obj("role","user","content","test")),"stream",true));}
+            catch(ApiError failure){busy=failure.code.equals("interactive_busy");}
+            check(!busy,"stalled stream must not leave the chat pool exhausted");
         }finally{server.stop(0);}
     }
     static void iccProfile()throws Exception{

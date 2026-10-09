@@ -1,6 +1,7 @@
 package cn.autolabel.engine;
 
 import com.google.gson.*;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.*;
@@ -12,6 +13,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
 final class Providers {
@@ -25,7 +27,12 @@ final class Providers {
         @Override public String toString(){return "[credential]";}
     }
     private final HttpClient client=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).followRedirects(HttpClient.Redirect.NEVER).build();
-    private final ThreadPoolExecutor interactive=new ThreadPoolExecutor(2,2,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(16),Thread.ofPlatform().name("model-chat-",0).factory(),new ThreadPoolExecutor.AbortPolicy());
+    // 对话并发上限：一次助手对话会串行发多次 chat.send，但用户可能同时开多段对话。
+    // 原来的 2 个槽位在两段对话同时跑时就让第三段直接拿到 interactive_busy，
+    // 而每段对话的等待上限是 timeoutMs（最长 10 分钟），槽位被占满的时间被放大到不可接受。
+    private final ThreadPoolExecutor interactive=new ThreadPoolExecutor(8,8,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(32),Thread.ofPlatform().name("model-chat-",0).factory(),new ThreadPoolExecutor.AbortPolicy());
+    /** 流空闲监视器的调度线程：SSE 正文停滞时由它主动掐断读流，释放上面那个槽位。 */
+    private final ScheduledExecutorService idleWatchdog=Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("stream-idle-",0).daemon().factory());
     private final Map<QuotaId,Gate> gates=new HashMap<>();
     private final Map<String,GroupView> quotaGroups=new HashMap<>();
     private final LongSupplier quotaNanos,quotaMillis;
@@ -47,6 +54,26 @@ final class Providers {
         @Override public String toString(){return "[permit]";}
     }
     record Reply(String content,JsonArray tools,JsonElement usage,JsonObject raw){}
+    /**
+     * 带空闲监视的 SSE 输入流。
+     *
+     * 背景：{@link HttpRequest.Builder#timeout} 只覆盖到响应头到达，拿到 {@code BodyHandlers.ofInputStream()}
+     * 之后，{@code ProviderStreams.read()} 里的 {@code input.read(buffer)} 是**无超时阻塞读**。
+     * 服务商发完响应头就停住（网关缓冲、上游排队、连接半开）时，这次调用会永久挂住：
+     * 对话工作进程一直等不到回复，界面停在「接口已发送，等待返回」，用户只能干等到 10 分钟上限。
+     *
+     * 这里在「距上一次收到字节」超过阈值时关闭底层流。关闭会让阻塞中的 read 立刻抛 IOException，
+     * 按已有的 provider_stream_unknown 语义落到「结果未知、不自动重发」，与超时判定保持一致口径。
+     */
+    private static final class IdleWatchStream extends FilterInputStream {
+        private final long idleNanos;
+        private final AtomicLong lastRead=new AtomicLong(System.nanoTime());
+        IdleWatchStream(InputStream in,long idleMillis){super(in);this.idleNanos=TimeUnit.MILLISECONDS.toNanos(Math.max(1000,idleMillis));}
+        @Override public int read() throws IOException {int value=super.read();if(value>=0)lastRead.set(System.nanoTime());return value;}
+        @Override public int read(byte[] b,int off,int len) throws IOException {int count=super.read(b,off,len);if(count>0)lastRead.set(System.nanoTime());return count;}
+        long idleMillis(){return TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-lastRead.get());}
+        long idleNanos(){return idleNanos;}
+    }
     private static final class LimitedBody implements HttpResponse.BodySubscriber<byte[]> {
         private final HttpResponse.BodySubscriber<byte[]> delegate=HttpResponse.BodySubscribers.ofByteArray();
         private java.util.concurrent.Flow.Subscription subscription;private long bytes;
@@ -235,9 +262,20 @@ final class Providers {
             int status=response.statusCode();
             if(status<200||status>=300){byte[] bytes=response.body().readNBytes(8*1024*1024+1);String code=switch(status){case 401,403->"provider_auth_failed";case 404->"provider_model_or_route_not_found";case 429->"provider_rate_limited";default->"provider_http_"+status;};RemoteError failure=new RemoteError(code,providerErrorMessage(bytes,status),status==429||status>=500,false,0);try{JsonObject errorBody=Json.parse(new String(bytes,StandardCharsets.UTF_8));if(errorBody.has("usage"))failure.usage=errorBody.get("usage");}catch(Exception ignored){}throw failure;}
             String contentType=response.headers().firstValue("Content-Type").orElse("");if(!contentType.toLowerCase(Locale.ROOT).contains("text/event-stream"))throw new RemoteError("provider_response_invalid","流式请求未返回 text/event-stream。",false,false,0);
-            try(InputStream input=response.body()){return new ProviderStreams(Json.str(p,"protocol","chat-completions"),onDelta).read(input);}
+            // 正文读取也必须有上限：HttpRequest.timeout 只管到响应头，之后是无超时阻塞读。
+            // 用请求自身的 timeoutMs 作空闲阈值（正文一旦开始持续吐字就重新计时），
+            // 由看门狗关流把「发了头就不动」的连接变成有界失败，而不是永久占住对话槽位。
+            IdleWatchStream watched=new IdleWatchStream(response.body(),Json.integer(p,"timeoutMs",120000));
+            Future<?> idleGuard=idleWatchdog.scheduleAtFixedRate(()->{
+                if(watched.idleMillis()*1_000_000L<watched.idleNanos())return;
+                try{watched.close();}catch(IOException ignored){/* 关流只为打断阻塞读，失败时由 read 自己报错。 */}
+            },1000,1000,TimeUnit.MILLISECONDS);
+            try(InputStream input=watched){return new ProviderStreams(Json.str(p,"protocol","chat-completions"),onDelta).read(input);}
             catch(ProviderStreams.StreamError failure){throw new RemoteError(failure.code,failure.getMessage(),false,true,0);}
-            catch(IOException failure){throw new RemoteError("provider_stream_unknown","接口流读取中断，远端结果未知。",false,true,0);}
+            // 空闲超时也归入超时码：语义上同样是「远端是否完成未知」，且不能自动重发。
+            catch(IOException failure){throw new RemoteError(watched.idleNanos()<=watched.idleMillis()*1_000_000L?"provider_timeout":"provider_stream_unknown",
+                watched.idleNanos()<=watched.idleMillis()*1_000_000L?"接口流长时间没有返回数据，已按超时中断；远端是否完成未知；不会自动重发。":"接口流读取中断，远端结果未知。",false,true,0);}
+            finally{idleGuard.cancel(false);}
         }catch(RemoteError e){throw e;}catch(TimeoutException e){throw new RemoteError("provider_timeout","请求超时，远端是否完成未知；不会自动重发。",false,true,0);}
         catch(InterruptedException e){Thread.currentThread().interrupt();throw new RemoteError("request_interrupted","调用中断，远端结果未知。",false,true,0);}
         catch(ExecutionException e){Throwable cause=e.getCause();if(cause instanceof HttpTimeoutException)throw new RemoteError("provider_timeout","请求超时，远端是否完成未知；不会自动重发。",false,true,0);throw new RemoteError("provider_network_unknown","网络连接中断，远端结果未知。",false,true,0);}
@@ -265,8 +303,17 @@ final class Providers {
     }
     JsonObject chat(JsonObject payload){
         String session=Json.str(payload,"sessionId",Json.id());Future<JsonObject> pending=null;
-        try{pending=interactive.submit(()->callTracked(payload));sessions.computeIfAbsent(session,k->ConcurrentHashMap.newKeySet()).add(pending);return pending.get();}catch(RejectedExecutionException e){throw new ApiError(429,"interactive_busy","对话调用繁忙，请稍后重试。");}
+        try{
+            pending=interactive.submit(()->callTracked(payload));sessions.computeIfAbsent(session,k->ConcurrentHashMap.newKeySet()).add(pending);
+            // 必须给等待本身一个上限。callTracked 内部已经各自有界（等额度 timeoutMs、HTTP timeoutMs、
+            // 正文空闲 timeoutMs），但没有任何一层能兜住「线程被别的东西卡住」：此时 pending.get()
+            // 永久阻塞，这条对话的槽位再也不会释放，界面只能等桌面侧 10 分钟的 AGENT_TIMEOUT。
+            // 这里按接口配置推导上限并留出排队余量，与上面三段保持同一时间尺度。
+            long budgetMs=2L*Json.integer(get(Json.required(payload,"providerId")),"timeoutMs",120000)+60_000;
+            return pending.get(budgetMs,TimeUnit.MILLISECONDS);
+        }catch(RejectedExecutionException e){throw new ApiError(429,"interactive_busy","对话调用繁忙，请稍后重试。");}
         catch(CancellationException e){throw new ApiError(499,"call_cancelled","对话已取消；已发送调用的状态会单独保存。");}
+        catch(TimeoutException e){if(pending!=null)pending.cancel(true);throw new ApiError(504,"chat_wait_timeout","对话等待超时，本次请求已放弃；已发出的调用请到任务中心核对结果。");}
         catch(InterruptedException e){if(pending!=null)pending.cancel(true);Thread.currentThread().interrupt();throw new ApiError(503,"interrupted","对话等待中断。");}
         // 远端失败已由 callTracked 转成 ApiError/RemoteError；能走到这里的通常是本地处理异常（空指针、类初始化失败等）。
         // 此前一律压成「接口调用失败」，用户既看不到原因也拿不到线索，这里保留类型与消息并写入引擎日志。
@@ -407,5 +454,5 @@ final class Providers {
     JsonElement redact(JsonElement value,Credential sentCredential){if(value==null)return JsonNull.INSTANCE;if(value.isJsonObject()){JsonObject o=new JsonObject();for(var e:value.getAsJsonObject().entrySet())o.add(e.getKey(),sensitiveName(e.getKey())?Json.element("[redacted]"):redact(e.getValue(),sentCredential));return o;}
         if(value.isJsonArray()){JsonArray a=new JsonArray();for(JsonElement e:value.getAsJsonArray())a.add(redact(e,sentCredential));return a;}
         if(value.isJsonPrimitive()&&value.getAsJsonPrimitive().isString()){String s=value.getAsString();if(s.startsWith("data:image/"))return Json.element("[image reference]");for(Credential credential:keys.values())if(!credential.key.isEmpty())s=s.replace(credential.key,"[redacted]");if(sentCredential!=null&&!sentCredential.key.isEmpty())s=s.replace(sentCredential.key,"[redacted]");return Json.element(s);}return value.deepCopy();}
-    void close(){closing=true;for(Set<Future<?>> calls:sessions.values())for(Future<?> call:calls)call.cancel(true);for(Runnable waiting:interactive.shutdownNow())if(waiting instanceof Future<?> f)f.cancel(true);client.shutdownNow();try{interactive.awaitTermination(5,TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}keys.clear();}
+    void close(){closing=true;for(Set<Future<?>> calls:sessions.values())for(Future<?> call:calls)call.cancel(true);for(Runnable waiting:interactive.shutdownNow())if(waiting instanceof Future<?> f)f.cancel(true);idleWatchdog.shutdownNow();client.shutdownNow();try{interactive.awaitTermination(5,TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}keys.clear();}
 }
