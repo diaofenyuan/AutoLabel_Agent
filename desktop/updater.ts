@@ -11,8 +11,8 @@ const manifestSchema = z.strictObject({ schemaVersion: z.literal(1), appId: z.li
   releaseNotes: z.string().max(32000), downloadUrl: z.string().max(8192), sha256: z.string().regex(/^[0-9a-fA-F]{64}$/),
   size: z.number().int().positive().max(2 * 1024 ** 3), publishedAt: z.iso.datetime({ offset: true }).optional() });
 export type UpdateManifest = z.infer<typeof manifestSchema>;
-/** 官方默认更新清单（GitHub Release 固定文件名）；用户可在设置里覆盖，保存空值则显式关闭更新。 */
-export const DEFAULT_UPDATE_MANIFEST_URL = 'https://github.com/diaofenyuan/AutoLabel_Agent/releases/latest/download/update-manifest.json';
+/** 官方默认更新清单（自有更新服务器）；用户可在设置里覆盖，保存空值则显式关闭更新。 */
+export const DEFAULT_UPDATE_MANIFEST_URL = 'https://139.196.148.174/update-manifest.json';
 export interface UpdateStatus {
   state: 'unconfigured' | 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'verifying' | 'ready' | 'cancelled' | 'error' | 'installing';
   currentVersion: string;
