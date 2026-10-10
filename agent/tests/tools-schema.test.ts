@@ -37,3 +37,42 @@ test('全部工具 schema 只用 strict 模式接受的关键字并满足对象�
     checkSchema(tool.parameters, '', tool.name);
   }
 });
+
+/**
+ * 必须声明为枚举、且需要写明取值语义的参数（工具名 → 参数名 → 示例取值）。
+ *
+ * 模型只能看到工具 schema：枚举参数若只留自由字符串，模型无从得知合法取值，
+ * 只能猜或照抄校验报错文案——曾因此把「hint、template 或 none」当成 reuseScope 传回，
+ * 触发一个必然失败的自触发循环。取值语义复杂时（不是从参数名就能推出）还须写明各档差异。
+ */
+const ENUM_SEMANTICS: Record<string, Record<string, string>> = {
+  run_annotation: { reuseScope: 'hint' },
+  list_assets: { status: 'unlabeled' },
+  list_review_items: { status: 'pending', source: 'hard' }
+};
+
+test('枚举参数在 schema 中声明 enum 且写明取值语义', () => {
+  const byTool = new Map<string, RecordValue>();
+  for (const tool of TOOL_DEFINITIONS) byTool.set(tool.name, tool.parameters as RecordValue);
+
+  for (const tool of TOOL_DEFINITIONS) {
+    const properties = (tool.parameters as RecordValue).properties as RecordValue;
+    for (const [name, sub] of Object.entries(properties)) {
+      const schema = sub as RecordValue;
+      if (!Array.isArray(schema.enum)) continue;
+      const key = `${tool.name}.${name}`;
+      // 可空枚举必须把 null 一起列进 enum，否则模型传 null 表示「用默认值」时会与 schema 冲突。
+      const nullable = Array.isArray(schema.type) && schema.type.includes('null');
+      assert.equal(schema.enum.includes(null), nullable, `${key}: 可空枚举未把 null 列入 enum`);
+      if (ENUM_SEMANTICS[tool.name]?.[name]) assert.ok(schema.description, `${key}: 枚举参数缺少 description`);
+    }
+  }
+
+  // 定向清单里的参数不能被悄悄改回自由字符串：这类回退会让模型重新开始猜值。
+  for (const [toolName, params] of Object.entries(ENUM_SEMANTICS)) {
+    const properties = (byTool.get(toolName)?.properties ?? {}) as RecordValue;
+    for (const [name, sample] of Object.entries(params))
+      assert.ok(Array.isArray((properties[name] as RecordValue | undefined)?.enum),
+        `${toolName}.${name}: 应声明为枚举参数（示例取值 ${sample}），实际未声明 enum`);
+  }
+});

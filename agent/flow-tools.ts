@@ -1,5 +1,6 @@
 import { resolveConfiguration } from '../shared/configuration.ts';
 import type { FlowDefinition, FlowExecution, FlowInput, FlowStartRequest } from '../shared/flow.ts';
+import { assetStatuses } from '../shared/protocol.ts';
 import type { Project } from '../shared/protocol.ts';
 import type { ToolDefinition, ToolEnvironment } from './tools.ts';
 import { localClassId, localRuntime, registeredLocalModel } from './inference-tools.ts';
@@ -13,11 +14,11 @@ const string = { type: 'string' };
 const nullableString = { type: ['string', 'null'] };
 const nullableBoolean = { type: ['boolean', 'null'] };
 const number = (minimum: number, maximum: number) => ({ type: ['integer', 'null'], minimum, maximum });
-const choice = (values: string[], nullable = false) => ({ type: nullable ? ['string', 'null'] : 'string', enum: nullable ? [...values, null] : values });
+const choice = (values: readonly string[], nullable = false) => ({ type: nullable ? ['string', 'null'] : 'string', enum: nullable ? [...values, null] : [...values] });
 // OpenAI 严格工具 schema 不接受 uniqueItems（整个工具清单会随每次对话 400）；
 // 去重由运行时校验兜底：idList 走 uniqueIds，textClasses/statuses 各自有显式查重。
 const idList = { type: ['array', 'null'], items: string, minItems: 1, maxItems: 10000 };
-const statuses = ['unlabeled', 'candidate', 'modified', 'confirmed', 'invalid', 'missing'];
+const statuses = assetStatuses;
 const dimension = { type: 'integer', minimum: 1, maximum: 20000 };
 const transformOperations = { type: ['array', 'null'], maxItems: 30, items: { anyOf: [
   schema({ kind: choice(['crop']), x: { type: 'integer', minimum: 0, maximum: 20000 }, y: { type: 'integer', minimum: 0, maximum: 20000 }, width: dimension, height: dimension }),
@@ -87,7 +88,7 @@ function uniqueIds(value: unknown, label: string, maximum = 10000, allowEmpty = 
     throw new AgentError('INVALID_ARGUMENT', `${label}不能为空或重复`);
   return result;
 }
-function enumValue(value: unknown, values: string[], label: string) {
+function enumValue(value: unknown, values: readonly string[], label: string) {
   if (typeof value !== 'string' || !values.includes(value)) throw new AgentError('INVALID_ARGUMENT', `${label}不受支持`);
   return value;
 }

@@ -1,5 +1,7 @@
 import type { Asset, Project } from '../shared/protocol.ts';
-import { providerCapabilities } from '../shared/protocol.ts';
+import { assetStatuses, providerCapabilities } from '../shared/protocol.ts';
+import { reviewSources, reviewStatuses } from '../shared/quality.ts';
+import { reuseScopes } from '../shared/reuse.ts';
 import { resolveConfiguration } from '../shared/configuration.ts';
 import { FLOW_TOOL_DEFINITIONS } from './flow-tools.ts';
 import { LOCAL_TOOL_DEFINITIONS } from './inference-tools.ts';
@@ -23,6 +25,12 @@ const schema = (properties: Record<string, unknown>) => ({
   type: 'object', properties, required: Object.keys(properties), additionalProperties: false,
 });
 const nullableString = { type: ['string', 'null'] };
+/**
+ * 可空枚举。模型只能看到工具 schema：枚举参数若只留自由字符串，模型就得靠参数名猜取值
+ * （曾把校验报错文案「hint、template 或 none」原样当成 reuseScope 传回，形成必然失败的自触发循环）。
+ * 运行时校验保留为第二道防线，但取值来源必须与 shared 单一来源一致。
+ */
+const nullableChoice = (values: readonly string[]) => ({ type: ['string', 'null'], enum: [...values, null] });
 function projectId(environment: ToolEnvironment): string {
   if (!environment.projectId) throw new AgentError('PROJECT_REQUIRED', '请先打开一个项目');
   return id(environment.projectId, '项目标识');
@@ -296,12 +304,14 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'list_assets', description: '分页列出当前项目素材，读取真实状态；可按未标注、候选、人工修改、确认等状态筛选。',
-    parameters: schema({ offset: { type: ['integer', 'null'], minimum: 0 }, status: nullableString }), mutation: false,
+    parameters: schema({ offset: { type: ['integer', 'null'], minimum: 0 },
+      status: { ...nullableChoice(assetStatuses),
+        description: '素材标注状态：unlabeled 未标注、candidate 模型候选待确认、modified 人工修改过、confirmed 人工确认、invalid 几何或属性有问题、missing 素材文件缺失。' } }), mutation: false,
     async execute(args, env) {
       fields(args, ['offset', 'status']);
       const offset = args.offset == null ? 0 : integer(args.offset, '起始位置', 0, 10_000_000);
       const status = args.status == null ? undefined : text(args.status, '筛选状态', 30);
-      if (status && !['unlabeled', 'candidate', 'modified', 'confirmed', 'invalid', 'missing'].includes(status))
+      if (status && !(assetStatuses as readonly string[]).includes(status))
         throw new AgentError('INVALID_ARGUMENT', '不支持的素材筛选状态');
       const result = await env.engine.request<{ items: Asset[]; total: number }>('asset.list', {
         projectId: projectId(env), offset, limit: 50, ...(status ? { status } : {}),
@@ -335,13 +345,18 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: schema({
       assetIds: { type: ['array', 'null'], items: { type: 'string' }, maxItems: 1000 },
       prompt: nullableString, concurrency: { type: ['integer', 'null'], minimum: 1, maximum: 32 },
-      reuseEnabled: { type: ['boolean', 'null'] }, forceRerun: { type: ['boolean', 'null'] }, reuseScope: { type: ['string', 'null'] },
+      reuseEnabled: { type: ['boolean', 'null'] }, forceRerun: { type: ['boolean', 'null'] },
+      // 复用口径是固定枚举。不给enum 时模型只能凭参数名猜值，会把「hint、template 或 none」这类报错文案原样传回来。
+      reuseScope: { ...nullableChoice(reuseScopes),
+        description: '候选比对口径：hint 只比对输入与类别口径（改提示词也能复用）、template 严格比对提示词与模板、none 完全不复用；null 使用引擎默认 template。' },
       reuseMaxAgeSeconds: { type: ['integer', 'null'], minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
     }), mutation: true,
     async execute(args, env) {
       fields(args, ['assetIds', 'prompt', 'concurrency', 'reuseEnabled', 'forceRerun', 'reuseMaxAgeSeconds', 'reuseScope']);
-      if (args.reuseScope != null && !['hint', 'template', 'none'].includes(String(args.reuseScope))) throw new AgentError('INVALID_ARGUMENT', '复用口径只能是 hint、template 或 none');
+      if (args.reuseScope != null && !(reuseScopes as readonly string[]).includes(String(args.reuseScope))) throw new AgentError('INVALID_ARGUMENT', '复用口径只能是 hint、template 或 none');
       const reusePolicy: Record<string, unknown> = {};
+      // 口径必须真正下发：只校验不下发会让「宽松口径省请求」在对话入口静默失效，实际仍按严格档重发。
+      if (args.reuseScope != null) reusePolicy.reuseScope = args.reuseScope;
       for (const key of ['reuseEnabled', 'forceRerun']) if (args[key] != null) {
         if (typeof args[key] !== 'boolean') throw new AgentError('INVALID_ARGUMENT', '复用与强制重标开关必须为布尔值');
         reusePolicy[key] = args[key];
@@ -636,15 +651,19 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'list_review_items', description: '分页查询当前项目的待复核问题，可按处理状态或来源（含难例优先队列 hard）筛选。可随后用 open_asset 打开素材；查询不会完成人工复核、确认标注或重发请求。',
-    parameters: schema({ offset: { type: ['integer', 'null'], minimum: 0 }, status: nullableString, source: nullableString }), mutation: false,
+    parameters: schema({ offset: { type: ['integer', 'null'], minimum: 0 },
+      status: { ...nullableChoice(reviewStatuses),
+        description: '处理状态：pending 待处理、checked 已复核、dismissed 已忽略、request_relabel 已标记需重标。' },
+      source: { ...nullableChoice(reviewSources),
+        description: '问题来源：execution 运行期问题、truth_comparison 与人工真值比对、random 随机抽查、hard 难例优先队列。' } }), mutation: false,
     async execute(args, env) {
       fields(args, ['offset', 'status', 'source']);
       const offset = args.offset == null ? 0 : integer(args.offset, '起始位置', 0, 10_000_000);
       const status = args.status == null ? undefined : text(args.status, '复核状态', 40);
-      if (status && !['pending', 'checked', 'dismissed', 'request_relabel'].includes(status))
+      if (status && !(reviewStatuses as readonly string[]).includes(status))
         throw new AgentError('INVALID_ARGUMENT', '不支持的复核筛选状态');
       const source = args.source == null ? undefined : text(args.source, '复核来源', 40);
-      if (source && !['execution', 'truth_comparison', 'random', 'hard'].includes(source))
+      if (source && !(reviewSources as readonly string[]).includes(source))
         throw new AgentError('INVALID_ARGUMENT', '不支持的复核来源');
       const result = await env.engine.request<{ items: unknown[]; total: number }>('review.list', {
         projectId: projectId(env), offset, limit: 50, ...(status ? { status } : {}), ...(source ? { source } : {}),

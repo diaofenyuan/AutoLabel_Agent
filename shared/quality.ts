@@ -80,11 +80,15 @@ export interface ReviewSignals {
   /** 分类任务没有框/点几何与漏多标：错误或缺预测记 1 条（每图只有一个判定）；其它任务不出现该字段。 */
   classificationWrong?: number;
 }
+/** 复核项的处理状态与来源。同 assetStatuses：枚举单一来源，供工具 schema 的 enum 与运行时校验共用。 */
+export const reviewStatuses = ['pending', 'checked', 'dismissed', 'request_relabel'] as const;
+export const reviewSources = ['execution', 'truth_comparison', 'random', 'hard'] as const;
+
 export interface ReviewItem {
   id: string; projectId: string; assetId: string; candidateVersion: number | null;
   objectId?: string | null; reason: string; severity: 'error' | 'warning' | 'info';
-  source: 'execution' | 'truth_comparison' | 'random' | 'hard';
-  status: 'pending' | 'checked' | 'dismissed' | 'request_relabel';
+  source: typeof reviewSources[number];
+  status: typeof reviewStatuses[number];
   evaluationId?: string; runId?: string; sampleId?: string; createdAt: string; note?: string;
   /** 难例优先队列（source='hard'）的优先级与信号明细；其它来源没有这两个字段。 */
   priority?: number; signals?: ReviewSignals;

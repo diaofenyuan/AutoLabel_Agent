@@ -96,8 +96,19 @@ test('单次标注明确传递复用策略，非法值不能进入队列', async
   assert.equal(f.submissions[0].reuseMaxAgeSeconds, null);
   await findTool('run_annotation').execute({ ...args, reuseEnabled: true, forceRerun: false, reuseMaxAgeSeconds: 3600 }, f.environment);
   assert.equal(f.submissions[1].reuseMaxAgeSeconds, 3600);
+  // 口径必须落到 run.create，否则宽松口径只是被校验后丢弃。
+  await findTool('run_annotation').execute({ ...args, reuseScope: 'hint' }, f.environment);
+  assert.equal(f.submissions[2].reuseScope, 'hint');
+  await findTool('run_annotation').execute({ ...args, reuseScope: null }, f.environment);
+  assert.equal(Object.hasOwn(f.submissions[3], 'reuseScope'), false);
   for (const policy of [{ reuseEnabled: 'false' }, { forceRerun: 1 }, { reuseMaxAgeSeconds: 0 },
-    { reuseMaxAgeSeconds: 1.5 }, { reuseMaxAgeSeconds: Number.MAX_SAFE_INTEGER + 1 }])
-    await assert.rejects(findTool('run_annotation').execute({ ...args, ...policy }, f.environment), /必须为布尔值|复用最长时间/);
-  assert.equal(f.submissions.length, 2);
+    { reuseMaxAgeSeconds: 1.5 }, { reuseMaxAgeSeconds: Number.MAX_SAFE_INTEGER + 1 }, { reuseScope: 'strict' }])
+    await assert.rejects(findTool('run_annotation').execute({ ...args, ...policy }, f.environment), /必须为布尔值|复用最长时间|复用口径/);
+  assert.equal(f.submissions.length, 4);
+});
+
+test('复用口径在工具 schema 中是枚举，避免模型照抄报错文案当取值', () => {
+  const scope = (findTool('run_annotation').parameters.properties as Record<string, Record<string, unknown>>).reuseScope;
+  assert.deepEqual(scope.enum, ['hint', 'template', 'none', null]);
+  assert.equal(typeof scope.description, 'string');
 });

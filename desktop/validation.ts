@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { providerCapabilities } from '../shared/protocol';
+import { assetStatuses, providerCapabilities } from '../shared/protocol';
+import { reuseScopes } from '../shared/reuse';
 import { MEDIA_JOB_KINDS, VIDEO_MAX_RANGE_SECONDS, VIDEO_SCENE_MIN_INTERVAL_RANGE, VIDEO_SCENE_THRESHOLD_RANGE } from '../shared/media';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
@@ -42,7 +43,7 @@ const pricing = z.strictObject({ model: name, currency,
 });
 const tokenCount = z.number().int().min(0).max(1e9);
 const resourceVersion = z.number().int().min(0).max(2147483647);
-const reuseFields = { reuseEnabled: z.boolean().optional(), forceRerun: z.boolean().optional(), reuseScope: z.enum(['hint', 'template', 'none']).optional(),
+const reuseFields = { reuseEnabled: z.boolean().optional(), forceRerun: z.boolean().optional(), reuseScope: z.enum(reuseScopes).optional(),
   reuseMaxAgeSeconds: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).nullable().optional() };
 const referenceFields = {
   referenceAssetIds: z.array(id).max(63).refine(values => new Set(values).size === values.length, '参考素材不能重复').optional(),
@@ -125,7 +126,7 @@ const flowImport = z.strictObject({ paths: z.array(z.string().min(1).max(32767))
   .refine(value => value.paths === undefined || value.mediaJobId === undefined, '素材路径和媒体任务只能选择一种导入来源');
 const dimension = z.number().int().min(1).max(100000);
 const flowFilter = z.strictObject({ assetIds: flowAssetIds.optional(), excludeAssetIds: z.array(id).max(10000).refine(values => new Set(values).size === values.length, '排除素材不能重复').optional(),
-  statuses: z.array(z.enum(['unlabeled', 'candidate', 'modified', 'confirmed', 'invalid', 'missing'])).max(6).refine(values => new Set(values).size === values.length).optional(),
+  statuses: z.array(z.enum(assetStatuses)).max(6).refine(values => new Set(values).size === values.length).optional(),
   minWidth: dimension.optional(), minHeight: dimension.optional(), maxWidth: dimension.optional(), maxHeight: dimension.optional(), deduplicate: z.boolean().optional(), screening: screening.optional(),
 }).refine(value => (value.minWidth ?? 1) <= (value.maxWidth ?? 100000) && (value.minHeight ?? 1) <= (value.maxHeight ?? 100000), '流程筛选宽高范围无效');
 const flowApi = z.strictObject({ providerId: id, model: name,

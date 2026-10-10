@@ -17,6 +17,14 @@ export type TaskType = 'detect' | 'obb' | 'segment' | 'pose' | 'classify';
 export interface LabelClass { id: string; name: string; color: string }
 export interface Point { x: number; y: number }
 export interface Keypoint extends Point { name: string; visibility: 0 | 1 | 2 }
+
+/**
+ * 素材标注状态。工具 schema 的 enum、桌面校验与运行时校验都取这一份：
+ * 三处各写一份字面量时，改名会让某一个入口单独失效（模型只能看到 schema，schema 缺 enum 就只能猜值）。
+ */
+export const assetStatuses = ['unlabeled', 'candidate', 'modified', 'confirmed', 'invalid', 'missing'] as const;
+export type AssetStatus = typeof assetStatuses[number];
+
 export interface Annotation {
   id: string; classId: string; type: TaskType;
   bbox?: { x: number; y: number; width: number; height: number };
@@ -33,7 +41,7 @@ export interface Project {
 export interface Asset {
   id: string; projectId: string; name: string; width: number; height: number;
   mediaUrl?: string; thumbnailUrl?: string; contentHash: string;
-  status: 'unlabeled' | 'candidate' | 'modified' | 'confirmed' | 'invalid' | 'missing';
+  status: AssetStatus;
   /** 项目概览的全局审核分类；与原始标注状态分开，失败来自最近运行样本。 */
   resultState?: 'candidate' | 'empty' | 'failed' | 'confirmed' | 'unlabeled' | 'other';
   annotations: Annotation[]; version: number; source: string;
