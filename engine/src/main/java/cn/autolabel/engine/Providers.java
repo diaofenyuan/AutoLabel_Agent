@@ -15,6 +15,8 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLHandshakeException;
 
 final class Providers {
     /** 登记到 provider 文档的模型候选上限，避免异常接口返回超大列表撑大配置与备份。 */
@@ -225,6 +227,32 @@ final class Providers {
             return "接口返回 HTTP "+status+(status==401||status==403?"（认证/权限错误）":"")+"："+detail;
         }catch(Exception ignored){return fallback;}
     }
+    /**
+     * 把传输层异常翻译成可定位的失败，而不是一律压成「网络连接中断」。
+     *
+     * 背景：{@code catch(ExecutionException)} 过去对除超时外的所有异常都返回同一个
+     * {@code provider_network_unknown} 和同一句提示，且不记录任何底层原因。于是 DNS 解析失败、
+     * 连接被拒、TLS 握手失败、代理不可达这类需要用户动手处理的配置问题，在界面上与偶发抖动
+     * 完全无法区分——批量任务里数百个样本只能给出同一句无法定位的话，用户既不能判断该不该
+     * 重试，也不知道该检查什么。
+     *
+     * 这里按 {@link Throwable} 链上的真实类型分类：能落到具体可行动原因的就给出该原因，
+     * 只有确实无法归类的才保留原错误码，避免继续编造一个笼统的说法。
+     */
+    private RemoteError transportError(Throwable error){
+        for(Throwable cause=error;cause!=null;cause=cause.getCause()){
+            if(cause instanceof UnknownHostException||cause instanceof java.nio.channels.UnresolvedAddressException)return new RemoteError("provider_host_unresolved","接口域名无法解析，请核对接口地址是否正确、本机 DNS 与代理设置。",false,true,0);
+            if(cause instanceof HttpConnectTimeoutException)return new RemoteError("provider_connect_timeout","连接接口超时，请检查本机网络、代理与防火墙设置。",true,true,0);
+            if(cause instanceof SSLException||cause instanceof SSLHandshakeException)return new RemoteError("provider_tls_failed","与接口建立 TLS 连接失败，请核对证书链、系统时间与本机网络。",false,true,0);
+            // 代理不可达在本机表现为 SocketException（代理端口拒绝连接）与 ConnectException 同源，
+            // 但提示必须区分：前者要用户去确认代理客户端，而不是核对接口地址。
+            if(cause instanceof SocketException&&!(cause instanceof ConnectException))return new RemoteError("provider_proxy_failed","本机网络连接被中断；若使用了系统代理，请确认代理客户端已启动并允许该接口通过。",true,true,0);
+            if(cause instanceof ConnectException)return new RemoteError("provider_connect_refused","无法连接到接口地址，连接被拒绝或不可达；请核对地址、端口与本机网络。",true,true,0);
+            // 链走完仍未归类时不发明新原因，保留原有的未知口径。
+            if(cause.getCause()==null)break;
+        }
+        return new RemoteError("provider_network_unknown","网络连接中断，远端结果未知。",false,true,0);
+    }
     JsonObject request(JsonObject p,String suffix,JsonObject body){
         return request(p,suffix,body,credentialFor(p,new JsonObject()));
     }
@@ -246,7 +274,7 @@ final class Providers {
         catch(InterruptedException e){Thread.currentThread().interrupt();throw new RemoteError("request_interrupted","调用中断，远端结果未知。",false,true,0);}
         catch(ExecutionException e){Throwable cause=e.getCause();if(cause instanceof HttpTimeoutException)throw new RemoteError("provider_timeout","请求超时，远端是否完成未知；不会自动重发。",false,true,0);
             if(cause!=null&&String.valueOf(cause.getMessage()).contains("response_size_limit"))throw new RemoteError("response_too_large","接口返回超过 8 MiB，已停止接收与解析。",false,false,0);
-            throw new RemoteError("provider_network_unknown","网络连接中断，远端结果未知。",false,true,0);}
+            throw transportError(e);}
         finally{if(pending!=null&&!pending.isDone())pending.cancel(true);}
     }
     /** 读取一次 SSE 流；只有收到解析器确认的完整终态才返回，任何提前结束均标记为未知。 */
@@ -278,7 +306,7 @@ final class Providers {
             finally{idleGuard.cancel(false);}
         }catch(RemoteError e){throw e;}catch(TimeoutException e){throw new RemoteError("provider_timeout","请求超时，远端是否完成未知；不会自动重发。",false,true,0);}
         catch(InterruptedException e){Thread.currentThread().interrupt();throw new RemoteError("request_interrupted","调用中断，远端结果未知。",false,true,0);}
-        catch(ExecutionException e){Throwable cause=e.getCause();if(cause instanceof HttpTimeoutException)throw new RemoteError("provider_timeout","请求超时，远端是否完成未知；不会自动重发。",false,true,0);throw new RemoteError("provider_network_unknown","网络连接中断，远端结果未知。",false,true,0);}
+        catch(ExecutionException e){Throwable cause=e.getCause();if(cause instanceof HttpTimeoutException)throw new RemoteError("provider_timeout","请求超时，远端是否完成未知；不会自动重发。",false,true,0);throw transportError(e);}
         catch(IOException e){throw new RemoteError("provider_stream_unknown","接口流读取中断，远端结果未知。",false,true,0);}
         finally{if(pending!=null&&!pending.isDone())pending.cancel(true);}
     }

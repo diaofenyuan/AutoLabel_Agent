@@ -59,6 +59,10 @@ function ChatMessage({ message, previousUser, onEdit, onRetry, onCopy, onCheckTa
  */
 const UNKNOWN_OUTCOME_CODES = new Set([
   'provider_timeout', 'provider_network_unknown', 'provider_stream_unknown',
+  // 传输层归因出的具体失败原因：请求同样可能已到达服务商并计费，仍属「结果未知」一类，
+  // 不能因为错误码更具体就把重发当成默认动作。
+  'provider_host_unresolved', 'provider_connect_refused', 'provider_tls_failed',
+  'provider_connect_timeout', 'provider_proxy_failed',
   'chat_wait_timeout', 'AGENT_TIMEOUT', 'ENGINE_TIMEOUT', 'ENGINE_DISCONNECTED',
   'provider_capacity_timeout', 'interactive_busy'
 ]);

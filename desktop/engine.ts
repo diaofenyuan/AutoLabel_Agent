@@ -186,7 +186,12 @@ export class EngineManager extends EventEmitter {
       // ForkJoinPool 无法再调度任何虚拟线程，HTTP 处理器本身也跑不起来 ——
       // 表现为「引擎还在，但所有请求（含 /health）全部超时」，即用户看到的断连。
       // 放大载体数后同样场景实测 /health 全程正常；长任务结束后也不再需要重建引擎。
-      const child = spawn(java, ['-Dfile.encoding=UTF-8', '-Dsun.net.httpserver.maxReqTime=20', '-Dsun.net.httpserver.idleInterval=10', '-Djdk.virtualThreadScheduler.parallelism=64', '-jar', jar], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env, cwd: this.options.dataDir });
+      // useSystemProxies 是模型接口能连通的前提：桌面端本身走 Chromium 网络栈，会自动沿用
+      // Windows 系统代理（Karing/Clash 等把代理写在 Internet Settings 里），而引擎是独立的
+      // JVM，默认的 ProxySelector 一律返回 DIRECT。两者网络出口不一致时，界面能正常访问模型
+      // 控制台，引擎发起的每一个请求却都直连失败，批量任务遂集体报 provider_network_unknown。
+      // 这里让引擎与桌面端使用同一套系统代理出口；系统未配置代理时该标志无副作用，仍为直连。
+      const child = spawn(java, ['-Dfile.encoding=UTF-8', '-Dsun.net.httpserver.maxReqTime=20', '-Dsun.net.httpserver.idleInterval=10', '-Djdk.virtualThreadScheduler.parallelism=64', '-Djava.net.useSystemProxies=true', '-jar', jar], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env, cwd: this.options.dataDir });
       this.child = child;
       child.stdin.on('error', () => this.log('引擎启动输入通道已关闭'));
       let stderrBuffer = '';
