@@ -140,6 +140,14 @@ async function dispatch(command: string, p: Record<string, unknown>): Promise<un
       const offset = Number(p.offset ?? 0), limit = Number(p.limit ?? 500);
       return { ids: list.slice(offset, offset + limit).map(item => item.id), total: list.length };
     }
+    case 'asset.sample': {
+      const all = demoProjectAssets(data, p.projectId).filter(item => !p.status || item.status === p.status);
+      const limit = Math.min(10, Math.max(1, Number(p.limit ?? 5)));
+      // 演示桥没有真随机：按 id 排序后取偏移，行为上仍是「一批不连续位置的样本」，够演示流程用。
+      const start = all.length ? Math.floor(Math.random() * all.length) : 0;
+      const ids = Array.from({ length: Math.min(limit, all.length) }, (_, i) => all[(start + i) % all.length].id);
+      return { ids, total: all.length, status: String(p.status ?? 'unlabeled') };
+    }
     case 'asset.get': if (!asset) throw new Error('素材不存在。'); return asset;
     case 'asset.import': {
       if (!project) throw new Error('请先打开项目。');

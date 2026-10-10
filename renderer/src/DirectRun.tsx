@@ -9,6 +9,9 @@ import { errorMessage, request, isDemo } from './bridge';
 import { usePopoverPosition } from './popoverPosition';
 import { useApp } from './context';
 import { Button, Field, Notice } from './ui';
+import ManualExamplePrompt from './ManualExamplePrompt';
+import ManualExampleFlow from './ManualExampleFlow';
+import { manualExampleLimit, readManualExample, shouldPromptManualExample, writeManualExample } from './manualExample';
 
 interface LocalChoice { entry: ModelLibraryEntry; model: LocalModel }
 
@@ -51,7 +54,7 @@ export function readRegion(value: unknown): AnnotationRegion | null {
 export default function DirectRun({ project, annotationConfig, selectedAssetIds, disabled }: {
   project: Project; annotationConfig: ResolvedConfiguration; selectedAssetIds: string[]; disabled?: boolean;
 }) {
-  const { notify, navigate } = useApp();
+  const { notify, navigate, providers, setProject } = useApp();
   const [open, setOpen] = useState(false);
   const [locals, setLocals] = useState<LocalChoice[]>([]);
   const [localAvailable, setLocalAvailable] = useState(false);
@@ -64,9 +67,18 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
   // 发送副本：默认长边 1920 的 JPEG。实测 4K 帧按原图发（3.4 MB）时某些接口会跑到超时，
   // 缩到 0.16 MB 后同样的模型 20 多秒返回；区域裁剪进一步把小目标放大，框也更贴。
   const [sendMode, setSendMode] = useState<'original' | 'edge1920' | 'edge1152'>('edge1920');
-  // 参考帧：把一张已人工确认的图当作「照这个样子标」的示例（few-shot）。小目标靠它比靠提示词有效得多。
-  const [referenceId, setReferenceId] = useState('');
-  const [references, setReferences] = useState<Array<{ id: string; name: string; objects: number }>>([]);
+  // 参考帧：把一张已人工确认的图当作「照这样子标」的示例（few-shot）。小目标靠它比靠提示词有效得多。
+  // 来源有两处：弹层里手选，或开始标注时走「人工标注参考示例」流程批量标好后自动带出。
+  // 带 status 是为了判定已记录的示例是否还有效（素材退回候选就不该再当标准）。
+  const [referenceIds, setReferenceIds] = useState<string[]>([]);
+  const [references, setReferences] = useState<Array<{ id: string; name: string; objects: number; status: string }>>([]);
+  // 人工示例流程：抽样 → 连续标注 → 落库。阶段放这里串起来，流程组件本身不关心运行参数。
+  const [exampleStage, setExampleStage] = useState<'none' | 'prompt' | 'flow'>('none');
+  const [examplePool, setExamplePool] = useState(0);
+  // 抽样失败时回到提示层展示，不静默吞掉：用户需要知道示例没抽上、这次是按无参考跑的。
+  const [exampleError, setExampleError] = useState('');
+  // 「不再提示」是在提示弹窗里勾的，但要等标注流程结束才落库，因此先存着。
+  const [exampleNeverRemind, setExampleNeverRemind] = useState(false);
   // 本机小目标模式：4K 帧里的小物件（手办、小零件）在 640 下常常直接漏检，提高到 1280 并放低置信度更稳。
   const [localQuality, setLocalQuality] = useState<'standard' | 'small'>('standard');
   const localParameters = localQuality === 'small' ? { imageSize: 1280, confidence: 0.15 } : { imageSize: 640, confidence: 0.25 };
@@ -83,6 +95,10 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
   const cloudReady = Boolean(annotationConfig.providerId && annotationConfig.model);
   const picked = locals.find(item => item.entry.id === localId);
   const assetIds = scope === 'selected' ? selectedAssetIds : undefined;
+  // 参考张数上限取决于本次接口能吃几张图：引擎按「参考 + 1 张目标」校验 maxImages，
+  // 这里先收窄，界面才不会出现「标完 10 张却发不出去」。
+  const exampleLimit = manualExampleLimit(providers.find(item => item.id === annotationConfig.providerId)?.maxImages);
+  const exampleState = readManualExample(project);
   const payload = target === 'cloud' && (sendMode !== 'original' || region)
     ? { ...(sendMode === 'original' ? {} : { maxEdge: sendMode === 'edge1920' ? 1920 : 1152, quality: 92 }), ...(region ? { region } : {}) }
     : null;
@@ -123,7 +139,7 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
     // 只有「人工确认过」的素材能当参考（引擎侧同样要求 confirmed/modified）；这里只读已加载的一页，仅用于挑选。
     void request<{ items: Array<{ id: string; name: string; status: string; annotations: unknown[] }> }>('asset.list', { projectId: project.id, limit: 500 })
       .then(list => setReferences(list.items.filter(item => item.status === 'confirmed' || item.status === 'modified')
-        .map(item => ({ id: item.id, name: item.name, objects: item.annotations.length }))))
+        .map(item => ({ id: item.id, name: item.name, objects: item.annotations.length, status: item.status }))))
       .catch(() => setReferences([]));
   }, [open, project?.id]);
   useEffect(() => { setInstructions(''); }, [project.id]);
@@ -162,10 +178,11 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
    * 参考帧不能同时是待标注目标（引擎会直接拒绝）。选了参考之后：
    * 「已勾选」把参考从目标里剔掉；「全部未标注」取全项目素材（分页）再剔掉参考。
    */
-  async function resolveTargets(): Promise<string[] | undefined> {
-    if (!referenceId) return assetIds;
+  async function resolveTargets(refs: string[]): Promise<string[] | undefined> {
+    const excluded = new Set(refs);
+    if (!excluded.size) return assetIds;
     if (scope === 'selected') {
-      const targets = selectedAssetIds.filter(id => id !== referenceId);
+      const targets = selectedAssetIds.filter(id => !excluded.has(id));
       if (!targets.length) throw new Error('参考帧不能同时当成待标注目标：请另外勾选要标注的素材，或换一张参考。');
       return targets;
     }
@@ -176,24 +193,90 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
       ids.push(...page.items.map(item => item.id));
       if (!page.items.length || ids.length >= page.total) break;
     }
-    const targets = ids.filter(id => id !== referenceId);
-    if (!targets.length) throw new Error('这个项目里只有这一张已确认的图：它当参考之后就没有可标注的素材了。');
+    const targets = ids.filter(id => !excluded.has(id));
+    if (!targets.length) throw new Error(`这个项目里只有这 ${refs.length} 张已确认的图：它们当参考之后就没有可标注的素材了。`);
     return targets;
   }
 
+  /**
+   * 人工示例落库：把本轮确认的素材 id 记进项目设置。
+   * 素材本身仍是事实来源，这里只记 id 与「不再提示」，不复制标注内容。
+   */
+  async function saveManualExample(assetIds: string[], neverRemind: boolean): Promise<string[]> {
+    if (!assetIds.length) {
+      // 一张都没标成时也允许记「不再提示」：用户已经明确表态过，不该下次再拦一次。
+      if (!neverRemind) return [];
+      const updated = await request<Project>('project.update', { projectId: project.id, settings: writeManualExample({ assetIds: [], promptDismissed: true }) });
+      setProject(updated);
+      return [];
+    }
+    const updated = await request<Project>('project.update', { projectId: project.id, settings: writeManualExample({ assetIds, promptDismissed: neverRemind }) });
+    setProject(updated);
+    void request<{ items: Array<{ id: string; name: string; status: string; annotations: unknown[] }> }>('asset.list', { projectId: project.id, assetIds, limit: 500 })
+      .then(list => setReferences(list.items.map(item => ({ id: item.id, name: item.name, objects: item.annotations.length, status: item.status }))));
+    setReferenceIds(assetIds);
+    return assetIds;
+  }
+
+  /** 跳过后把「不再提示」写进项目设置；勾了才写。 */
+  async function skipExample(neverRemind: boolean) {
+    setExampleStage('none'); setExampleError('');
+    if (!neverRemind) return;
+    const updated = await request<Project>('project.update', { projectId: project.id, settings: writeManualExample({ assetIds: exampleState?.assetIds ?? [], promptDismissed: true }) });
+    setProject(updated);
+  }
+
+  /** 进入抽样标注流程。抽样由流程组件自己发起，这里只负责切阶段。 */
+  function beginExample() {
+    setExampleError('');
+    setExampleStage('flow');
+  }
+
   async function start() {
+    // 弹窗必须在真正建任务之前出现，否则用户会先看到任务已创建，再被问要不要标示例。
+    // 只在云端 + 没有可用示例时提示：本机推理没有参考帧通道，提示了也送不过去。
+    if (target === 'cloud' && exampleLimit > 0 && shouldPromptManualExample(project, references)) {
+      setExampleError('');
+      try {
+        const pool = await request<{ total: number }>('asset.sample', { projectId: project.id, limit: 1 });
+        // 一张未标注图都没有时没什么可抽的，直接跑，别弹一个只有「跳过」可点的空窗。
+        if (!pool.total) { setExampleStage('none'); setBusy(false); return; }
+        setExamplePool(pool.total);
+      } catch {
+        // 读不到池子就不拦着用户：抽样失败不该阻断标注本身。
+        setExampleStage('none'); setBusy(false);
+        return;
+      }
+      setExampleStage('prompt');
+      setBusy(false);
+      return;
+    }
     setBusy(true); setError('');
     try {
       if (!classes.length) throw new Error('这个项目还没有类别：请先在输入卡的「类别」里写好要标的东西。');
       if (scope === 'selected' && !selectedAssetIds.length) throw new Error('还没有勾选素材：到项目概览里勾选，或把范围改成「全部未标注」。');
-      const resolved = await resolveTargets();
-      const run = target === 'local'
-        ? (picked ? await createLocalRun(picked) : (() => { throw new Error('请先选择一个内置模型。'); })())
-        : await request<{ id: string }>('run.create', {
-            projectId: project.id, ...(resolved ? { assetIds: resolved } : {}), providerId: annotationConfig.providerId, model: annotationConfig.model,
-            prompt: buildDirectPrompt(classes, rules, instructions), concurrency: annotationConfig.concurrency, ...(payload ? { payload } : {}),
-            ...(referenceId ? { referenceAssetIds: [referenceId] } : {}),
-          });
+      const references0 = target === 'cloud' ? referenceIds : [];
+      const resolved = await resolveTargets(references0);
+      const body = {
+        projectId: project.id, ...(resolved ? { assetIds: resolved } : {}), providerId: annotationConfig.providerId, model: annotationConfig.model,
+        prompt: buildDirectPrompt(classes, rules, instructions), concurrency: annotationConfig.concurrency, ...(payload ? { payload } : {}),
+        ...(references0.length ? { referenceAssetIds: references0 } : {}),
+      };
+      let run: { id: string };
+      if (target === 'local') run = picked ? await createLocalRun(picked) : (() => { throw new Error('请先选择一个内置模型。'); })();
+      else {
+        try {
+          run = await request<{ id: string }>('run.create', body);
+        } catch (e) {
+          // 参考被引擎拒绝（失效 / 与目标重叠 / 超过接口图片上限）不该让整次标注失败：
+          // 参考只是加分项，去掉它照样能跑，这里降级重试一次并如实告知。
+          const message = errorMessage(e);
+          if (!references0.length || !/reference_invalid|reference_target_overlap|image_limit_exceeded/.test(message)) throw e;
+          const { referenceAssetIds, ...fallback } = body;
+          run = await request<{ id: string }>('run.create', fallback);
+          notify('人工示例未能随本次请求发送，已按无参考执行。', { error: true });
+        }
+      }
       setOpen(false);
       notify('已创建标注任务，进度在任务中心；结果会写成候选，不会覆盖你已确认的内容。');
       void navigate('tasks');
@@ -267,13 +350,20 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
           <span className="muted tiny">只标注区域：{region ? `左 ${Math.round(region.left * 100)}% 上 ${Math.round(region.top * 100)}% 右 ${Math.round(region.right * 100)}% 下 ${Math.round(region.bottom * 100)}%（在素材页的画布上框定，坐标会自动换算回整图）` : '整图（在素材页的画布上可以框一块只标它）'}</span>
           {/* 参考帧：小目标最有效的一招——给模型一张「照这个样子标」的示例。 */}
           {references.length
-            ? <><Field label="参考帧（可选）" hint="挑一张已经人工确认过的图当示例；它自己不会被标注，会从本次目标里自动排除。">
-                <select value={referenceId} onChange={event => setReferenceId(event.target.value)}>
-                  <option value="">不用参考</option>
-                  {references.map(item => <option key={item.id} value={item.id}>{item.name} · 已人工确认 {item.objects} 个对象</option>)}
-                </select>
+            ? <><Field label="参考帧（可选）" hint="勾选已经人工确认过的图当示例；它们自己不会被标注，会从本次目标里自动排除。多选比单选更稳，注意不超过接口能接收的图片数。">
+                <div className="manual-example-picker">
+                  {references.map(item => <label className="checkbox-row" key={item.id}>
+                    <input type="checkbox" aria-label={`参考帧 ${item.name}`} checked={referenceIds.includes(item.id)}
+                      onChange={event => setReferenceIds(ids => event.target.checked ? [...ids, item.id] : ids.filter(id => id !== item.id))} />
+                    {item.name} · 已人工确认 {item.objects} 个对象
+                  </label>)}
+                </div>
+                <div className="actions">
+                  <button type="button" className="text-button" onClick={() => setReferenceIds(references.map(item => item.id))}>全选（{references.length}）</button>
+                  {referenceIds.length > 0 && <button type="button" className="text-button" onClick={() => setReferenceIds([])}>不用参考</button>}
+                </div>
               </Field></>
-            : <span className="muted tiny">还没有可当参考的素材：先手标一张并点「保存并确认」，它就能在这里当示例。</span>}
+            : <span className="muted tiny">还没有可当参考的素材：先手标一张并点「保存并确认」，它就能在这里当示例；也可以在点「开始标注」时按提示随机标几张作为示例。</span>}
         </>}
         <p className="muted tiny">类别：{classes.length ? classes.map(item => item.name).join('、') : '（还没有类别）'}{rules ? ` · 已写区分口径` : ''}</p>
         {rules && <p className="muted tiny direct-run-rules">{rules}</p>}
@@ -285,5 +375,12 @@ export default function DirectRun({ project, annotationConfig, selectedAssetIds,
         <Button className="primary" type="button" busy={busy} disabled={busy || Boolean(blocked)} onClick={() => void start()}>开始标注</Button>
       </div>
     </div>}
+    {/* 人工示例流程的两层弹窗挂在最外层：它们要在标注弹层之上再叠一层，不能塞进 popover 里。 */}
+    {exampleStage === 'prompt' && <ManualExamplePrompt count={exampleLimit} available={examplePool} error={exampleError}
+      onAnnotate={neverRemind => { setExampleNeverRemind(neverRemind); beginExample(); }}
+      onSkip={neverRemind => void skipExample(neverRemind)} />}
+    {exampleStage === 'flow' && <ManualExampleFlow project={project} limit={exampleLimit} onClose={() => setExampleStage('none')}
+      onDone={assetIds => { setExampleStage('none'); void saveManualExample(assetIds, exampleNeverRemind).then(() => setOpen(true)); }}
+      onFailed={message => { setExampleError(message); setExampleStage('prompt'); }} />}
   </div>;
 }

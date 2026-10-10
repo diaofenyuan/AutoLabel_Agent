@@ -45,13 +45,15 @@ function VideoContinuityReview({ issues }: { issues: VideoContinuityIssue[] }) {
  * 保存走乐观锁，冲突时不静默重试覆盖——覆盖等于丢别人的结果；改为载入最新版本并提示核对，
  * 把决定权交回人。
  */
-export default function AssetAnnotator({ asset, classes, taskType, templateSettings, connectionTemplate, maxHeight, initialAnnotations, continuityIssues = [], onClose, onSaved }: {
+export default function AssetAnnotator({ asset, classes, taskType, templateSettings, connectionTemplate, maxHeight, initialAnnotations, continuityIssues = [], startInEdit, onClose, onSaved }: {
   asset: Asset; classes: LabelClass[]; taskType: TaskType; templateSettings?: Record<string, unknown>;
   connectionTemplate?: unknown; maxHeight?: string; initialAnnotations?: Annotation[]; continuityIssues?: VideoContinuityIssue[];
+  /** 人工示例流程直接进画布：那一轮用户就是来标图的，先看只读预览只是多一次点击。 */
+  startInEdit?: boolean;
   onClose: () => void; onSaved: (asset: Asset) => void;
 }) {
   const { notify, syncWindowDirtySource, project, setProject } = useApp();
-  const [mode, setMode] = useState<'view' | 'edit'>(initialAnnotations ? 'edit' : 'view');
+  const [mode, setMode] = useState<'view' | 'edit'>(initialAnnotations || startInEdit ? 'edit' : 'view');
   // 只标注区域存在项目设置里：它属于「这个项目要标哪一块」，不是某一张素材的属性。
   const [region, setRegion] = useState<AnnotationRegion | null>(() => readRegion(project?.settings?.annotationRegion));
   const [regionBusy, setRegionBusy] = useState(false);

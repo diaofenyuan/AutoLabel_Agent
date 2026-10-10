@@ -70,6 +70,22 @@ final class Projects {
     JsonObject listAssetIds(JsonObject p){String id=Json.required(p,"projectId"),filter=Json.str(p,"resultFilter","all");int offset=Json.bounded(p,"offset",0,0,Integer.MAX_VALUE),limit=Json.bounded(p,"limit",500,1,500);String filterWhere=filterCondition(filter);List<Object> args=filterArgs(id,filter);args.add(limit);args.add(offset);
         return store.read(c->{Store.document(c,"projects",id);String cte=assetOverviewCte();long total=Store.one(c,cte+"SELECT COUNT(*) AS n FROM classified_assets WHERE 1=1"+filterWhere,filterArgs(id,filter).toArray()).get("n").getAsLong();JsonArray ids=new JsonArray();for(JsonObject row:Store.rows(c,cte+"SELECT id FROM classified_assets WHERE 1=1"+filterWhere+" ORDER BY asset_order LIMIT ? OFFSET ?",args.toArray()))ids.add(row.get("id"));return Json.obj("ids",ids,"total",total);});
     }
+    /**
+     * 人工标注参考示例的抽样入口：从项目里随机取若干张指定状态的素材。
+     *
+     * 抽样放在引擎侧而不是界面侧：asset.list 单页上限 500，界面要凑够随机样本就得把整个项目
+     * 拉下来，上万素材时明显卡顿。这里一条 ORDER BY RANDOM() 交给数据库做，与 listAssets
+     * 把重查询留在引擎的既有分工一致。随机只用于「给用户看几张典型图」，因此不追求无重复，
+     * 但同一批 id 必须互不相同（同一条 SQL 内 RANDOM() 不会给出相同排序键）。
+     */
+    private static final Set<String> SAMPLE_STATUSES=Set.of("unlabeled","candidate","modified","confirmed");
+    JsonObject sampleAssets(JsonObject p){String id=Json.required(p,"projectId"),status=Json.str(p,"status","unlabeled");int limit=Json.bounded(p,"limit",5,1,10);
+        if(!SAMPLE_STATUSES.contains(status))throw new ApiError(400,"asset_status_invalid","抽样状态只能是未标注、候选、人工修改或已确认。");
+        return store.read(c->{Store.document(c,"projects",id);
+            List<Object> args=new ArrayList<>(List.of(id,status));long total=Store.one(c,"SELECT COUNT(*) AS n FROM assets WHERE project_id=? AND status=?",args.toArray()).get("n").getAsLong();
+            args.add(limit);JsonArray ids=new JsonArray();for(JsonObject row:Store.rows(c,"SELECT id FROM assets WHERE project_id=? AND status=? ORDER BY RANDOM() LIMIT ?",args.toArray()))ids.add(row.get("id"));
+            return Json.obj("ids",ids,"total",total,"status",status);});
+    }
     /** 逐张归一化的取消与进度口子：同步导入用空实现，后台任务接真实任务状态。 */
     interface ImportMeter{default void checkpoint(){}default void progress(int done,int total,int skipped,int errors){}}
     static final class ImportTally{int imported,skipped;final JsonArray errors=new JsonArray();final JsonArray ids=new JsonArray();}

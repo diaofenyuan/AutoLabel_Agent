@@ -66,7 +66,41 @@ final class AssetOverviewTest {
             JsonObject allIds = EngineTest.command(e, "asset.listIds", Json.obj("projectId", projectId, "limit", 500));
             check(Json.array(allIds, "ids").size() == 8 && Json.integer(allIds, "total", -1) == 8, "全选 ID 覆盖项目全部素材");
             EngineTest.error("asset_result_filter_invalid", () -> e.projects.listAssetIds(Json.obj("projectId", projectId, "resultFilter", "invalid")));
+
+            sampling(e, projectId, unlabeled);
         }
+    }
+
+    /**
+     * 参考示例抽样：只按原始 status 取，不掺入最近运行的失败判定——
+     * 用户要标的是「还没标过的图」，不是「跑失败的图」。返回张数受 LIMIT 约束，
+     * 不足时按实际张数返回，由界面照实显示而不是报错。
+     */
+    private static void sampling(Engine e, String projectId, String unlabeled) throws Exception {
+        JsonObject picked = EngineTest.command(e, "asset.sample", Json.obj("projectId", projectId, "limit", 10));
+        JsonArray ids = Json.array(picked, "ids");
+        check(ids.size() == 1 && id(ids, 0).equals(unlabeled) && Json.integer(picked, "total", -1) == 1,
+            "asset.sample 按原始状态抽样，未标注只剩一张时按实际张数返回");
+
+        JsonObject confirmed = EngineTest.command(e, "asset.sample", Json.obj("projectId", projectId, "limit", 10, "status", "confirmed"));
+        check(Json.array(confirmed, "ids").size() == 1 && Json.integer(confirmed, "total", -1) == 1, "asset.sample 支持按已确认状态抽样");
+        EngineTest.error("asset_status_invalid", () -> e.projects.sampleAssets(Json.obj("projectId", projectId, "status", "invalid")));
+        EngineTest.error("invalid_argument", () -> e.projects.sampleAssets(Json.obj("projectId", projectId, "limit", 0)));
+        EngineTest.error("invalid_argument", () -> e.projects.sampleAssets(Json.obj("projectId", projectId, "limit", 99)));
+
+        // 池子够大时才谈得上「随机」：连抽两次应给出不同组合，否则抽样退化成固定顺序。
+        // 夹具上限 8 张：Media.sample 的目标位置随 index 线性右移，再多就会画出画布、
+        // 内容重复被去重钩掉，导入数对不上。
+        String many = Json.required(EngineTest.project(e, "detect"), "id");
+        EngineTest.importSamples(e, many, 8);
+        JsonObject first = EngineTest.command(e, "asset.sample", Json.obj("projectId", many, "limit", 5));
+        JsonObject again = EngineTest.command(e, "asset.sample", Json.obj("projectId", many, "limit", 5));
+        JsonArray firstIds = Json.array(first, "ids");
+        check(Json.integer(first, "total", -1) == 8 && firstIds.size() == 5 && new HashSet<>(firstIds.asList()).size() == 5,
+            "asset.sample 返回不重复的样本并给出池子总数");
+        boolean differs = false;
+        for (int i = 0; i < firstIds.size() && !differs; i++) differs = !id(Json.array(again, "ids"), i).equals(id(firstIds, i));
+        check(differs, "连续两次抽样的顺序不同");
     }
 
     private static String id(JsonArray values, int index) { return values.get(index).getAsString(); }

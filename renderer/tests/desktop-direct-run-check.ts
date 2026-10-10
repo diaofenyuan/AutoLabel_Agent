@@ -370,10 +370,10 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     await openProjectChat(driver, projectName!);
     await js(`document.querySelector('.chat-panel .direct-run-trigger').click()`);
     await waitFor(`!!document.querySelector('.direct-run .picker-popover')`);
-    await waitFor(`!!document.querySelector('.direct-run .picker-popover .field select')`);
-    const referenceOptions = await js<string[]>(`[...document.querySelectorAll('.direct-run .picker-popover .field select option')].map(node=>node.innerText.trim())`);
-    assert.ok(referenceOptions.length >= 2, `参考帧下拉里应列出已确认的素材，实际：${json(referenceOptions)}`);
-    await js(`(()=>{const e=document.querySelector('.direct-run .picker-popover .field select');e.value=${json(referenceAsset.id)};e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await waitFor(`!!document.querySelector('.direct-run .manual-example-picker')`);
+    const referenceOptions = await js<string[]>(`[...document.querySelectorAll('.direct-run .manual-example-picker .checkbox-row')].map(node=>node.innerText.trim())`);
+    assert.ok(referenceOptions.length >= 1, `参考帧列表里应列出已确认的素材，实际：${json(referenceOptions)}`);
+    await js(`(()=>{const e=document.querySelector('.direct-run .manual-example-picker input[type=checkbox]');e.checked=true;e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await button('开始标注', `document.querySelector('.direct-run .picker-popover')`);
     // 用运行快照里的 references 精确定位这次运行（按 total 找会撞上之前那次单素材运行）。
     const hasReferenceRun = `(async()=>{const list=await window.autoLabel.request('run.list',{});for(const run of list){const detail=await window.autoLabel.request('run.get',{runId:run.id});
@@ -395,6 +395,57 @@ export async function checkDesktopDirectRun(window: BrowserWindow, output: strin
     assert.ok(wireReference, `请求里必须带 role=reference 的示例帧，实际记录：${json(seenReferences)}`);
     assert.equal(wireReference!.objects, 1, '参考帧要把它的人工标注一起发给模型');
     checks.push({ check: 'direct-run-uses-reference-frame', reference: wireReference, targets: referenceDetail.samples.map(sample => sample.assetId) });
+
+    // ===== 人工标注参考示例 =====
+    // 前提：清掉当前参考选择，并让项目回到「无可用示例」的状态，否则不会弹窗。
+    const cleared = await api<{ settings: Record<string, unknown> }>('project.open', { projectId });
+    await api('project.update', { projectId, settings: { manualExample: { assetIds: [], promptDismissed: false } } });
+    await js(`(()=>{const boxes=[...document.querySelectorAll('.direct-run .manual-example-picker input[type=checkbox]')];
+      for(const box of boxes){box.checked=false;box.dispatchEvent(new Event('change',{bubbles:true}));}})()`);
+    const prompt = await js<{ shown: boolean; text: string; hasSkip: boolean; hasNever: boolean; disabled: boolean }>(`(()=>{const d=document.querySelector('dialog[open]');
+      if(!d)return { shown:false,text:'',hasSkip:false,hasNever:false,disabled:true };
+      const btn=[...d.querySelectorAll('button')].find(b=>b.innerText.trim()==='立即标注示例');
+      return { shown:true, text:d.innerText.replace(/\\s+/g,' '), hasSkip:[...d.querySelectorAll('button')].some(b=>b.innerText.includes('跳过')), hasNever:!!d.querySelector('input[aria-label="不再提示人工示例"]'), disabled:Boolean(btn?.disabled) };})()`);
+    assert.ok(prompt.shown, '清空示例设置后点开始标注，必须先弹人工示例提示');
+    assert.ok(prompt.hasSkip, '提示弹窗必须同时提供跳过入口');
+    assert.ok(prompt.hasNever, '提示弹窗必须提供「不再提示」');
+    assert.equal(prompt.disabled, false, '有未标注图片时「立即标注示例」应可点');
+    // 走「立即标注示例」：抽样后进入连续标注。
+    await button('立即标注示例', `document.querySelector('dialog[open]')`);
+    await waitFor(`!!document.querySelector('dialog[open] .asset-annotator')`, 15000);
+    const queueTitle = await js<string>(`document.querySelector('dialog[open]')?.innerText.match(/人工标注示例 · \\d+\\/\\d+/)?.[0] ?? ''`);
+    assert.ok(/人工标注示例 · \d+\/\d+/.test(queueTitle), `连续标注弹窗应显示进度，实际：${queueTitle}`);
+    // 空画布点确认必须给出提示，而不是把空标注写成示例。
+    const blockedSave = await js<{ errors: number; text: string }>(`(async()=>{
+      const d=document.querySelector('dialog[open]');
+      const btn=[...d.querySelectorAll('button')].find(b=>b.innerText.includes('保存并确认'));
+      if(!btn||btn.disabled)return { errors:0, text:d.innerText.replace(/\\s+/g,' ').slice(0,160) };
+      btn.click(); await new Promise(r=>setTimeout(r,300));
+      return { errors:document.querySelectorAll('dialog[open] .inline-error').length, text:d.innerText.replace(/\\s+/g,' ').slice(0,160) };
+    })()`);
+    assert.ok(blockedSave.errors >= 1, `空画布点确认应提示先画框，实际：${blockedSave.text}`);
+    await button('退出', `document.querySelector('dialog[open]')`);
+    await waitFor(`!document.querySelector('dialog[open]')`);
+    // 中途退出后不应写入任何示例素材。
+    const afterExit = await api<{ settings: Record<string, unknown> }>('project.open', { projectId });
+    const exitExample = (afterExit.settings.manualExample ?? {}) as { promptDismissed?: boolean; assetIds?: string[] };
+    assert.equal((exitExample.assetIds ?? []).length, 0, '一张都没确认时不应写入示例素材');
+    assert.notEqual(exitExample.promptDismissed, true, '不勾「不再提示」时不应记下跳过标记');
+    // 素材标注内容没被动过：前面那条参考帧仍是已确认状态。
+    const stillConfirmed = await api<{ status: string }>('asset.get', { assetId: referenceAsset.id });
+    assert.equal(stillConfirmed.status, 'confirmed', '示例流程不应改动既有确认标注');
+    // 「不再提示」：勾上再跳过才记标记；之后不再弹窗。
+    await js(`document.querySelector('.chat-panel .direct-run-trigger').click()`);
+    await waitFor(`!!document.querySelector('.direct-run .picker-popover')`);
+    await button('开始标注', `document.querySelector('.direct-run .picker-popover')`);
+    await waitFor(`!!document.querySelector('dialog[open] input[aria-label="不再提示人工示例"]')`);
+    await js(`(()=>{const c=document.querySelector('dialog[open] input[aria-label="不再提示人工示例"]');c.checked=true;c.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await button('跳过，直接用 AI 标注', `document.querySelector('dialog[open]')`);
+    await waitFor(`!document.querySelector('dialog[open]')`);
+    const afterNever = await api<{ settings: Record<string, unknown> }>('project.open', { projectId });
+    assert.equal(((afterNever.settings.manualExample ?? {}) as { promptDismissed?: boolean }).promptDismissed, true, '勾了「不再提示」应记入项目设置');
+    await api('project.update', { projectId, settings: cleared.settings });
+    checks.push({ check: 'manual-example-prompt-flow', promptText: prompt.text.slice(0, 160), exitKeepsNoExample: true, neverRemindPersisted: true, referenceStillConfirmed: true });
 
     // ===== 没有类别时必须说清原因并禁用开始 =====
     // 用界面内的「新建项目」建一个空项目：不碰系统文件框，落点更稳。

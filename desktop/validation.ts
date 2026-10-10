@@ -336,6 +336,8 @@ const schemas: Record<string, z.ZodType> = {
   'track.local.sequence.promote': z.strictObject({ candidateId: trackIdentifier, timelineId: trackIdentifier, timelineVersion: trackVersion, confirm: z.literal(true) }),
   'asset.list': z.strictObject({ projectId: id, offset: count.optional(), limit: count.min(1).max(1000).optional(), status: z.enum(['unlabeled', 'candidate', 'modified', 'confirmed', 'invalid', 'missing']).optional(), resultFilter: z.enum(['all', 'candidate', 'empty', 'failed', 'confirmed', 'unlabeled']).optional(), assetIds: z.array(id).max(500).optional() }),
   'asset.listIds': z.strictObject({ projectId: id, offset: count.optional(), limit: count.min(1).max(500).optional(), resultFilter: z.enum(['all', 'candidate', 'empty', 'failed', 'confirmed', 'unlabeled']).optional() }),
+  // 人工标注参考示例的抽样：只读，随机张数上限 10 由引擎与本表共同约束。
+  'asset.sample': z.strictObject({ projectId: id, limit: count.min(1).max(10).optional(), status: z.enum(['unlabeled', 'candidate', 'modified', 'confirmed']).optional() }),
   'asset.import': z.strictObject({ projectId: id, paths: z.array(z.string().min(1).max(32767)).min(1).max(100000), mode: z.enum(['copy', 'reference']).optional() }),
   'asset.get': z.strictObject({ assetId: id }),
   'asset.checkLocations': z.strictObject({ projectId: id, assetIds }),

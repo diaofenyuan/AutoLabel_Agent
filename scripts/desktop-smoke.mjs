@@ -415,6 +415,13 @@ if (directRunOnly) {
   assert.ok(reference?.reference?.assetId, `参考帧没有随请求发出去：${JSON.stringify(reference)}`);
   assert.equal(reference?.reference?.objects, 1);
   assert.ok(Array.isArray(reference?.targets) && reference.targets.length === 1 && !reference.targets.includes(reference.reference.assetId));
+  // 人工示例：无有效示例时先弹窗；中途退出不写入示例；勾「不再提示」才记标记。
+  const example = byCheck.get('manual-example-prompt-flow');
+  assert.ok(example, '缺少人工标注参考示例的验收结果');
+  assert.ok(String(example?.promptText ?? '').includes('AI 会照你的标准标'), `提示弹窗文案不对：${JSON.stringify(example?.promptText)}`);
+  assert.equal(example?.exitKeepsNoExample, true, '一张都没确认时不应写入示例素材');
+  assert.equal(example?.neverRemindPersisted, true, '勾了「不再提示」应记入项目设置');
+  assert.equal(example?.referenceStillConfirmed, true, '示例流程不应改动既有确认标注');
   console.log(`直达标注（不依赖对话模型）检查通过：${output}`); process.exit(0);
 }
 if (aiPresetOnly) {

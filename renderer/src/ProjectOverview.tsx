@@ -17,8 +17,9 @@ import { thumbnailUrlForAsset } from './thumbnailUrl';
 import AssetThumbnail from './AssetThumbnail';
 import { confirmDialog } from './confirm';
 import { Button, Empty, IconButton, Loading, Modal, PageHeader } from './ui';
-import { statusNames, taskNames } from './types';
+import { statusNames, taskNames, type Project } from './types';
 import { Term } from './Term';
+import { readManualExample, writeManualExample } from './manualExample';
 
 /** 概览素材按需分页读取；完整选择 ID 通过 asset.listIds 分批拉取。 */
 const PAGE_SIZE = 100;
@@ -77,7 +78,7 @@ async function forEachConcurrent<T>(items: T[], limit: number, worker: (item: T)
  */
 export default function ProjectOverview() {
   useDismissMoreMenu();
-  const { project, notify, navigate, openProject, startProjectChat, selectedAssetIds, setSelectedAssetIds, events } = useApp();
+  const { project, notify, navigate, openProject, startProjectChat, selectedAssetIds, setSelectedAssetIds, events, setProject } = useApp();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [total, setTotal] = useState(0);
   const [filterCounts, setFilterCounts] = useState<Record<ResultFilter, number>>({ all: 0, candidate: 0, empty: 0, failed: 0, confirmed: 0, unlabeled: 0 });
@@ -93,6 +94,7 @@ export default function ProjectOverview() {
   const [loadInto, setLoadInto] = useState<{ assetId: string; annotations: Annotation[] } | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [selectingAll, setSelectingAll] = useState(false);
+  const [busyExample, setBusyExample] = useState(false);
   const [filter, setFilter] = useState<ResultFilter>('all');
   const [failedThumbnails, setFailedThumbnails] = useState<Record<string, boolean>>({});
   const [thumbnailRetryKeys, setThumbnailRetryKeys] = useState<Record<string, number>>({});
@@ -105,6 +107,18 @@ export default function ProjectOverview() {
    * 但确认的语义不能放宽：已经人工确认过的素材跳过，版本冲突或草稿在身的由引擎拒绝并计入跳过，
    * 不做任何静默覆盖；「无目标」的帧会明说，确认后记成已确认无目标。
    */
+  /** 撤销「不再提示人工示例」：只清提示标记，保留已确认的示例素材。 */
+  async function resetExamplePrompt() {
+    if (!project || busyExample) return;
+    setBusyExample(true);
+    try {
+      const state = readManualExample(project);
+      const updated = await request<Project>('project.update', { projectId: project.id, settings: writeManualExample({ assetIds: state?.assetIds ?? [], promptDismissed: false }) });
+      setProject(updated);
+      notify('下次开始自动标注时会再次提示人工标注示例。');
+    } catch (e) { setError(errorMessage(e)); } finally { setBusyExample(false); }
+  }
+
   async function confirmSelectedCandidates() {
     if (confirming || !project) return;
     setConfirming(true);
@@ -290,6 +304,9 @@ export default function ProjectOverview() {
               <Button className="primary" disabled={!selectedCount} onClick={() => void openProject(project)
                 .then(() => notify('已进入对话：把助手处理范围改成「已勾选（跨页）」，再说明要标注的目标。'))
                 .catch(e => notify(errorMessage(e), true))}><MessageSquare size={14} />在对话里处理这些素材</Button>
+              {/* 用户之前跳过过人工示例提示时，这里给一个反悔入口：否则「不再提示」就成了单向门。 */}
+              {readManualExample(project)?.promptDismissed && <Button disabled={busyExample}
+                onClick={() => void resetExamplePrompt()}>重新提示人工标注示例</Button>}
             </div>
           </div>
           {visible.length
