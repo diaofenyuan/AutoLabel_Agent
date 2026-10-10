@@ -30,6 +30,27 @@ export function mergeAnnotationClasses(classes: LabelClass[], metadata?: Record<
  * 从工作台画布里抽出，去掉全部编辑交互与坐标控件；对话结果卡片与项目概览的抽查都用它，
  * 人工修正改由对话指令驱动，不再回到画布。
  */
+/**
+ * 旋转框取角点：角点优先，缺省才由 bbox+rotation 展开。
+ *
+ * 与 QualityCanvas 的口径一致，顺序同为左上、右上、右下、左下。此前这里按 bbox 直出 rect、
+ * 又另行画 points 多边形，一旦某个对象同时带两套字段就会画出两个框。
+ */
+export function obbCorners(shape: { points?: { x: number; y: number }[]; bbox?: { x: number; y: number; width: number; height: number }; rotation?: number }) {
+  const points = shape.points;
+  if (points && points.length === 4 && points.every(point => Number.isFinite(point.x) && Number.isFinite(point.y))) return points.map(point => ({ ...point }));
+  const box = shape.bbox;
+  if (!box || !(box.width > 0) || !(box.height > 0)) return [];
+  const angle = (shape.rotation ?? 0) * Math.PI / 180, cos = Math.cos(angle), sin = Math.sin(angle);
+  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  return [
+    { x: -box.width / 2, y: -box.height / 2 },
+    { x: box.width / 2, y: -box.height / 2 },
+    { x: box.width / 2, y: box.height / 2 },
+    { x: -box.width / 2, y: box.height / 2 },
+  ].map(p => ({ x: center.x + p.x * cos - p.y * sin, y: center.y + p.x * sin + p.y * cos }));
+}
+
 export default function ResultViewer({ asset, classes, connectionTemplate, maxHeight }: {
   asset: Asset; classes: LabelClass[]; connectionTemplate?: unknown; maxHeight?: string;
 }) {
@@ -44,23 +65,38 @@ export default function ResultViewer({ asset, classes, connectionTemplate, maxHe
       <image href={asset.mediaUrl} width={asset.width} height={asset.height} />
       {asset.annotations.map(shape => {
         const color = label(shape.classId)?.color ?? '#4a83ff';
-        const bbox = shape.bbox;
+        const corners = shape.type === 'obb' ? obbCorners(shape) : [];
+        const bbox = corners.length === 4 ? null : shape.bbox;
         return <g key={shape.id} className="result-shape" style={{ color }}>
+          {corners.length === 4 && (() => {
+            // 旋转框按四个角点直出多边形，标签贴在角点外接范围的左上角，不再随框一起旋转：
+            // 旋转后的标签文字会倾倒、难以辨认，这里只保证位置可读。
+            const name = label(shape.classId)?.name ?? '类别缺失';
+            const chipWidth = chipTextWidth(name, 12 * unit) + 16 * unit;
+            const left = Math.min(...corners.map(p => p.x)), top = Math.min(...corners.map(p => p.y));
+            const chipX = Math.min(Math.max(0, left), Math.max(0, asset.width - chipWidth));
+            const aboveY = top - 22 * unit;
+            const chipY = aboveY >= 0 ? aboveY : top + 1.6 * unit;
+            return <g>
+              <polygon points={corners.map(p => `${p.x},${p.y}`).join(' ')} fill="transparent" stroke={color} strokeWidth={1.6 * unit} />
+              <rect x={chipX} y={chipY} width={chipWidth} height={22 * unit} rx={3 * unit} fill={color} />
+              <text x={chipX + 8 * unit} y={chipY + 15 * unit} fontSize={12 * unit} fontWeight={600} fill={chipTextColor(color)}>{name}</text>
+            </g>;
+          })()}
           {bbox && (() => {
             const name = label(shape.classId)?.name ?? '类别缺失';
             const chipWidth = chipTextWidth(name, 12 * unit) + 16 * unit;
-            // 底板默认贴框上沿；X 夹在图片内（旋转框在自身坐标系里，不做图片边界夹取），
-            // 贴不到图片顶部时改放框内，右缘与顶部的框标签都不再被裁掉。
-            const chipX = shape.type === 'obb' ? bbox.x : Math.min(Math.max(0, bbox.x), Math.max(0, asset.width - chipWidth));
+            // 底板默认贴框上沿；X 夹在图片内，贴不到图片顶部时改放框内，右缘与顶部的框标签都不再被裁掉。
+            const chipX = Math.min(Math.max(0, bbox.x), Math.max(0, asset.width - chipWidth));
             const aboveY = bbox.y - 22 * unit;
             const chipY = aboveY >= 0 ? aboveY : bbox.y + 1.6 * unit;
-            return <g transform={shape.type === 'obb' ? `rotate(${shape.rotation ?? 0},${bbox.x + bbox.width / 2},${bbox.y + bbox.height / 2})` : undefined}>
+            return <g>
               <rect x={bbox.x} y={bbox.y} width={bbox.width} height={bbox.height} fill="transparent" stroke={color} strokeWidth={1.6 * unit} />
               <rect x={chipX} y={chipY} width={chipWidth} height={22 * unit} rx={3 * unit} fill={color} />
               <text x={chipX + 8 * unit} y={chipY + 15 * unit} fontSize={12 * unit} fontWeight={600} fill={chipTextColor(color)}>{name}</text>
             </g>;
           })()}
-          {shape.points && <polygon points={shape.points.map(point => `${point.x},${point.y}`).join(' ')} fill={`${color}22`} stroke={color} strokeWidth={1.6 * unit} />}
+          {shape.type !== 'obb' && shape.points && <polygon points={shape.points.map(point => `${point.x},${point.y}`).join(' ')} fill={`${color}22`} stroke={color} strokeWidth={1.6 * unit} />}
           {shape.keypoints && <>
             {keypointEdges(shape.keypoints, connectionTemplate).map(([from, to], edge) => <line key={edge} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={color} strokeWidth={1.2 * unit} />)}
             {shape.keypoints.map((point, index) => point.visibility > 0 && <g key={index}>

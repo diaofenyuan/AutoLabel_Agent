@@ -63,6 +63,19 @@ final class Annotations {
         for(double[] p:new double[][]{{-w/2,-h/2},{w/2,-h/2},{w/2,h/2},{-w/2,h/2}})result.add(Json.obj("x",cx+p[0]*Math.cos(angle)-p[1]*Math.sin(angle),"y",cy+p[0]*Math.sin(angle)+p[1]*Math.cos(angle)));
         return result;
     }
+    /**
+     * 旋转框的旋转角，以度为单位。
+     *
+     * points 形态（模型推理、YOLO 导入）不携带 rotation 字段，此前导出只能读到缺省 0：
+     * DOTA 风格标签里的角度列因此恒为 0，与同一行的四角坐标自相矛盾。
+     * 缺省时从四角点第一条边反算，保证与 {@link #obb} 展开出的几何一致。
+     */
+    static double obbRotation(JsonObject a){
+        if(a.has("rotation")){double declared=Json.decimal(a,"rotation",0);if(Double.isFinite(declared))return declared;}
+        JsonArray corners=obb(a);if(corners.size()!=4)return 0;
+        JsonObject from=corners.get(0).getAsJsonObject(),to=corners.get(1).getAsJsonObject();
+        return Math.toDegrees(Math.atan2(num(to,"y")-num(from,"y"),num(to,"x")-num(from,"x")));
+    }
     static void polygon(JsonArray points,int w,int h,boolean rectangle){
         if(points.size()<3||points.size()>4096)throw error("轮廓需要 3～4096 个有序顶点。");int n=points.size();double[][] p=new double[n][2];
         for(int i=0;i<n;i++){JsonObject q=points.get(i).getAsJsonObject();point(q,w,h);p[i][0]=num(q,"x");p[i][1]=num(q,"y");}

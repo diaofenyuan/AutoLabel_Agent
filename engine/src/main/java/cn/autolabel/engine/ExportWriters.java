@@ -112,7 +112,7 @@ final class ExportWriters {
                     JsonArray segmentation = new JsonArray();
                     segmentation.add(polygon);
                     output.add("segmentation", segmentation);
-                    output.addProperty("rotation", round(Json.decimal(annotation, "rotation", 0), precision));
+                    output.addProperty("rotation", round(Annotations.obbRotation(annotation), precision));
                 } else output.add("segmentation", new JsonArray());
                 if (type.equals("pose")) {
                     JsonArray keypoints = new JsonArray();
@@ -226,7 +226,7 @@ final class ExportWriters {
             case "ymin" -> corners.isEmpty() ? "" : number(corners.stream().mapToDouble(point -> point[1]).min().orElse(0), precision);
             case "xmax" -> corners.isEmpty() ? "" : number(corners.stream().mapToDouble(point -> point[0]).max().orElse(0), precision);
             case "ymax" -> corners.isEmpty() ? "" : number(corners.stream().mapToDouble(point -> point[1]).max().orElse(0), precision);
-            case "rotation" -> Json.str(annotation, "type", "").equals("obb") ? number(Json.decimal(annotation, "rotation", 0), precision) : "";
+            case "rotation" -> Json.str(annotation, "type", "").equals("obb") ? number(Annotations.obbRotation(annotation), precision) : "";
             case "points" -> {
                 JsonArray points = new JsonArray();
                 for (double[] point : corners) {
