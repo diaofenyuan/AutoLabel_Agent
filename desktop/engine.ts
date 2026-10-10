@@ -51,6 +51,8 @@ export interface EngineOptions {
   materialsRoot?: () => string | undefined;
   /** 训练产物目录；缺省时引擎沿用 <数据目录>/training。 */
   trainingRoot?: () => string | undefined;
+  /** 项目文件夹根（存储根下的 projects）：项目素材按项目落在这里，与对话同属一个项目文件夹。 */
+  projectsRoot?: () => string | undefined;
   localModelAuthorizations?: () => Promise<Array<{ path: string; modelHash: string }>>;
   /** 开放词汇的词表缓存与文本编码器目录；缺省时 worker 按未配置处理（缓存不写、编码器按没有）。 */
   localVocabularyCacheDir?: () => string | undefined;
@@ -161,6 +163,7 @@ export class EngineManager extends EventEmitter {
       const localPythonPath = await this.options.localPythonPath?.();
       const materialsRoot = this.options.materialsRoot?.();
       const trainingRoot = this.options.trainingRoot?.();
+      const projectsRoot = this.options.projectsRoot?.();
       const mediaTools = await this.options.mediaToolPaths?.() ?? {};
       const localVocabularyCacheDir = this.options.localVocabularyCacheDir?.();
       const localTextEncoderDir = this.options.localTextEncoderDir?.();
@@ -225,6 +228,7 @@ export class EngineManager extends EventEmitter {
           referencePricing: referencePriceRows(),
           ...(materialsRoot ? { materialsRoot } : {}),
           ...(trainingRoot ? { trainingRoot } : {}),
+          ...(projectsRoot ? { projectsRoot } : {}),
           ...(localVocabularyCacheDir ? { localVocabularyCacheDir } : {}),
           ...(localTextEncoderDir ? { localTextEncoderDir } : {}),
           ...(localPythonPath ? { localPythonPath } : {}), ...(mediaTools.ffmpegPath ? { mediaFfmpegPath: mediaTools.ffmpegPath } : {}),

@@ -12,6 +12,8 @@ final class Store implements AutoCloseable {
     final Path root;
     // 受管原图根默认在数据目录内；桌面可把它指到存储根下的 uploads 目录，使导入复制的训练集可单独配置。
     final Path materialsRoot;
+    /** 素材按项目隔离：每个项目的基准图落在 `<projects>/<项目标识>/media` 下，项目之间互不干扰。 */
+    final Path projectsRoot;
     // 训练产物根默认在数据目录内；桌面可把它指到外部绝对路径，使权重与数据集快照可放到其他磁盘。
     final Path trainingRoot;
     // 配置的训练产物根不可用时的回退事实与原因；null 表示按配置生效，不留空让界面以为一切正常。
@@ -21,11 +23,13 @@ final class Store implements AutoCloseable {
     private final ThreadPoolExecutor writes = new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,
         new ArrayBlockingQueue<>(512), Thread.ofPlatform().name("sqlite-writer-",0).factory(),new ThreadPoolExecutor.AbortPolicy());
     volatile boolean writeFailed;
-    Store(Path root) throws Exception { this(root,null,null); }
-    Store(Path root,Path materialsRoot) throws Exception { this(root,materialsRoot,null); }
-    Store(Path root,Path materialsRoot,Path trainingRoot) throws Exception {
+    Store(Path root) throws Exception { this(root,null,null,null); }
+    Store(Path root,Path materialsRoot) throws Exception { this(root,materialsRoot,null,null); }
+    Store(Path root,Path materialsRoot,Path trainingRoot) throws Exception { this(root,materialsRoot,trainingRoot,null); }
+    Store(Path root,Path materialsRoot,Path trainingRoot,Path projectsRoot) throws Exception {
         this.root=root.toAbsolutePath().normalize(); Files.createDirectories(this.root);
         this.materialsRoot=resolveMaterials(this.root,materialsRoot);
+        this.projectsRoot=resolveProjects(this.root,projectsRoot);
         java.util.concurrent.atomic.AtomicReference<String> trainingIssue=new java.util.concurrent.atomic.AtomicReference<>();
         this.trainingRoot=resolveTraining(this.root,trainingRoot,trainingIssue);
         this.trainingRootIssue=trainingIssue.get();
@@ -156,6 +160,25 @@ final class Store implements AutoCloseable {
         Path path=materialsRoot.toAbsolutePath().normalize();
         if(!materialsRoot.isAbsolute()||path.getParent()==null||path.equals(root)||root.startsWith(path))throw new ApiError(400,"materials_root_invalid","受管原图目录必须是数据目录之外、非磁盘根的绝对路径。");
         Files.createDirectories(path);return path;
+    }
+    /**
+     * 项目文件夹根：默认 <数据目录>/projects；桌面可把它指到存储根下的同名目录，
+     * 使对话与项目素材落在同一个项目文件夹里。与受管原图根同样的合法性要求。
+     */
+    private static Path resolveProjects(Path root,Path projectsRoot)throws Exception{
+        if(projectsRoot==null){Path fallback=root.resolve("projects");Files.createDirectories(fallback);return fallback;}
+        Path path=projectsRoot.toAbsolutePath().normalize();
+        if(!projectsRoot.isAbsolute()||path.getParent()==null||path.equals(root)||root.startsWith(path))throw new ApiError(400,"projects_root_invalid","项目文件夹必须是数据目录之外、非磁盘根的绝对路径。");
+        Files.createDirectories(path);return path;
+    }
+    /**
+     * 某个项目的受管素材目录。旧素材的绝对路径记在库里的 assets.path / versions 里，
+     * 因此这里只决定「新导入落哪里」：历史数据继续按库里记录的路径读，不受目录调整影响。
+     */
+    Path projectMediaRoot(String projectId)throws Exception{
+        if(projectId==null||!projectId.matches("[A-Za-z0-9_-]{1,128}"))throw new ApiError(400,"project_id_invalid","项目标识无效。");
+        Path directory=projectsRoot.resolve(projectId).resolve("media");
+        Files.createDirectories(directory);return directory;
     }
     /**
      * 训练产物根：默认 <数据目录>/training；自定义时为绝对目录，且不能是磁盘根或数据目录的上级。

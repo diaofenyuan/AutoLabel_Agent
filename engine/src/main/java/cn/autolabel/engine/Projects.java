@@ -96,7 +96,7 @@ final class Projects {
         for(Path source:files){
             if(meter!=null)meter.checkpoint();
             String id=Json.id();try{
-                Media.Normalized result=media.normalize(source,id,background,mode.equals("copy"));String hash=result.hash();
+                Media.Normalized result=media.normalize(source,id,background,mode.equals("copy"),projectId);String hash=result.hash();
                 boolean duplicate=!seen.add(hash)||store.read(c->Store.one(c,"SELECT id FROM assets WHERE project_id=? AND content_hash=?",projectId,hash)!=null);
                 if(duplicate){Files.deleteIfExists(result.path());if(mode.equals("copy"))Files.deleteIfExists(Path.of(Json.required(result.metadata(),"sourcePath")));tally.skipped++;}
                 else{JsonObject asset=Json.obj("id",id,"projectId",projectId,"name",source.getFileName().toString(),"width",result.width(),"height",result.height(),

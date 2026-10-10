@@ -9,13 +9,21 @@ import type {
 import type { DesktopPreferences } from './storage';
 import { DesktopError } from './validation';
 
-/** 落盘键名与 kind 的固定映射；设置页与主进程共用一份，避免出现两套命名。 */
-export const PATH_SETTING_KEYS = { root: 'storageRoot', datasets: 'datasetsRoot', uploads: 'uploadsRoot', chats: 'chatsRoot' } as const;
+/**
+ * 落盘键名与 kind 的固定映射；设置页与主进程共用一份，避免出现两套命名。
+ *
+ * `projects` 取代了旧的 `chats`：对话不再单独占一个扁平目录，而是与项目素材一起
+ * 收进 `<存储根>/projects/<项目标识>/` 下。旧的 `chatsRoot` 设置保留为迁移来源，
+ * 不再是写入目标——历史对话由 chat.history.migrate 搬进项目文件夹后即可删掉。
+ */
+export const PATH_SETTING_KEYS = { root: 'storageRoot', datasets: 'datasetsRoot', uploads: 'uploadsRoot', projects: 'projectsRoot' } as const;
 export type PathSlot = keyof typeof PATH_SETTING_KEYS;
-export const PATH_KINDS: StoragePathKind[] = ['datasets', 'uploads', 'chats'];
+export const PATH_KINDS: StoragePathKind[] = ['datasets', 'uploads', 'projects'];
 export const PATH_LABELS: Record<StoragePathKind, string> = {
-  datasets: '划分好的训练集', uploads: '用户上传的训练集', chats: '对话记录',
+  datasets: '划分好的训练集', uploads: '用户上传的训练集', projects: '项目文件夹',
 };
+/** 旧版「对话记录」独立目录的配置键：只作为迁移来源读取，不再参与新数据写入。 */
+export const LEGACY_CHATS_KEY = 'chatsRoot';
 export const ROOT_SUBDIRECTORY = 'AutoLabelData';
 /** 上一次生效路径的快照，用于「迁移已有数据」；不参与默认值判定。 */
 export const PREVIOUS_PATHS_KEY = 'storagePathsPrevious';
@@ -152,8 +160,12 @@ export async function storagePathsWithUsage(paths: ResolvedPaths): Promise<Stora
 
 /** 保存前校验：三类有效目录不得相同或互相嵌套，也不得落在数据库目录内部。 */
 function validateSet(kinds: Record<StoragePathKind, string>, dataDirectory: string): void {
-  for (const [left, right] of [['datasets', 'uploads'], ['datasets', 'chats'], ['uploads', 'chats']] as Array<[StoragePathKind, StoragePathKind]>) {
-    if (overlaps(kinds[left], kinds[right])) throw new DesktopError('STORAGE_PATH_OVERLAP', `${PATH_LABELS[left]}与${PATH_LABELS[right]}的目录不能相同或相互嵌套`);
+  // 两两比对由 kind 列表推导：增删一类目录时不必再手工维护这份配对表，漏配不会静默通过。
+  for (let left = 0; left < PATH_KINDS.length; left++) {
+    for (let right = left + 1; right < PATH_KINDS.length; right++) {
+      const a = PATH_KINDS[left], b = PATH_KINDS[right];
+      if (overlaps(kinds[a], kinds[b])) throw new DesktopError('STORAGE_PATH_OVERLAP', `${PATH_LABELS[a]}与${PATH_LABELS[b]}的目录不能相同或相互嵌套`);
+    }
   }
   const base = path.resolve(dataDirectory).toLowerCase();
   for (const kind of PATH_KINDS) {
@@ -205,7 +217,17 @@ export interface StoragePathUpdate {
   storageRoot?: string | null;
   datasetsRoot?: string | null;
   uploadsRoot?: string | null;
-  chatsRoot?: string | null;
+  projectsRoot?: string | null;
+}
+
+/**
+ * 旧版对话目录的落点：显式配置过就用配置值，否则是存储根下的 `chats`。
+ * 只在迁移时读取一次——升级完成后新数据一律写进项目文件夹。
+ */
+export function legacyChatsRoot(preferences: DesktopPreferences, installDirectory: string): string {
+  const saved = preferences.value[LEGACY_CHATS_KEY];
+  if (typeof saved === 'string' && saved.trim()) return path.resolve(saved);
+  return path.join(defaultRootFor(installDirectory), 'chats');
 }
 
 /**

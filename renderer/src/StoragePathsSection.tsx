@@ -86,7 +86,7 @@ export default function StoragePathsSection({ onBusyChange }: { onBusyChange: (b
     await run(async () => {
       const payload: Record<string, string | null> = {};
       if (rootDraft.trim()) payload.storageRoot = rootDraft.trim();
-      for (const kind of ['datasets', 'uploads', 'chats'] as StoragePathKind[]) {
+      for (const kind of ['datasets', 'uploads', 'projects'] as StoragePathKind[]) {
         const value = drafts[kind]?.trim();
         // 空字符串表示跟随存储根；显式清空时提交 null，保留时提交空串交由服务端忽略。
         if (value === undefined) continue;
@@ -104,7 +104,7 @@ export default function StoragePathsSection({ onBusyChange }: { onBusyChange: (b
   }
   async function reset() {
     await run(async () => {
-      await applySave({ storageRoot: null, datasetsRoot: null, uploadsRoot: null, chatsRoot: null }, '已恢复为默认存储位置。');
+      await applySave({ storageRoot: null, datasetsRoot: null, uploadsRoot: null, projectsRoot: null }, '已恢复为默认存储位置。');
       setRootDraft(''); setDrafts({});
     });
   }

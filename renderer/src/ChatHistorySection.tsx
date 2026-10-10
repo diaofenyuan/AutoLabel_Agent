@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FolderOpen, RefreshCw, Trash2, Download, ShieldCheck } from 'lucide-react';
+import { FolderOpen, RefreshCw, Trash2, Download, ShieldCheck, FolderTree } from 'lucide-react';
 import type { ChatHistoryStatus, ChatMutationResult, ChatTrashList } from '../../shared/chat';
 import { useApp } from './context';
 import { errorMessage, getBridge, isDemo, request } from './bridge';
@@ -94,6 +94,7 @@ export default function ChatHistorySection({ onBusyChange }: { onBusyChange: (bu
           })}>确认清空 {status?.sessions ?? 0} 个对话</Button>
         </div>}
     </section>
+    <MigrationSection onBusyChange={onBusyChange} />
     <section className="settings-section">
       <div className="section-toolbar"><h2>回收站</h2>
         <Button disabled={busy} onClick={() => void run(async () => { await loadTrash(); })}><RefreshCw size={13} />刷新</Button>
@@ -122,4 +123,55 @@ export default function ChatHistorySection({ onBusyChange }: { onBusyChange: (bu
     </section>
     {error && <p className="inline-error storage-error" role="alert">{error}</p>}
   </div>;
+}
+
+interface ChatLayoutMigrationResult {
+  migrated: number;
+  unassigned: number;
+  source: string;
+  target: string;
+  skipped: boolean;
+  failures: string[];
+}
+
+/**
+ * 旧版「对话记录」独立目录的一次性迁移入口。
+ *
+ * 迁移只复制不删源：失败或结果不对时，旧目录里的文件仍在，可以重试或人工核对。
+ * 因此这里如实说明「不会删除原目录」，而不是让用户以为迁移后源数据已经清空。
+ */
+function MigrationSection({ onBusyChange }: { onBusyChange: (busy: boolean) => void }) {
+  const { notify, refreshChatSessions } = useApp();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState<ChatLayoutMigrationResult | null>(null);
+  useEffect(() => { onBusyChange(busy); }, [busy, onBusyChange]);
+
+  async function migrate() {
+    if (busy) return;
+    setBusy(true); setError('');
+    try {
+      const next = await request<ChatLayoutMigrationResult>('chat.history.migrate');
+      setResult(next);
+      // 迁完要让侧栏立刻反映新归属，否则历史对话要等下次刷新才出现。
+      await refreshChatSessions();
+      notify(next.skipped ? '当前已是按项目隔离的新结构，无需迁移。' : `已迁移 ${next.migrated + next.unassigned} 个对话到项目文件夹。`);
+    } catch (e) { setError(errorMessage(e)); }
+    finally { setBusy(false); }
+  }
+
+  return <section className="settings-section">
+    <h2>迁移旧版对话记录</h2>
+    <p className="muted">早期版本的对话记录保存在一个扁平目录里。现在每个项目的对话都收在各自的项目文件夹中，这里可以把历史对话搬过去。</p>
+    <div className="actions">
+      <Button disabled={busy || isDemo} busy={busy} onClick={() => void migrate()}><FolderTree size={14} />迁移到项目文件夹</Button>
+    </div>
+    {result && !result.skipped && <p className="storage-usage" aria-label="迁移结果">
+      已迁入项目 {result.migrated} 个{result.unassigned ? `，无归属收容 ${result.unassigned} 个` : ''}
+      {result.failures.length ? ` · ${result.failures.length} 个未完成` : ''}
+    </p>}
+    {result && !result.skipped && <Notice>原目录 <span className="storage-data-dir break-word">{result.source}</span> 仍然保留，确认无误后可自行删除。</Notice>}
+    {result?.failures.length ? <ul className="inline-error">{result.failures.map(item => <li key={item}>{item}</li>)}</ul> : null}
+    {error && <p className="inline-error storage-error" role="alert">{error}</p>}
+  </section>;
 }

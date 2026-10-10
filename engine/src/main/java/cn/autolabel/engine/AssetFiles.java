@@ -26,9 +26,10 @@ final class AssetFiles {
             Path source=matches.getFirst();int[] dimensions=dimensions(source);if(dimensions[0]!=Json.integer(metadata,"sourceWidth",0)||dimensions[1]!=Json.integer(metadata,"sourceHeight",0))throw new ApiError(409,"relocate_dimensions_mismatch","候选图片源尺寸不匹配，未更改关联。");
             if(baselineState.equals("changed"))throw new ApiError(409,"baseline_content_changed","基准图已被外部更改，请保留为新素材；重定位不会覆盖不同内容。");
             if(!baselineState.equals("intact")){
-                Media.Normalized regenerated=projects.media.normalize(source,Json.id(),Json.str(metadata,"alphaBackground","#ffffff"),false);
+                Media.Normalized regenerated=projects.media.normalize(source,Json.id(),Json.str(metadata,"alphaBackground","#ffffff"),false,Json.required(asset,"projectId"));
                 if(!regenerated.hash().equals(Json.required(asset,"contentHash")))throw new ApiError(409,"normalization_version_mismatch","当前规范化结果与旧版本不一致，未替换旧素材。");
-                Path expected=store.root.resolve("media").resolve(aid+".png");if(!baseline.toAbsolutePath().normalize().equals(expected))throw new ApiError(409,"baseline_path_invalid","素材基准图路径不在受管目录。");Files.move(regenerated.path(),expected);
+                // 重建必须落回该素材原本的项目目录：目录一旦漂移就与库中记录的路径脱节，素材随即读不出来。
+                Path expected=store.projectMediaRoot(Json.required(asset,"projectId")).resolve(aid+".png");if(!baseline.toAbsolutePath().normalize().equals(expected))throw new ApiError(409,"baseline_path_invalid","素材基准图路径不在受管目录。");Files.move(regenerated.path(),expected);
             }
             Path destination=source;
             if(Json.str(metadata,"importMode","").equals("copy")){

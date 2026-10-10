@@ -78,7 +78,7 @@ export interface BackupProgress {
 }
 
 // 三类业务数据的落点与数据库目录相互独立：默认跟随存储根，也可分别覆盖为外部绝对路径。
-export type StoragePathKind = 'datasets' | 'uploads' | 'chats';
+export type StoragePathKind = 'datasets' | 'uploads' | 'projects';
 export type StoragePathSource = 'default' | 'custom' | 'fallback';
 
 export interface StoragePathEntry {

@@ -7,6 +7,7 @@ import java.nio.file.*;
 import java.security.MessageDigest;
 import java.sql.Connection;
 import java.util.*;
+import java.util.stream.Stream;
 
 final class FlowNodes {
     final Flows flows;final Engine engine;final Store store;
@@ -57,12 +58,19 @@ final class FlowNodes {
         String pid=Json.required(flow,"projectId"),assetId=Json.required(item,"importAssetId");if(!assetId.matches("[0-9a-fA-F-]{36}"))throw new ApiError(409,"flow_snapshot_invalid","固定导入标识无效。");
         JsonObject existing=store.read(c->{JsonObject row=Store.one(c,"SELECT data,path FROM assets WHERE id=? AND project_id=?",assetId,pid);return row==null?null:FlowArtifacts.assetItem(c,Json.parse(row.get("data").getAsString()),Json.required(row,"path"));});if(existing!=null)return existing;
         Path source=Path.of(Json.required(item,"sourcePath"));if(!Files.isRegularFile(source)||!Media.hash(source).equals(Json.required(item,"sourceHash")))throw new ApiError(409,"flow_import_changed","待导入文件已变化，请创建新的流程输入。");
-        cleanupUncommitted(assetId);JsonObject snapshot=Json.object(step,"snapshot"),project=Json.object(snapshot,"project");boolean copy=Json.str(Json.object(step,"parameters"),"mode","copy").equals("copy");Media.Normalized normalized=engine.projects.media.normalize(source,assetId,Json.str(Json.object(project,"settings"),"alphaBackground","#ffffff"),copy);
+        cleanupUncommitted(assetId);JsonObject snapshot=Json.object(step,"snapshot"),project=Json.object(snapshot,"project");boolean copy=Json.str(Json.object(step,"parameters"),"mode","copy").equals("copy");Media.Normalized normalized=engine.projects.media.normalize(source,assetId,Json.str(Json.object(project,"settings"),"alphaBackground","#ffffff"),copy,pid);
         if(!Json.required(normalized.metadata(),"sourceHash").equals(Json.required(item,"sourceHash")))throw new ApiError(409,"flow_import_changed","图片读取期间内容变化，未登记该输入。");
         JsonObject imported=store.tx(c->{JsonObject same=Store.one(c,"SELECT data,path FROM assets WHERE project_id=? AND json_extract(data,'$.contentHash')=? ORDER BY rowid LIMIT 1",pid,normalized.hash());if(same!=null)return FlowArtifacts.assetItem(c,Json.parse(same.get("data").getAsString()),Json.required(same,"path"));JsonObject asset=Json.obj("id",assetId,"projectId",pid,"name",item.get("name"),"mediaUrl","autolabel-media://asset/"+assetId,"thumbnailUrl","autolabel-media://thumb/"+assetId,"contentHash",normalized.hash(),"width",normalized.width(),"height",normalized.height(),"status","unlabeled","annotations",new JsonArray(),"version",0,"source","import","metadata",normalized.metadata());Store.update(c,"INSERT INTO assets(id,project_id,data,path) VALUES(?,?,?,?)",assetId,pid,asset,normalized.path().toString());Store.flowEvent(c,"asset.imported",Json.required(flow,"id"),Json.required(step,"stepId"),null,assetId,null,Json.obj("projectId",pid));return FlowArtifacts.assetItem(c,asset,normalized.path().toString());});if(!Json.required(imported,"assetId").equals(assetId))cleanupUncommitted(assetId);return imported;
     }
+    /**
+     * 清理导入暂存：素材现在按项目落盘，所以项目目录与共享目录都要看。
+     * 只删库里没有任何记录引用的文件，并逐个校验路径没有越界。
+     */
     void cleanupUncommitted(String id)throws Exception{
-        for(Path candidate:List.of(store.root.resolve("media").resolve(id+".png"),store.root.resolve("media").resolve(id+".tmp"),store.materialsRoot.resolve(id+".png"),store.materialsRoot.resolve(id+".jpg"))){Path path=candidate.toAbsolutePath().normalize();if(!(path.startsWith(store.root)||path.startsWith(store.materialsRoot))||!path.getFileName().toString().startsWith(id+"."))throw new ApiError(409,"flow_snapshot_invalid","导入暂存路径越界。");boolean referenced=store.read(c->Store.one(c,"SELECT id FROM assets WHERE path=? OR json_extract(data,'$.metadata.sourcePath')=? LIMIT 1",path.toString(),path.toString())!=null);if(!referenced)Files.deleteIfExists(path);}
+        List<Path> candidates=new ArrayList<>(List.of(engine.projects.media.sharedMediaRoot().resolve(id+".png"),engine.projects.media.sharedMediaRoot().resolve(id+".tmp"),store.materialsRoot.resolve(id+".png"),store.materialsRoot.resolve(id+".jpg")));
+        Path projects=store.projectsRoot.toAbsolutePath().normalize();
+        if(Files.isDirectory(projects))try(Stream<Path> children=Files.list(projects)){children.filter(Files::isDirectory).forEach(child->{Path media=child.resolve("media");if(Files.isDirectory(media))candidates.add(media.resolve(id+".png"));});}
+        for(Path candidate:candidates){Path path=candidate.toAbsolutePath().normalize();if(!(path.startsWith(store.root)||path.startsWith(store.materialsRoot)||path.startsWith(projects))||!path.getFileName().toString().startsWith(id+"."))throw new ApiError(409,"flow_snapshot_invalid","导入暂存路径越界。");boolean referenced=store.read(c->Store.one(c,"SELECT id FROM assets WHERE path=? OR json_extract(data,'$.metadata.sourcePath')=? LIMIT 1",path.toString(),path.toString())!=null);if(!referenced)Files.deleteIfExists(path);}
     }
     JsonObject review(JsonObject flow,JsonObject step,List<JsonObject> source)throws Exception{
         String fid=Json.required(flow,"id"),sid=Json.required(step,"stepId"),pid=Json.required(flow,"projectId"),context="flow:"+fid+":"+sid;JsonObject parameters=Json.object(step,"parameters"),project=Json.object(Json.object(step,"snapshot"),"project");List<JsonObject> items=new ArrayList<>(),issues=new ArrayList<>(),valid=new ArrayList<>();

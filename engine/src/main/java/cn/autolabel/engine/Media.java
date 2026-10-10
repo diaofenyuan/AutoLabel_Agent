@@ -30,7 +30,14 @@ final class Media {
     record Normalized(Path path,int width,int height,String hash,JsonObject metadata){}
     private final Store store;
     Media(Store store){this.store=store;ImageIO.setUseCache(false);}
-    synchronized Normalized normalize(Path source,String assetId,String background,boolean copy)throws Exception{
+    /** 尚无项目归属时的落点（预置示例、流程暂存）。正常导入一律走项目目录。 */
+    Path sharedMediaRoot(){return store.root.resolve("media");}
+    /**
+     * 归一化并落盘。projectId 决定基准图写进哪个项目的素材目录：素材按项目隔离，
+     * 一个项目的文件不会散落到别的项目文件夹里。传 null 时退回共享目录，
+     * 仅供尚无项目归属的预置示例等少数场景使用。
+     */
+    synchronized Normalized normalize(Path source,String assetId,String background,boolean copy,String projectId)throws Exception{
         if(!Files.isRegularFile(source))throw new ApiError(400,"file_missing","图片不存在或不可读取。");
         if(Files.size(source)>MAX_FILE)throw new ApiError(413,"image_too_large","单张图片文件不能超过 128 MiB。");
         store.requireSpace(Files.size(source)*4+128L*1024*1024);
@@ -66,7 +73,7 @@ final class Media {
             normalized.setRGB(dx,dy,flat.getRGB(x,y));
         }
         if(normalized!=flat)flat.flush();
-        Path dir=store.root.resolve("media");Files.createDirectories(dir);
+        Path dir=projectId==null?sharedMediaRoot():store.projectMediaRoot(projectId);Files.createDirectories(dir);
         // 基准图保持 PNG：导出布局（images/{split}/{name}.png）、筛选基线与评测图片都以 PNG 为契约，
         // 「导出格式口径不变」是硬约束；体积与耗时由免逐像素、批量事务与后台导入任务解决。
         Path destination=dir.resolve(assetId+".png"),temporary=dir.resolve(assetId+".tmp");

@@ -12,6 +12,7 @@ import { errorMessage, isDemo, request } from './bridge';
 import { Button, Field, IconButton, Modal } from './ui';
 import ProjectResolveDialog from './ProjectResolveDialog';
 import { applyProjectDraft } from './projectSetup';
+import { confirmDialog } from './confirm';
 
 /**
  * 会话挂在项目下；当前已有项目时「新对话」直接创建同项目会话，没有项目时才回到欢迎页确认归属。
@@ -149,7 +150,12 @@ export function Sidebar({ inert = false, drawer = false, onClose }: { inert?: bo
   async function togglePin(session: ChatSessionSummary) {
     await run(async () => { await request('chat.history.pin', { sessionId: session.id, pinned: !session.pinned }); await refreshChatSessions(); });
   }
+  /**
+   * 删除对话前先确认：删除会立刻从侧栏消失并进入回收站，
+   * 误触时用户要在设置里翻回收站才能找回，这里用一次确认挡住。
+   */
   async function removeSession(session: ChatSessionSummary) {
+    if (!(await confirmDialog(`删除对话「${session.title}」？\n删除后进入回收站，可在设置 · 对话记录中恢复。`))) return;
     await run(async () => {
       await request('chat.history.delete', { sessionIds: [session.id] });
       if (activeSessionId === session.id) setActiveSessionId('');

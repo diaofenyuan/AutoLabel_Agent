@@ -122,6 +122,9 @@ final class ProjectDeletion {
             catch(Exception e){failures.add(Json.obj("path",file.toString(),"message","受管文件删除失败，请手动清理。"));}
         }
         if(removeManaged)for(String directory:managedDirectories(pid))pruneEmpty(Path.of(directory));
+        // 项目素材目录在本项目文件删空后一并回收：否则会留下一个空壳目录，
+        // 而用户以为「项目文件夹随项目一起消失」。对话记录由桌面侧回收站保留，不在这里删。
+        if(removeManaged){Path media=store.projectsRoot.resolve(pid).resolve("media").toAbsolutePath().normalize();if(media.startsWith(store.projectsRoot)&&Files.isDirectory(media))pruneEmpty(media);}
         JsonArray externalPaths=new JsonArray();for(String path:external)externalPaths.add(path);
         return Json.obj("deleted",true,"projectId",summary.get("projectId"),"name",summary.get("name"),"counts",summary.get("counts"),
             "removedFiles",removedFiles,"removedBytes",removedBytes,"fileFailures",failures,"externalExportPaths",externalPaths);
@@ -198,8 +201,11 @@ final class ProjectDeletion {
     private List<Path> managedFiles(Connection c,String pid)throws Exception{
         List<Path> files=new ArrayList<>();
         Path root=store.root;
-        for(JsonObject row:Store.rows(c,"SELECT id,data FROM assets WHERE project_id=?",pid)){
+        for(JsonObject row:Store.rows(c,"SELECT id,path,data FROM assets WHERE project_id=?",pid)){
             String id=Json.required(row,"id");
+            // 基准图按项目落盘，但历史素材仍可能记着旧的共享目录：
+            // 直接采信库里的绝对路径，两种布局都能删干净，也不必再猜目录规则。
+            String baseline=Json.required(row,"path");if(!baseline.isBlank())addFile(files,Path.of(baseline));
             addFile(files,root.resolve("media").resolve(id+".png"));
             JsonObject metadata=Json.object(Json.parse(Json.required(row,"data")),"metadata");
             if(Json.str(metadata,"importMode","").equals("copy")){
@@ -246,8 +252,9 @@ final class ProjectDeletion {
     private Path confined(Path candidate){
         try{
             Path path=candidate.toAbsolutePath().normalize();
-            boolean managed=path.startsWith(store.root)||path.startsWith(store.materialsRoot);
-            return managed&&!path.equals(store.root)&&!path.equals(store.materialsRoot)?path:null;
+            // 项目文件夹也在受管范围内：素材按项目隔离后，基准图就落在这里，不放行就删不干净。
+            boolean managed=path.startsWith(store.root)||path.startsWith(store.materialsRoot)||path.startsWith(store.projectsRoot);
+            return managed&&!path.equals(store.root)&&!path.equals(store.materialsRoot)&&!path.equals(store.projectsRoot)?path:null;
         }catch(Exception e){return null;}
     }
 }

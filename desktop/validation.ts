@@ -544,7 +544,7 @@ const schemas: Record<string, z.ZodType> = {
     storageRoot: z.string().max(32767).nullable().optional(),
     datasetsRoot: z.string().max(32767).nullable().optional(),
     uploadsRoot: z.string().max(32767).nullable().optional(),
-    chatsRoot: z.string().max(32767).nullable().optional(),
+    projectsRoot: z.string().max(32767).nullable().optional(),
   }).refine(value => Object.values(value).some(item => item !== undefined), '没有需要保存的路径设置'),
   'storage.paths.probe': z.strictObject({ path: z.string().min(1).max(32767) }),
   'storage.paths.migration': empty,
@@ -570,6 +570,11 @@ const schemas: Record<string, z.ZodType> = {
   'chat.history.restore': z.strictObject({ trashIds: z.array(id).min(1).max(500) }),
   'chat.history.purge': z.strictObject({ all: z.boolean().optional() }),
   'chat.history.export': z.strictObject({ targetPath: z.string().min(1).max(32767), sessionIds: z.array(id).min(1).max(500).optional() }),
+  // 对话记录目录从扁平结构改为按项目隔离后的一次性迁移；无需迁移时返回 skipped。
+  'chat.history.migrate': empty,
+  // 项目文件夹：落点、占用与项目级共享上下文。
+  'project.workspace.status': z.strictObject({ projectId: id }),
+  'project.workspace.context': z.strictObject({ projectId: id }),
   'chat.send': z.strictObject({ projectId: id.optional(), providerId: id, model: name,
     messages: z.array(message).min(1).max(200), tools: z.array(record).max(64).optional(), stream: z.boolean().optional(), sessionId: id.optional(), maxRequests: count.min(1).optional(), runId: id.optional(), budgetScopeId: id.optional(),
   }),

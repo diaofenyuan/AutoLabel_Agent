@@ -18,8 +18,9 @@ import { RuntimeSetup } from './runtime-setup';
 import { MediaExecutionSettings } from './media-execution';
 import { VideoTranscoder } from './transcode';
 import { DataStorage, DesktopPreferences, initializeStorageLocation, scopedVaultPath, type StorageLocation } from './storage';
-import { ROOT_SUBDIRECTORY, StoragePathSettings, resolveStoragePaths, storagePathsState, userFallbackRoot, validateTrainingRoot, type ResolvedPaths } from './storage-paths';
+import { ROOT_SUBDIRECTORY, StoragePathSettings, legacyChatsRoot, resolveStoragePaths, storagePathsState, userFallbackRoot, validateTrainingRoot, type ResolvedPaths } from './storage-paths';
 import { ChatStore } from './chat-store';
+import { ProjectWorkspace, migrateLegacyChatLayout } from './project-workspace';
 import type { ChatMaterialContext } from '../shared/chat';
 import type { StoragePathsState } from '../shared/storage';
 import { PathGrants, authorizeCommandPaths, mediaTargetFromUrl, isTrustedUrl, normalizeMedia, publicInputResult, redact } from './security';
@@ -59,8 +60,11 @@ const preferencesPath = path.join(userData, 'desktop-settings.json');
 const preferenceStore = new DesktopPreferences(preferencesPath);
 const storagePathSettings = new StoragePathSettings(preferenceStore, () => installDirectory, () => dataDir);
 let storagePaths: ResolvedPaths | undefined;
-// 对话记录目录取自解析后的三类路径，改路径后无需重启即可生效。
-const chatStore = new ChatStore(() => storagePaths?.entries.find(entry => entry.kind === 'chats')?.path ?? '');
+// 对话与项目文件都落在解析后的「项目文件夹」下，改路径后无需重启即可生效。
+const projectsRoot = () => storagePaths?.entries.find(entry => entry.kind === 'projects')?.path ?? '';
+const chatStore = new ChatStore(projectsRoot);
+// 项目工作区：项目文件夹骨架、共享上下文与旧版对话迁移都由它负责。
+const projectWorkspace = new ProjectWorkspace(projectsRoot);
 /**
  * 窗口图标取已入版本库的 packaging/icon.png，不取 build/icon.png。
  *
@@ -274,6 +278,8 @@ function createBackend(location: StorageLocation): ActiveStorage {
     materialsRoot: () => storagePaths?.entries.find(entry => entry.kind === 'uploads')?.path,
     // 训练产物目录是引擎启动参数：设置页保存后由主进程在空闲时重启引擎让新落点生效。
     trainingRoot: () => savedTrainingRoot() ?? undefined,
+    // 项目素材按项目落盘：与对话记录共用同一个项目文件夹根。
+    projectsRoot: () => storagePaths?.entries.find(entry => entry.kind === 'projects')?.path,
     localPythonPath: () => localExecution.pythonPath(),
     localModelAuthorizations: () => localExecution.modelAuthorizations(location.credentialScopeId),
     // 开放词汇的两个目录都在存储根下：词表缓存与 CLIP 编码器（下载的权重就放在 text-encoder）。
@@ -390,13 +396,25 @@ async function chatHistory(command: string, payload: Record<string, unknown>): P
     ...(payload.providerId !== undefined ? { providerId: payload.providerId as string } : {}),
     ...(payload.model !== undefined ? { model: payload.model as string } : {}),
   });
-  if (command === 'chat.history.fork') return chatStore.fork({
-    sessionId: payload.sessionId as string, projectId: payload.projectId as string,
-    ...(payload.sourceSessionId ? { sourceSessionId: payload.sourceSessionId as string } : {}),
-    ...(payload.projectName !== undefined ? { projectName: payload.projectName as string } : {}),
-    ...(payload.providerId !== undefined ? { providerId: payload.providerId as string } : {}),
-    ...(payload.model !== undefined ? { model: payload.model as string } : {}),
-  });
+  if (command === 'chat.history.fork') {
+    const projectId = payload.projectId as string;
+    // 新对话默认继承项目级共享上下文：项目里最近一次实际使用的素材范围。
+    // 这样「新建对话」不必重新选素材，也不会因为没选而退回整项目范围。
+    const shared = (await projectWorkspace.readContext(projectId))?.context;
+    const forked = await chatStore.fork({
+      sessionId: payload.sessionId as string, projectId,
+      ...(payload.sourceSessionId ? { sourceSessionId: payload.sourceSessionId as string } : {}),
+      ...(payload.projectName !== undefined ? { projectName: payload.projectName as string } : {}),
+      ...(payload.providerId !== undefined ? { providerId: payload.providerId as string } : {}),
+      ...(payload.model !== undefined ? { model: payload.model as string } : {}),
+    });
+    // 会话自身没有素材范围时才用项目默认值：同一项目里的另一条对话已经选过范围，不该被覆盖。
+    if (!forked.context && shared) {
+      await chatStore.setContext(forked.id, shared);
+      return { ...forked, context: shared };
+    }
+    return forked;
+  }
   if (command === 'chat.history.rename') return chatStore.rename(payload.sessionId, payload.title);
   if (command === 'chat.history.pin') return chatStore.pin(payload.sessionId, payload.pinned);
   if (command === 'chat.history.delete') return chatStore.delete(payload.sessionIds);
@@ -411,6 +429,59 @@ async function chatHistory(command: string, payload: Record<string, unknown>): P
   }
   throw new DesktopError('COMMAND_DENIED', '此操作未开放给界面');
 }
+/**
+ * 把旧版扁平对话目录迁进项目文件夹，并把会话补进各项目索引。
+ *
+ * 只复制不删源：对话是用户资产，迁移失败时宁可留下可人工核对的旧文件。
+ * 无需迁移时（全新安装或已完成迁移）返回 skipped，界面据此不打扰用户。
+ */
+async function migrateChatLayout(): Promise<unknown> {
+  const source = legacyChatsRoot(preferenceStore, installDirectory);
+  const summaries = await legacyChatSummaries(source);
+  const result = await migrateLegacyChatLayout(source, projectWorkspace, async () => {
+    const sessions = [];
+    for (const summary of summaries) {
+      sessions.push({ id: summary.id, ...(summary.projectId ? { projectId: summary.projectId } : {}),
+        ...(summary.title ? { title: summary.title } : {}), messages: await legacyChatMessages(source, summary.id), ...(summary.memory ? { memory: summary.memory } : {}) });
+    }
+    return sessions;
+  });
+  if (result.skipped) return result;
+  // 迁走的只是消息文件，索引得由对话存储重建，否则侧栏看不到历史对话。
+  for (const summary of summaries) {
+    await chatStore.ensure({ sessionId: summary.id, ...(summary.projectId ? { projectId: summary.projectId } : {}), ...(summary.title ? { title: summary.title } : {}) })
+      .catch(error => engine.log(`对话索引补齐未完成：${error instanceof DesktopError ? error.code : 'CHAT_LAYOUT_MIGRATE_FAILED'}`));
+  }
+  return result;
+}
+
+/** 旧索引里的会话摘要；解析失败按空列表处理，不阻断启动。 */
+async function legacyChatSummaries(source: string): Promise<Array<{ id: string; projectId?: string; title?: string; memory?: unknown }>> {
+  let raw: unknown;
+  try { raw = JSON.parse(await readFile(path.join(source, 'index.json'), 'utf8')); } catch { return []; }
+  if (!Array.isArray(raw)) return [];
+  const summaries = [];
+  for (const item of raw) {
+    const value = item && typeof item === 'object' ? item as Record<string, unknown> : undefined;
+    if (typeof value?.id !== 'string') continue;
+    let memory: unknown;
+    try { memory = JSON.parse(await readFile(path.join(source, `${value.id}.memory.json`), 'utf8')); } catch { /* 没有历史快照就算了。 */ }
+    summaries.push({ id: value.id, ...(typeof value.projectId === 'string' ? { projectId: value.projectId } : {}),
+      ...(typeof value.title === 'string' && value.title ? { title: value.title } : {}), ...(memory ? { memory } : {}) });
+  }
+  return summaries;
+}
+
+/** 旧消息文件是逐行 JSONL；整行解析失败只跳过该行，不让一条坏消息毁掉整段历史。 */
+async function legacyChatMessages(source: string, sessionId: string): Promise<unknown[]> {
+  try {
+    const text = await readFile(path.join(source, `${sessionId}.jsonl`), 'utf8');
+    return text.split('\n').map(line => line.trim()).filter(Boolean).flatMap(line => {
+      try { return [JSON.parse(line)]; } catch { return []; }
+    });
+  } catch { return []; }
+}
+
 /** 默认备份目录位于存储根下，与数据库目录分离，避免备份被下一次删除覆盖。 */
 async function prepareDefaultBackupDirectory(): Promise<string> {
   const root = storagePaths?.root ?? path.join(userData, 'AutoLabelData');
@@ -435,6 +506,10 @@ async function deleteProject(payload: Record<string, unknown>): Promise<unknown>
     engine.request('project.delete', { ...payload, operationId })) as Record<string, unknown>;
   // 项目删除后其对话一并移入回收站：已删除的项目不再展示历史，也不长期保留会话。
   await chatStore.deleteByProject(projectId).catch(error => engine.log(`对话记录清理未完成：${error instanceof DesktopError ? error.code : 'CHAT_RECORD_FAILED'}`));
+  // 业务数据删除成功后再回收项目文件夹：对话已在回收站里可恢复，素材与项目文件不必保留。
+  // chats/ 会被刻意留下——那里的回收站是「删除后 7 天可恢复」的兑现处。
+  // 放在引擎删除之后，删除失败时文件夹仍在，用户可以重试而不会丢素材。
+  await projectWorkspace.removeAfterDelete(projectId).catch(error => engine.log(`项目文件夹清理未完成：${error instanceof DesktopError ? error.code : 'PROJECT_WORKSPACE_REMOVE_FAILED'}`));
   // 备份可能不含已不可读取的历史外部原件（引擎把它们降级为警告）；不回传的话
   // 用户会默认备份是完整的，这正是删除前备份最容易误导人的地方。
   return backup
@@ -527,14 +602,22 @@ async function recordAgentChat(payload: Record<string, unknown>): Promise<unknow
     ...(persistedContext ? { context: persistedContext } : {}),
   };
   const logFailure = (error: unknown) => engine.log(`对话记录未写入：${error instanceof DesktopError ? error.code : 'CHAT_RECORD_FAILED'}`);
+  // 项目级共享上下文跟着最近一次实际使用的素材范围走：下次新建对话直接沿用，不必重新选素材。
+  const rememberProjectContext = async () => {
+    const projectId = payload.projectId as string | undefined;
+    if (!projectId || !persistedContext) return;
+    await projectWorkspace.writeContext(projectId, persistedContext).catch(error => engine.log(`项目上下文未保存：${error instanceof DesktopError ? error.code : 'PROJECT_CONTEXT_FAILED'}`));
+  };
   try {
     const result = await agent.request('agent.chat', payload) as { content?: string; status?: string } | undefined;
     const reply = result?.content || (result?.status === 'cancelled' ? '对话已停止。' : '接口未返回文本。');
     await chatStore.record({ ...record, reply }).catch(logFailure);
+    await rememberProjectContext();
     return result;
   } catch (error) {
     const message = error instanceof DesktopError ? `${error.message}（${error.code}）` : '本次调用未完成';
     await chatStore.record({ ...record, error: message }).catch(logFailure);
+    await rememberProjectContext();
     throw error;
   }
 }
@@ -600,6 +683,10 @@ async function request(command: unknown, input: unknown, fromAgent = false): Pro
   if (validated.command === 'training.root.status') return trainingRootStatus();
   if (validated.command === 'training.root.save') return saveTrainingRoot(payload.path as string | null);
   if (validated.command.startsWith('chat.history.')) return chatHistory(validated.command, payload);
+  if (validated.command === 'project.workspace.status') return projectWorkspace.status(payload.projectId as string, (await chatStore.list(payload.projectId as string)).total);
+  if (validated.command === 'project.workspace.context') return projectWorkspace.readContext(payload.projectId as string) ?? null;
+  // 对话记录目录从「扁平 chats」改为「按项目隔离的项目文件夹」后的一次性迁移。
+  if (validated.command === 'chat.history.migrate') return migrateChatLayout();
   if (validated.command === 'storage.usage') return storage!.usage();
   if (validated.command === 'storage.cleanup') return storage!.cleanup();
   if (validated.command.startsWith('update.')) {
